@@ -1,1 +1,66 @@
 @import 'tailwindcss';
+
+@theme {
+	--color-bg: #0d0d10;
+	--color-bg-elevated: #18181b;
+	--color-border: rgba(255, 255, 255, 0.05);
+	--color-text: #e5e5e7;
+	--color-text-muted: #a1a1aa;
+	--color-text-subtle: #71717a;
+
+	/* Warm accent palette (orange → pink) */
+	--color-accent-from: #fb923c;
+	--color-accent-to: #f472b6;
+
+	/* Macro colors */
+	--color-protein: #fda4af;
+	--color-carbs: #fcd34d;
+	--color-fat: #7dd3fc;
+}
+
+html,
+body {
+	background: var(--color-bg);
+	color: var(--color-text);
+	color-scheme: dark;
+	font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', sans-serif;
+	-webkit-tap-highlight-color: transparent;
+	overscroll-behavior-y: none;
+}
+
+/* Use full viewport on mobile incl. safe areas */
+html {
+	height: 100%;
+}
+body {
+	min-height: 100dvh;
+}
+
+/* Common card surface */
+.card {
+	background: var(--color-bg-elevated);
+	border: 1px solid var(--color-border);
+	border-radius: 1.5rem;
+}
+
+.card-sm {
+	background: var(--color-bg-elevated);
+	border: 1px solid var(--color-border);
+	border-radius: 1rem;
+}
+
+.accent-gradient {
+	background: linear-gradient(135deg, var(--color-accent-from), var(--color-accent-to));
+}
+
+.accent-shadow {
+	box-shadow: 0 12px 40px -8px rgba(244, 114, 182, 0.5);
+}
+
+/* Hide scrollbar on horizontal scrollers */
+.no-scrollbar::-webkit-scrollbar {
+	display: none;
+}
+.no-scrollbar {
+	scrollbar-width: none;
+}
