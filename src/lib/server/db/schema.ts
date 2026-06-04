@@ -37,6 +37,9 @@ export const dailyLog = pgTable(
 			.notNull()
 			.references(() => foods.id),
 		servings: real('servings').notNull().default(1),
+		// What the user actually entered (display + edit). `servings` above is the canonical multiplier.
+		amount: real('amount'),
+		unit: text('unit'), // 'serving' | 'gram' | 'cup' | 'tbsp' | 'tsp'
 		loggedAt: timestamp('logged_at').notNull().defaultNow(),
 
 		// Cached macros (so historical entries don't change if the food's macros are edited later)

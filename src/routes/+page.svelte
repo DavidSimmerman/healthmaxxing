@@ -2,13 +2,16 @@
 	import MacroRing from '$lib/components/MacroRing.svelte';
 	import MacroBar from '$lib/components/MacroBar.svelte';
 	import { sumMacros, pct, formatTime } from '$lib/macros';
+	import { entryDisplay } from '$lib/units';
 	import CaptureSheet from '$lib/components/CaptureSheet.svelte';
+	import EditEntrySheet from '$lib/components/EditEntrySheet.svelte';
 
 	let { data } = $props();
 
 	let totals = $derived(sumMacros(data.todayEntries));
 	let goalPct = $derived(pct(totals.calories, data.settings.calorieTarget));
 	let captureOpen = $state(false);
+	let editingEntry = $state<(typeof data.todayEntries)[number] | null>(null);
 
 	const today = new Date();
 	const weekday = today.toLocaleDateString('en-US', { weekday: 'long' });
@@ -117,14 +120,21 @@
 	{:else}
 		<div class="card divide-y" style="border-color: var(--color-border);">
 			{#each data.todayEntries as e (e.id)}
-				<div
-					class="flex items-center justify-between p-4"
+				<button
+					type="button"
+					class="flex w-full items-center gap-3 p-4 text-left transition hover:bg-white/5"
 					style="border-color: var(--color-border);"
+					onclick={() => (editingEntry = e)}
 				>
-					<div>
+					<div class="flex-1">
 						<div class="font-medium text-white">{e.foodName}</div>
 						<div class="text-xs" style="color: var(--color-text-subtle);">
-							{formatTime(new Date(e.loggedAt))} · {e.foodServingSize ?? `${e.servings}x`}
+							{formatTime(new Date(e.loggedAt))} · {entryDisplay(
+								e.amount,
+								e.unit,
+								e.servings,
+								e.foodServingSize
+							)}
 						</div>
 					</div>
 					<div class="text-right text-sm">
@@ -133,9 +143,12 @@
 							{Math.round(e.proteinG)}p · {Math.round(e.carbsG)}c
 						</div>
 					</div>
-				</div>
+				</button>
 			{/each}
 		</div>
+		<p class="mt-2 text-center text-xs" style="color: var(--color-text-subtle);">
+			Tap any entry to edit or remove
+		</p>
 	{/if}
 </main>
 
@@ -152,3 +165,9 @@
 </button>
 
 <CaptureSheet bind:open={captureOpen} />
+
+<EditEntrySheet
+	entry={editingEntry}
+	onclose={() => (editingEntry = null)}
+	onsaved={() => location.reload()}
+/>

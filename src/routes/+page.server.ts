@@ -20,13 +20,21 @@ export async function load() {
 		.select({
 			id: dailyLog.id,
 			servings: dailyLog.servings,
+			amount: dailyLog.amount,
+			unit: dailyLog.unit,
 			loggedAt: dailyLog.loggedAt,
 			calories: dailyLog.calories,
 			proteinG: dailyLog.proteinG,
 			carbsG: dailyLog.carbsG,
 			fatG: dailyLog.fatG,
+			foodId: foods.id,
 			foodName: foods.name,
-			foodServingSize: foods.servingSize
+			foodServingSize: foods.servingSize,
+			foodServingGrams: foods.servingGrams,
+			foodCalories: foods.calories,
+			foodProteinG: foods.proteinG,
+			foodCarbsG: foods.carbsG,
+			foodFatG: foods.fatG
 		})
 		.from(dailyLog)
 		.innerJoin(foods, eq(dailyLog.foodId, foods.id))
