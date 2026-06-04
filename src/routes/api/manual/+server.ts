@@ -4,7 +4,17 @@ import { foods, dailyLog, quickAdds } from '$lib/server/db/schema';
 
 export async function POST({ request }) {
 	const body = await request.json();
-	const { name, servingSize, calories, proteinG, carbsG, fatG, pinToQuickAdds, logToday } = body;
+	const {
+		name,
+		servingSize,
+		servingGrams,
+		calories,
+		proteinG,
+		carbsG,
+		fatG,
+		pinToQuickAdds,
+		logToday
+	} = body;
 	if (!name || calories == null) throw error(400, 'name and calories required');
 
 	const [food] = await db
@@ -12,6 +22,7 @@ export async function POST({ request }) {
 		.values({
 			name,
 			servingSize: servingSize || null,
+			servingGrams: servingGrams ?? null,
 			calories,
 			proteinG: proteinG ?? 0,
 			carbsG: carbsG ?? 0,

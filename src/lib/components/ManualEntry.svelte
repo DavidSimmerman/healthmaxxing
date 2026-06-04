@@ -4,6 +4,7 @@
 
 	let name = $state('');
 	let servingSize = $state('');
+	let servingGrams = $state<number | null>(null);
 	let calories = $state<number | null>(null);
 	let proteinG = $state<number | null>(null);
 	let carbsG = $state<number | null>(null);
@@ -28,6 +29,7 @@
 			body: JSON.stringify({
 				name,
 				servingSize: servingSize || null,
+				servingGrams,
 				calories,
 				proteinG,
 				carbsG,
@@ -53,11 +55,23 @@
 		placeholder="Food name"
 		class="card-sm w-full bg-transparent px-4 py-3 text-white outline-none placeholder:text-zinc-500"
 	/>
-	<input
-		bind:value={servingSize}
-		placeholder="Serving size (optional)"
-		class="card-sm w-full bg-transparent px-4 py-3 text-white outline-none placeholder:text-zinc-500"
-	/>
+	<div class="grid grid-cols-2 gap-3">
+		<input
+			bind:value={servingSize}
+			placeholder="Serving (e.g. 1 cup)"
+			class="card-sm w-full bg-transparent px-4 py-3 text-white outline-none placeholder:text-zinc-500"
+		/>
+		<input
+			bind:value={servingGrams}
+			type="number"
+			placeholder="Grams per serving"
+			inputmode="numeric"
+			class="card-sm w-full bg-transparent px-4 py-3 text-white outline-none placeholder:text-zinc-500"
+		/>
+	</div>
+	<p class="px-1 text-xs" style="color: var(--color-text-subtle);">
+		Grams per serving unlocks g / cup / tbsp / tsp when logging.
+	</p>
 	<div class="grid grid-cols-2 gap-3">
 		<input
 			bind:value={calories}
