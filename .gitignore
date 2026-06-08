@@ -27,3 +27,6 @@ test-results
 
 # runtime image uploads
 /uploads/
+
+# Claude Code local tooling (dev-side, not part of the app)
+.claude/
