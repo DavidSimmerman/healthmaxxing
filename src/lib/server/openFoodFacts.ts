@@ -1,6 +1,8 @@
 // Open Food Facts v2 lookup — free, no auth.
 // https://openfoodfacts.github.io/openfoodfacts-server/api/
 
+import type { Nutrients } from '$lib/nutrients';
+
 export type OffResult =
 	| {
 			ok: true;
@@ -12,6 +14,7 @@ export type OffResult =
 			proteinG: number;
 			carbsG: number;
 			fatG: number;
+			nutrients: Partial<Nutrients> | null;
 			raw: unknown;
 	  }
 	| { ok: false; reason: 'not_found' | 'incomplete_nutriments' | 'http_error'; raw?: unknown };
@@ -67,6 +70,55 @@ export async function lookupBarcode(barcode: string): Promise<OffResult> {
 		return { ok: false, reason: 'incomplete_nutriments', raw: body };
 	}
 
+	// Map OFF nutriment keys → our normalized bag. All optional.
+	const nutMap: Array<[keyof Nutrients, string]> = [
+		['fiberG', 'fiber'],
+		['sugarG', 'sugars'],
+		['addedSugarG', 'added-sugars'],
+		['satFatG', 'saturated-fat'],
+		['transFatG', 'trans-fat'],
+		['monoFatG', 'monounsaturated-fat'],
+		['polyFatG', 'polyunsaturated-fat'],
+		['omega3G', 'omega-3-fat'],
+		['omega6G', 'omega-6-fat'],
+		['cholesterolMg', 'cholesterol'],
+		['sodiumMg', 'sodium'],
+		['potassiumMg', 'potassium'],
+		['calciumMg', 'calcium'],
+		['ironMg', 'iron'],
+		['magnesiumMg', 'magnesium'],
+		['zincMg', 'zinc'],
+		['phosphorusMg', 'phosphorus'],
+		['vitAUg', 'vitamin-a'],
+		['vitCMg', 'vitamin-c'],
+		['vitDUg', 'vitamin-d'],
+		['vitEMg', 'vitamin-e'],
+		['vitKUg', 'vitamin-k'],
+		['vitB6Mg', 'vitamin-b6'],
+		['vitB12Ug', 'vitamin-b12'],
+		['folateUg', 'vitamin-b9'],
+		['caffeineMg', 'caffeine'],
+		['alcoholG', 'alcohol']
+	];
+	// OFF's normalized `_100g`/`_serving` values (what pick() returns) are in
+	// grams for every nutrient we map (energy is handled separately above). The
+	// `_unit` field is only the display unit, so we ignore it and convert grams
+	// → the unit encoded in our key suffix (Mg → mg, Ug → µg).
+	const gramsToTarget = (target: 'g' | 'mg' | 'ug'): number =>
+		target === 'mg' ? 1000 : target === 'ug' ? 1_000_000 : 1;
+	const nutrients: Partial<Nutrients> = {};
+	for (const [outKey, offKey] of nutMap) {
+		const raw = pick(offKey);
+		if (raw == null) continue;
+		const target: 'g' | 'mg' | 'ug' = outKey.endsWith('Ug')
+			? 'ug'
+			: outKey.endsWith('Mg')
+				? 'mg'
+				: 'g';
+		const val = raw * gramsToTarget(target);
+		if (Number.isFinite(val) && val >= 0) nutrients[outKey] = val;
+	}
+
 	return {
 		ok: true,
 		name: p.product_name || 'Unknown',
@@ -77,6 +129,7 @@ export async function lookupBarcode(barcode: string): Promise<OffResult> {
 		proteinG,
 		carbsG,
 		fatG,
+		nutrients: Object.keys(nutrients).length > 0 ? nutrients : null,
 		raw: body
 	};
 }

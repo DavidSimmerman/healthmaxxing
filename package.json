@@ -32,12 +32,10 @@
 		"@types/node": "^24",
 		"dotenv": "^17.4.2",
 		"drizzle-kit": "^0.31.10",
-		"drizzle-orm": "^0.45.2",
 		"eslint": "^10.2.0",
 		"eslint-config-prettier": "^10.1.8",
 		"eslint-plugin-svelte": "^3.17.0",
 		"globals": "^17.4.0",
-		"postgres": "^3.4.9",
 		"prettier": "^3.8.1",
 		"prettier-plugin-svelte": "^3.5.1",
 		"prettier-plugin-tailwindcss": "^0.7.2",
@@ -50,7 +48,9 @@
 		"vite": "^8.0.7"
 	},
 	"dependencies": {
+		"drizzle-orm": "^0.45.2",
 		"html5-qrcode": "^2.3.8",
+		"postgres": "^3.4.9",
 		"zxing-wasm": "^3.1.0"
 	}
 }

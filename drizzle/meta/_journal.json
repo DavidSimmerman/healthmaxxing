@@ -15,6 +15,20 @@
       "when": 1780602388589,
       "tag": "0001_yielding_magma",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1780608706897,
+      "tag": "0002_tired_mordo",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1780882656916,
+      "tag": "0003_orange_leper_queen",
+      "breakpoints": true
     }
   ]
 }

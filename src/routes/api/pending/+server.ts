@@ -4,10 +4,9 @@ import { pendingItems } from '$lib/server/db/schema';
 import { desc, eq } from 'drizzle-orm';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { join, extname } from 'node:path';
+import { extname } from 'node:path';
 import { requireApiToken } from '$lib/server/auth';
-
-const UPLOAD_DIR = join(process.cwd(), 'uploads');
+import { UPLOAD_DIR, uploadPath } from '$lib/server/uploads';
 
 // GET — list pending items (used by Claude Code).
 export async function GET({ request }) {
@@ -38,7 +37,7 @@ export async function POST({ request }) {
 		const ext = extname(image.name) || '.jpg';
 		const filename = `${randomUUID()}${ext}`;
 		const bytes = new Uint8Array(await image.arrayBuffer());
-		await writeFile(join(UPLOAD_DIR, filename), bytes);
+		await writeFile(uploadPath(filename), bytes);
 		imagePath = filename;
 	}
 

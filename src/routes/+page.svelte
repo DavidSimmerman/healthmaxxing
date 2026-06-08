@@ -32,15 +32,39 @@
 			</p>
 			<h1 class="text-2xl font-bold text-white">{monthDay}</h1>
 		</div>
-		{#if data.pendingCount > 0}
-			<div
-				class="card-sm flex items-center gap-2 px-3 py-2"
-				title="Items awaiting Claude Code processing"
+		<div class="flex items-center gap-2">
+			{#if data.pendingCount > 0}
+				<a
+					href="/pending"
+					class="card-sm flex items-center gap-2 px-3 py-2 transition hover:brightness-125"
+					title="Items awaiting Claude Code processing"
+				>
+					<span class="h-2 w-2 animate-pulse rounded-full bg-orange-400"></span>
+					<span class="text-xs text-white">{data.pendingCount} pending</span>
+				</a>
+			{/if}
+			<a
+				href="/settings"
+				class="card-sm flex h-9 w-9 items-center justify-center text-white transition hover:brightness-125"
+				aria-label="Settings"
 			>
-				<span class="h-2 w-2 animate-pulse rounded-full bg-orange-400"></span>
-				<span class="text-xs text-white">{data.pendingCount} pending</span>
-			</div>
-		{/if}
+				<svg
+					width="16"
+					height="16"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+				>
+					<circle cx="12" cy="12" r="3" />
+					<path
+						d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 008 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H2a2 2 0 010-4h.09A1.65 1.65 0 004.6 8a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V2a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H22a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"
+					/>
+				</svg>
+			</a>
+		</div>
 	</header>
 
 	<section class="card mt-4 p-5">
@@ -63,18 +87,8 @@
 				target={data.settings.proteinTargetG}
 				color="var(--color-protein)"
 			/>
-			<MacroBar
-				label="Carbs"
-				value={totals.carbsG}
-				target={data.settings.carbsTargetG}
-				color="var(--color-carbs)"
-			/>
-			<MacroBar
-				label="Fat"
-				value={totals.fatG}
-				target={data.settings.fatTargetG}
-				color="var(--color-fat)"
-			/>
+			<MacroBar label="Carbs" value={totals.carbsG} color="var(--color-carbs)" />
+			<MacroBar label="Fat" value={totals.fatG} color="var(--color-fat)" />
 		</div>
 	</section>
 

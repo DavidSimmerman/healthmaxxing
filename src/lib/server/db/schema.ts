@@ -1,4 +1,15 @@
-import { pgTable, text, integer, real, timestamp, uuid, jsonb, index } from 'drizzle-orm/pg-core';
+import {
+	pgTable,
+	text,
+	integer,
+	real,
+	timestamp,
+	uuid,
+	jsonb,
+	boolean,
+	index
+} from 'drizzle-orm/pg-core';
+import type { Nutrients } from '$lib/nutrients';
 
 // Master food catalog. Populated as you scan/log new foods.
 // Acts as your personal cache — a barcode looked up once is local forever.
@@ -17,6 +28,9 @@ export const foods = pgTable(
 		proteinG: real('protein_g').notNull(),
 		carbsG: real('carbs_g').notNull(),
 		fatG: real('fat_g').notNull(),
+
+		// Optional extended nutrients (per serving). Stored for later AI analysis; not displayed.
+		nutrients: jsonb('nutrients').$type<Partial<Nutrients>>(),
 
 		// Provenance
 		source: text('source').notNull(), // 'off' | 'manual' | 'label_ocr' | 'claude_code' | 'estimate'
@@ -90,3 +104,60 @@ export const settings = pgTable('settings', {
 	carbsTargetG: integer('carbs_target_g').notNull().default(220),
 	fatTargetG: integer('fat_target_g').notNull().default(70)
 });
+
+// ── OAuth 2.1 (for the MCP connector Claude.ai adds) ────────────────────────
+// We are our own authorization server. Claude.ai registers dynamically, runs
+// auth-code + PKCE against /authorize + /token, and presents the resulting
+// access token as a Bearer to /mcp.
+
+// Dynamically-registered OAuth clients (RFC 7591). Claude.ai self-registers.
+export const oauthClients = pgTable('oauth_clients', {
+	clientId: text('client_id').primaryKey(),
+	clientName: text('client_name'),
+	redirectUris: jsonb('redirect_uris').$type<string[]>().notNull(),
+	createdAt: timestamp('created_at').notNull().defaultNow()
+});
+
+// Short-lived single-use authorization codes. Bound to a PKCE challenge.
+// Stored hashed; `code` column holds sha256(code).
+export const oauthCodes = pgTable(
+	'oauth_codes',
+	{
+		code: text('code').primaryKey(), // sha256 of the issued code
+		clientId: text('client_id')
+			.notNull()
+			.references(() => oauthClients.clientId, { onDelete: 'cascade' }),
+		redirectUri: text('redirect_uri').notNull(),
+		codeChallenge: text('code_challenge').notNull(),
+		codeChallengeMethod: text('code_challenge_method').notNull().default('S256'),
+		scope: text('scope'),
+		resource: text('resource'),
+		expiresAt: timestamp('expires_at').notNull(),
+		consumed: boolean('consumed').notNull().default(false),
+		createdAt: timestamp('created_at').notNull().defaultNow()
+	},
+	(t) => [index('oauth_codes_expires_idx').on(t.expiresAt)]
+);
+
+// Issued access + refresh tokens. Both stored hashed; lookups hash the
+// presented token. Access tokens are short-lived; refresh tokens rotate.
+export const oauthTokens = pgTable(
+	'oauth_tokens',
+	{
+		id: uuid('id').primaryKey().defaultRandom(),
+		accessTokenHash: text('access_token_hash').notNull().unique(),
+		refreshTokenHash: text('refresh_token_hash').unique(),
+		clientId: text('client_id')
+			.notNull()
+			.references(() => oauthClients.clientId, { onDelete: 'cascade' }),
+		scope: text('scope'),
+		resource: text('resource'),
+		accessExpiresAt: timestamp('access_expires_at').notNull(),
+		revoked: boolean('revoked').notNull().default(false),
+		createdAt: timestamp('created_at').notNull().defaultNow()
+	},
+	(t) => [
+		index('oauth_tokens_access_idx').on(t.accessTokenHash),
+		index('oauth_tokens_refresh_idx').on(t.refreshTokenHash)
+	]
+);

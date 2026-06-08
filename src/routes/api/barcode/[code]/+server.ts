@@ -28,6 +28,7 @@ export async function GET({ params }) {
 				proteinG: off.proteinG,
 				carbsG: off.carbsG,
 				fatG: off.fatG,
+				nutrients: off.nutrients,
 				source: 'off',
 				sourcePayload: off.raw as any
 			})

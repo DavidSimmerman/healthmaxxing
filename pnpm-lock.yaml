@@ -8,9 +8,15 @@ importers:
 
   .:
     dependencies:
+      drizzle-orm:
+        specifier: ^0.45.2
+        version: 0.45.2(postgres@3.4.9)
       html5-qrcode:
         specifier: ^2.3.8
         version: 2.3.8
+      postgres:
+        specifier: ^3.4.9
+        version: 3.4.9
       zxing-wasm:
         specifier: ^3.1.0
         version: 3.1.0(@types/emscripten@1.41.5)
@@ -45,9 +51,6 @@ importers:
       drizzle-kit:
         specifier: ^0.31.10
         version: 0.31.10
-      drizzle-orm:
-        specifier: ^0.45.2
-        version: 0.45.2(postgres@3.4.9)
       eslint:
         specifier: ^10.2.0
         version: 10.4.0(jiti@2.7.0)
@@ -60,9 +63,6 @@ importers:
       globals:
         specifier: ^17.4.0
         version: 17.6.0
-      postgres:
-        specifier: ^3.4.9
-        version: 3.4.9
       prettier:
         specifier: ^3.8.1
         version: 3.8.3

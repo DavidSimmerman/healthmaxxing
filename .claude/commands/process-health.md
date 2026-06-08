@@ -44,6 +44,13 @@ You are processing the user's queued food-capture items from the health-dashboar
        "proteinG": 18,
        "carbsG": 9,
        "fatG": 0,
+       "nutrients": {
+         "fiberG": 0,
+         "sugarG": 7,
+         "satFatG": 0,
+         "sodiumMg": 65,
+         "calciumMg": 200
+       },
        "source": "claude_code",
        "resolverNote": "OCR from label, high confidence",
        "logToday": true
@@ -54,6 +61,12 @@ You are processing the user's queued food-capture items from the health-dashboar
    - `source` should be one of: `claude_code`, `label_ocr`, `estimate`.
    - `resolverNote` should reflect uncertainty (e.g. "estimate based on generic 'dinner roll', ±20%").
    - `logToday: true` adds it to today's log immediately (default `false` — only set true when the user clearly intended to log it now, not just catalog it).
+   - `nutrients` is **optional**. Include any subset of these keys when you can read them off the label or are confident from a trusted source. Don't fabricate — omit if unknown. All values per-serving; units encoded in the key suffix.
+     - Carbs: `fiberG`, `sugarG`, `addedSugarG`, `sugarAlcoholG`
+     - Fats: `satFatG`, `transFatG`, `monoFatG`, `polyFatG`, `omega3G`, `omega6G`, `cholesterolMg`
+     - Minerals: `sodiumMg`, `potassiumMg`, `calciumMg`, `ironMg`, `magnesiumMg`, `zincMg`, `phosphorusMg`
+     - Vitamins: `vitAUg`, `vitCMg`, `vitDUg`, `vitEMg`, `vitKUg`, `vitB6Mg`, `vitB12Ug`, `folateUg`
+     - Other: `caffeineMg`, `alcoholG`
 
 4. **Summarize for the user** at the end: how many resolved, any low-confidence ones flagged, anything you couldn't figure out.
 

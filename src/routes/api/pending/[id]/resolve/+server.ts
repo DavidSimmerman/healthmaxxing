@@ -3,6 +3,7 @@ import { db } from '$lib/server/db';
 import { foods, pendingItems, dailyLog } from '$lib/server/db/schema';
 import { eq } from 'drizzle-orm';
 import { requireApiToken } from '$lib/server/auth';
+import { sanitizeNutrients } from '$lib/nutrients';
 
 // POST /api/pending/:id/resolve
 // Called by Claude Code after it figures out what a pending item actually is.
@@ -30,12 +31,15 @@ export async function POST({ params, request }) {
 		proteinG,
 		carbsG,
 		fatG,
+		nutrients,
 		source = 'claude_code',
 		resolverNote,
 		logToday = false
 	} = body;
 
 	if (!name || calories == null) throw error(400, 'name and calories required');
+
+	const cleanNutrients = sanitizeNutrients(nutrients);
 
 	const [food] = await db
 		.insert(foods)
@@ -49,11 +53,21 @@ export async function POST({ params, request }) {
 			proteinG: proteinG ?? 0,
 			carbsG: carbsG ?? 0,
 			fatG: fatG ?? 0,
+			nutrients: cleanNutrients,
 			source
 		})
 		.onConflictDoUpdate({
 			target: foods.barcode,
-			set: { name, brand: brand ?? null, calories, proteinG, carbsG, fatG, source }
+			set: {
+				name,
+				brand: brand ?? null,
+				calories,
+				proteinG,
+				carbsG,
+				fatG,
+				nutrients: cleanNutrients,
+				source
+			}
 		})
 		.returning();
 

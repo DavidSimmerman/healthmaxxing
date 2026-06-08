@@ -8,6 +8,12 @@ const config = {
 	},
 	kit: {
 		adapter: adapter(),
+		// The OAuth /token endpoint must accept the spec-mandated cross-origin
+		// (and origin-less server-to-server) `application/x-www-form-urlencoded`
+		// POSTs, which SvelteKit's built-in CSRF origin check would 403. We turn
+		// the global check off and re-implement a same-origin guard for every
+		// other form POST in hooks.server.ts (exempting /token).
+		csrf: { checkOrigin: false },
 		typescript: {
 			config: (config) => ({
 				...config,

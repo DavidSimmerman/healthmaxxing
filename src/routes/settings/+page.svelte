@@ -1,0 +1,278 @@
+<script lang="ts">
+	import { invalidateAll } from '$app/navigation';
+
+	let { data } = $props();
+
+	let calorieTarget = $state(data.settings.calorieTarget);
+	let proteinTargetG = $state(data.settings.proteinTargetG);
+
+	let saving = $state(false);
+	let savedAt = $state<number | null>(null);
+	let saveError = $state<string | null>(null);
+
+	let items = $state(data.quickAddItems);
+	let busy = $state<string | null>(null);
+
+	let dirty = $derived(
+		calorieTarget !== data.settings.calorieTarget || proteinTargetG !== data.settings.proteinTargetG
+	);
+
+	async function saveTargets(e: SubmitEvent) {
+		e.preventDefault();
+		saving = true;
+		saveError = null;
+		try {
+			const res = await fetch('/api/settings', {
+				method: 'PUT',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					calorieTarget: Number(calorieTarget),
+					proteinTargetG: Number(proteinTargetG)
+				})
+			});
+			if (!res.ok) {
+				saveError = (await res.text()) || 'Save failed';
+				return;
+			}
+			savedAt = Date.now();
+			await invalidateAll();
+		} finally {
+			saving = false;
+		}
+	}
+
+	async function unpin(id: string) {
+		if (!confirm('Remove this quick-add tile?')) return;
+		busy = id;
+		try {
+			const res = await fetch(`/api/quick-adds/${id}`, { method: 'DELETE' });
+			if (!res.ok) {
+				alert('Remove failed');
+				return;
+			}
+			items = items.filter((i) => i.id !== id);
+		} finally {
+			busy = null;
+		}
+	}
+
+	async function move(id: string, dir: -1 | 1) {
+		const idx = items.findIndex((i) => i.id === id);
+		const next = idx + dir;
+		if (idx < 0 || next < 0 || next >= items.length) return;
+		const reordered = [...items];
+		[reordered[idx], reordered[next]] = [reordered[next], reordered[idx]];
+		items = reordered;
+		busy = id;
+		try {
+			const res = await fetch('/api/quick-adds/reorder', {
+				method: 'PUT',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ order: reordered.map((i) => i.id) })
+			});
+			if (!res.ok) {
+				alert('Reorder failed');
+				items = data.quickAddItems;
+			}
+		} finally {
+			busy = null;
+		}
+	}
+</script>
+
+<main
+	class="mx-auto max-w-md p-6 pb-12"
+	style="padding-bottom: calc(3rem + env(safe-area-inset-bottom));"
+>
+	<header class="mb-6 flex items-center gap-3">
+		<a
+			href="/"
+			class="card-sm flex h-9 w-9 items-center justify-center text-white transition hover:brightness-125"
+			aria-label="Back to today"
+		>
+			<svg
+				width="16"
+				height="16"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="2.5"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+			>
+				<path d="M15 18l-6-6 6-6" />
+			</svg>
+		</a>
+		<div>
+			<p
+				class="text-xs font-semibold tracking-widest uppercase"
+				style="color: var(--color-text-subtle);"
+			>
+				Preferences
+			</p>
+			<h1 class="text-2xl font-bold text-white">Settings</h1>
+		</div>
+		{#if data.authEnabled}
+			<form method="POST" action="/logout" class="ml-auto">
+				<button
+					type="submit"
+					class="rounded-lg border px-3 py-1.5 text-xs font-medium text-white transition hover:bg-white/5"
+					style="border-color: var(--color-border);"
+				>
+					Log out
+				</button>
+			</form>
+		{/if}
+	</header>
+
+	<form onsubmit={saveTargets} class="card p-5">
+		<h2 class="mb-4 text-sm font-semibold tracking-wide text-white uppercase">Daily targets</h2>
+
+		<div class="grid grid-cols-2 gap-3">
+			<label class="flex flex-col gap-1">
+				<span class="text-xs font-medium" style="color: var(--color-text-subtle);">Calories</span>
+				<input
+					type="number"
+					min="0"
+					max="20000"
+					step="10"
+					bind:value={calorieTarget}
+					class="rounded-lg border bg-transparent px-3 py-2 text-white outline-none focus:border-orange-400"
+					style="border-color: var(--color-border);"
+				/>
+			</label>
+
+			<label class="flex flex-col gap-1">
+				<span class="text-xs font-medium" style="color: var(--color-text-subtle);">Protein (g)</span
+				>
+				<input
+					type="number"
+					min="0"
+					max="1000"
+					step="5"
+					bind:value={proteinTargetG}
+					class="rounded-lg border bg-transparent px-3 py-2 text-white outline-none focus:border-orange-400"
+					style="border-color: var(--color-border);"
+				/>
+			</label>
+		</div>
+
+		<div class="mt-4 flex items-center justify-between gap-3">
+			<div class="text-xs" style="color: var(--color-text-subtle);">
+				{#if saveError}
+					<span class="text-red-300">{saveError}</span>
+				{:else if savedAt && !dirty}
+					Saved
+				{:else if dirty}
+					Unsaved changes
+				{/if}
+			</div>
+			<button
+				type="submit"
+				disabled={!dirty || saving}
+				class="rounded-lg px-4 py-2 text-sm font-semibold text-black transition disabled:opacity-40"
+				style="background: #fb923c;"
+			>
+				{saving ? 'Saving…' : 'Save'}
+			</button>
+		</div>
+	</form>
+
+	<section class="mt-6">
+		<h2
+			class="mb-3 flex items-center gap-2 text-sm font-semibold tracking-wide text-white uppercase"
+		>
+			Quick-adds
+			<span class="ml-auto text-xs font-normal" style="color: var(--color-text-subtle);">
+				{items.length}
+			</span>
+		</h2>
+
+		{#if items.length === 0}
+			<div class="card p-6 text-center text-sm" style="color: var(--color-text-subtle);">
+				No quick-adds yet. Save one from the manual-entry sheet to pin a tile here.
+			</div>
+		{:else}
+			<div class="flex flex-col gap-2">
+				{#each items as item, idx (item.id)}
+					<article class="card-sm flex items-center gap-2 p-3">
+						<div class="min-w-0 flex-1">
+							<p class="truncate text-sm font-medium text-white">{item.name}</p>
+							<p class="text-xs" style="color: var(--color-text-subtle);">
+								{Math.round(item.calories)} kcal · {Math.round(item.proteinG)}g P
+								{#if item.brand}
+									<span> · {item.brand}</span>
+								{/if}
+							</p>
+						</div>
+
+						<div class="flex items-center gap-1">
+							<button
+								type="button"
+								onclick={() => move(item.id, -1)}
+								disabled={idx === 0 || busy === item.id}
+								aria-label="Move up"
+								class="rounded-md p-1.5 text-white transition hover:bg-white/10 disabled:opacity-30"
+							>
+								<svg
+									width="14"
+									height="14"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2.5"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+								>
+									<path d="M18 15l-6-6-6 6" />
+								</svg>
+							</button>
+							<button
+								type="button"
+								onclick={() => move(item.id, 1)}
+								disabled={idx === items.length - 1 || busy === item.id}
+								aria-label="Move down"
+								class="rounded-md p-1.5 text-white transition hover:bg-white/10 disabled:opacity-30"
+							>
+								<svg
+									width="14"
+									height="14"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2.5"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+								>
+									<path d="M6 9l6 6 6-6" />
+								</svg>
+							</button>
+							<button
+								type="button"
+								onclick={() => unpin(item.id)}
+								disabled={busy === item.id}
+								aria-label="Unpin"
+								class="rounded-md p-1.5 text-red-300 transition hover:bg-red-500/10 disabled:opacity-40"
+							>
+								<svg
+									width="14"
+									height="14"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2.5"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+								>
+									<path
+										d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"
+									/>
+								</svg>
+							</button>
+						</div>
+					</article>
+				{/each}
+			</div>
+		{/if}
+	</section>
+</main>
