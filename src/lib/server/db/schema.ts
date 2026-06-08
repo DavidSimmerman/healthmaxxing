@@ -32,6 +32,10 @@ export const foods = pgTable(
 		// Optional extended nutrients (per serving). Stored for later AI analysis; not displayed.
 		nutrients: jsonb('nutrients').$type<Partial<Nutrients>>(),
 
+		// Human-readable category string (e.g. "Cakes, Protein bars"), mainly from
+		// Open Food Facts. Not displayed — used to widen fuzzy search coverage.
+		categories: text('categories'),
+
 		// Provenance
 		source: text('source').notNull(), // 'off' | 'manual' | 'label_ocr' | 'claude_code' | 'estimate'
 		sourcePayload: jsonb('source_payload'), // raw API/OCR response for debugging

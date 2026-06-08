@@ -15,6 +15,7 @@ export type CreateAndLogInput = {
 	carbsG?: number;
 	fatG?: number;
 	nutrients?: Partial<Nutrients> | null;
+	categories?: string | null;
 	source?: string;
 	sourcePayload?: unknown;
 	resolverNote?: string | null;
@@ -65,6 +66,7 @@ export async function createAndLogFood(
 		carbsG: input.carbsG ?? 0,
 		fatG: input.fatG ?? 0,
 		nutrients: cleanNutrients,
+		categories: input.categories ?? null,
 		source: input.source ?? 'claude_code',
 		sourcePayload: payload as unknown
 	};
@@ -87,6 +89,7 @@ export async function createAndLogFood(
 					carbsG: values.carbsG,
 					fatG: values.fatG,
 					nutrients: values.nutrients,
+					categories: values.categories,
 					source: values.source,
 					sourcePayload: values.sourcePayload,
 					updatedAt: new Date()

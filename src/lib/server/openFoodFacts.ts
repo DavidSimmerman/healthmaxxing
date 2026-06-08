@@ -15,6 +15,7 @@ export type OffResult =
 			carbsG: number;
 			fatG: number;
 			nutrients: Partial<Nutrients> | null;
+			categories: string | null;
 			raw: unknown;
 	  }
 	| { ok: false; reason: 'not_found' | 'incomplete_nutriments' | 'http_error'; raw?: unknown };
@@ -22,11 +23,31 @@ export type OffResult =
 const FIELDS = [
 	'product_name',
 	'brands',
+	'categories',
 	'serving_size',
 	'serving_quantity',
 	'nutriments',
 	'nutrition_data_per'
 ].join(',');
+
+// OFF data is frequently SHOUTED in all caps. Soften to Title Case for display,
+// but leave mixed-case strings (which usually already read well) untouched.
+function softenCaps(s: string): string {
+	if (/[a-z]/.test(s) || !/[A-Z]/.test(s)) return s;
+	return s.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase());
+}
+
+// Build a full display name from OFF's separate product_name + brands fields.
+// OFF often stores the brand apart from the name ("BUILT" + "BROWNIE BATTER
+// PUFF"), so we fold the brand in to get the brand + type + flavor the label
+// shows — unless the name already contains it.
+export function composeName(productName: string | undefined, brands: string | undefined): string {
+	const name = (productName ?? '').trim();
+	const brand = (brands ?? '').split(',')[0].trim();
+	const full =
+		brand && !name.toLowerCase().includes(brand.toLowerCase()) ? `${brand} ${name}` : name;
+	return softenCaps(full) || 'Unknown';
+}
 
 export async function lookupBarcode(barcode: string): Promise<OffResult> {
 	const url = `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(barcode)}?fields=${FIELDS}`;
@@ -121,7 +142,7 @@ export async function lookupBarcode(barcode: string): Promise<OffResult> {
 
 	return {
 		ok: true,
-		name: p.product_name || 'Unknown',
+		name: composeName(p.product_name, p.brands),
 		brand: p.brands || null,
 		servingSize: p.serving_size || null,
 		servingGrams: Number.isFinite(Number(p.serving_quantity)) ? Number(p.serving_quantity) : null,
@@ -130,6 +151,7 @@ export async function lookupBarcode(barcode: string): Promise<OffResult> {
 		carbsG,
 		fatG,
 		nutrients: Object.keys(nutrients).length > 0 ? nutrients : null,
+		categories: p.categories || null,
 		raw: body
 	};
 }
