@@ -12,11 +12,6 @@ COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm build
-# Bundle the production migration runner into a single self-contained file.
-# --packages=external keeps drizzle-orm/postgres as runtime imports (prod deps).
-RUN pnpm exec esbuild src/lib/server/db/migrate.ts \
-	--bundle --platform=node --format=esm --packages=external \
-	--outfile=migrate.mjs
 
 # ── Production deps only ──────────────────────────────────────────────────────
 FROM base AS prod-deps
@@ -32,7 +27,7 @@ EXPOSE 3000
 
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=build /app/build ./build
-COPY --from=build /app/migrate.mjs ./migrate.mjs
+COPY --from=build /app/src/lib/server/db/migrate.mjs ./migrate.mjs
 COPY --from=build /app/drizzle ./drizzle
 COPY package.json ./
 
