@@ -55,7 +55,6 @@
 	},
 	"dependencies": {
 		"drizzle-orm": "^0.45.2",
-		"html5-qrcode": "^2.3.8",
 		"postgres": "^3.4.9",
 		"zxing-wasm": "^3.1.0"
 	}

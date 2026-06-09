@@ -1,11 +1,16 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
+	import { onMount, onDestroy, tick } from 'svelte';
 	import { UNITS, UNIT_LABEL, toServings, type Unit } from '$lib/units';
+	import { loadReader, decodeBarcode, needsConfirmation } from '$lib/scanner';
 
 	type Props = { onback: () => void; onlogged: () => void };
 	let { onback, onlogged }: Props = $props();
 
-	let liveScanner: any = null;
+	let stream: MediaStream | null = null;
+	let video = $state<HTMLVideoElement | undefined>(undefined);
+	// Generation token — bumping it cancels any in-flight scan loop, so a stale
+	// loop can't fire a lookup after the camera was stopped or restarted.
+	let scanGen = 0;
 	let status = $state<
 		'scanning' | 'decoding_file' | 'looking_up' | 'found' | 'not_found' | 'error'
 	>('scanning');
@@ -37,40 +42,61 @@
 	let resolveFat = $state<number | null>(null);
 	let resolveBusy = $state(false);
 
-	async function initLiveScan() {
-		const { Html5Qrcode, Html5QrcodeSupportedFormats } = await import('html5-qrcode');
-		liveScanner = new Html5Qrcode('qr-reader', {
-			formatsToSupport: [
-				Html5QrcodeSupportedFormats.EAN_13,
-				Html5QrcodeSupportedFormats.EAN_8,
-				Html5QrcodeSupportedFormats.UPC_A,
-				Html5QrcodeSupportedFormats.UPC_E,
-				Html5QrcodeSupportedFormats.CODE_128,
-				Html5QrcodeSupportedFormats.CODE_39
-			],
-			useBarCodeDetectorIfSupported: true,
-			verbose: false
-		});
+	function stopCamera() {
+		scanGen++;
+		stream?.getTracks().forEach((t) => t.stop());
+		stream = null;
+	}
 
+	async function initLiveScan() {
+		const gen = ++scanGen;
 		try {
-			await liveScanner.start(
-				{ facingMode: 'environment' },
-				{ fps: 15, qrbox: { width: 320, height: 180 }, aspectRatio: 1.333, disableFlip: false },
-				async (decoded: string) => {
-					if (status !== 'scanning') return;
-					scannedCode = decoded;
-					try {
-						await liveScanner.stop();
-					} catch {
-						/* noop */
-					}
-					await lookup(decoded);
-				},
-				() => {
-					/* per-frame error — ignore */
+			// Warm the wasm decoder while the camera permission prompt / open is
+			// in flight — both are slow, so overlap them.
+			const readerReady = loadReader();
+			const media = await navigator.mediaDevices.getUserMedia({
+				audio: false,
+				video: {
+					facingMode: { ideal: 'environment' },
+					// High resolution so small / far-away barcodes still have enough
+					// pixels per bar to decode (tryDownscale handles the cost).
+					width: { ideal: 1920 },
+					height: { ideal: 1080 }
 				}
-			);
+			});
+			if (gen !== scanGen) {
+				media.getTracks().forEach((t) => t.stop());
+				return;
+			}
+			stream = media;
+
+			// Continuous autofocus where supported (Android Chrome) — crinkled or
+			// curved barcodes need the lens to keep refocusing.
+			const track = media.getVideoTracks()[0];
+			try {
+				const caps = track.getCapabilities?.() as MediaTrackCapabilities & {
+					focusMode?: string[];
+				};
+				if (caps?.focusMode?.includes('continuous')) {
+					await track.applyConstraints({
+						advanced: [{ focusMode: 'continuous' } as MediaTrackConstraintSet]
+					});
+				}
+			} catch {
+				/* focus hint is best-effort */
+			}
+
+			await readerReady;
+			if (gen !== scanGen) return;
+			if (!video) {
+				stopCamera();
+				return;
+			}
+			video.srcObject = media;
+			await video.play();
+			void scanLoop(gen);
 		} catch (e: any) {
+			stopCamera(); // wasm load / play() can fail after the stream opened — don't leak it
 			status = 'error';
 			message =
 				e?.message ||
@@ -78,55 +104,77 @@
 		}
 	}
 
+	// Decode full camera frames with zxing-wasm (tryHarder/tryRotate/tryInvert)
+	// — works at any orientation and anywhere in the frame, unlike the old
+	// box-cropped decoder that needed an upright, frame-filling barcode.
+	async function scanLoop(gen: number) {
+		const canvas = document.createElement('canvas');
+		const ctx = canvas.getContext('2d', { willReadFrequently: true });
+		if (!ctx) return;
+		// Last read of a checksum-less format awaiting a confirming second read.
+		let pending: string | null = null;
+		let frame = 0;
+		while (gen === scanGen && status === 'scanning' && video) {
+			if (video.readyState >= video.HAVE_CURRENT_DATA && video.videoWidth > 0) {
+				const vw = video.videoWidth;
+				const vh = video.videoHeight;
+				// zxing's 1D readers scan near-axis-aligned lines only (~±25°
+				// tolerance around 0/90/180/270, the rest via tryRotate). Alternate
+				// frames decode a 45°-pre-rotated copy, which shifts diagonal
+				// barcodes back into that window — full 360° coverage.
+				if (frame++ % 2 === 0) {
+					canvas.width = vw;
+					canvas.height = vh;
+					ctx.drawImage(video, 0, 0);
+				} else {
+					const side = Math.ceil((vw + vh) / Math.SQRT2);
+					canvas.width = side;
+					canvas.height = side;
+					ctx.fillStyle = '#fff';
+					ctx.fillRect(0, 0, side, side);
+					ctx.save();
+					// Bicubic resampling keeps narrow bars legible through the rotation.
+					ctx.imageSmoothingQuality = 'high';
+					ctx.translate(side / 2, side / 2);
+					ctx.rotate(Math.PI / 4);
+					ctx.drawImage(video, -vw / 2, -vh / 2);
+					ctx.restore();
+				}
+				let hit = null;
+				try {
+					hit = await decodeBarcode(ctx.getImageData(0, 0, canvas.width, canvas.height));
+				} catch {
+					/* per-frame decode failure — keep scanning */
+				}
+				if (gen !== scanGen || status !== 'scanning') return;
+				if (hit) {
+					if (!needsConfirmation(hit.format) || pending === hit.text) {
+						stopCamera();
+						scannedCode = hit.text;
+						await lookup(hit.text);
+						return;
+					}
+					pending = hit.text;
+				}
+			}
+			// Brief yield between frames so the UI thread isn't saturated.
+			await new Promise((r) => setTimeout(r, 50));
+		}
+	}
+
 	onMount(initLiveScan);
 
-	onDestroy(async () => {
-		try {
-			if (liveScanner && liveScanner.isScanning) await liveScanner.stop();
-		} catch {
-			/* noop */
-		}
-	});
+	onDestroy(stopCamera);
 
 	async function onPickFile(e: Event) {
 		const file = (e.target as HTMLInputElement).files?.[0];
 		if (!file) return;
 
-		// stop the live camera so it can release its hold on the #qr-reader element
-		try {
-			if (liveScanner && liveScanner.isScanning) await liveScanner.stop();
-		} catch {
-			/* noop */
-		}
-
+		stopCamera();
 		status = 'decoding_file';
 
-		// zxing-wasm is much better at finding barcodes inside larger images
-		// (full product photos, cluttered backgrounds, rotated/skewed codes).
-		// We pass `tryHarder + tryRotate + tryInvert + tryDownscale` so it'll
-		// scan multiple scales/orientations rather than only the full frame.
 		try {
-			const { readBarcodes, prepareZXingModule } = await import('zxing-wasm/reader');
-			await prepareZXingModule({
-				overrides: {
-					locateFile: (path: string, prefix: string) => {
-						if (path.endsWith('.wasm')) {
-							return new URL('zxing-wasm/reader/zxing_reader.wasm', import.meta.url).href;
-						}
-						return prefix + path;
-					}
-				},
-				fireImmediately: true
-			});
-			const results = await readBarcodes(file, {
-				formats: ['EAN-13', 'EAN-8', 'UPC-A', 'UPC-E', 'Code128', 'Code39', 'ITF'],
-				tryHarder: true,
-				tryRotate: true,
-				tryInvert: true,
-				tryDownscale: true,
-				maxNumberOfSymbols: 1
-			});
-			const hit = results.find((r) => r.isValid && r.text);
+			const hit = await decodeBarcode(file);
 			if (!hit) throw new Error('no barcode detected');
 			scannedCode = hit.text;
 			await lookup(hit.text);
@@ -146,11 +194,7 @@
 			status = 'error';
 			return;
 		}
-		try {
-			if (liveScanner && liveScanner.isScanning) await liveScanner.stop();
-		} catch {
-			/* noop */
-		}
+		stopCamera();
 		scannedCode = code;
 		await lookup(code);
 	}
@@ -272,14 +316,21 @@
 <input bind:this={fileInput} type="file" accept="image/*" class="hidden" onchange={onPickFile} />
 
 {#if status === 'scanning' || status === 'decoding_file'}
-	<div id="qr-reader" class="mt-4 overflow-hidden rounded-2xl"></div>
-
-	{#if status === 'decoding_file'}
-		<p class="mt-3 text-center text-sm" style="color: var(--color-text-subtle);">Decoding image…</p>
-	{:else}
+	{#if status === 'scanning'}
+		<div class="relative mt-4 overflow-hidden rounded-2xl bg-black" style="aspect-ratio: 3 / 4;">
+			<!-- svelte-ignore a11y_media_has_caption -->
+			<video bind:this={video} autoplay playsinline muted class="h-full w-full object-cover"
+			></video>
+			<!-- Aiming guide only — the full frame is decoded, any angle works -->
+			<div class="pointer-events-none absolute inset-0 flex items-center justify-center">
+				<div class="h-2/5 w-4/5 rounded-2xl border-2 border-white/50"></div>
+			</div>
+		</div>
 		<p class="mt-3 text-center text-sm" style="color: var(--color-text-subtle);">
-			Hold the barcode flat and fill the frame
+			Point at the barcode — any angle works
 		</p>
+	{:else}
+		<p class="mt-6 text-center text-sm" style="color: var(--color-text-subtle);">Decoding image…</p>
 	{/if}
 
 	<div class="mt-3 grid grid-cols-2 gap-2">
@@ -404,10 +455,13 @@
 			<div class="mt-3 grid grid-cols-2 gap-2 text-center">
 				<div class="rounded-xl bg-white/5 p-3">
 					<div class="text-xs" style="color: var(--color-text-subtle);">Yours (kept)</div>
-					<div class="mt-1 font-bold text-white">{Math.round(sourceUpdate.current.calories)} kcal</div>
+					<div class="mt-1 font-bold text-white">
+						{Math.round(sourceUpdate.current.calories)} kcal
+					</div>
 					<div class="text-xs" style="color: var(--color-text-subtle);">
-						{Math.round(sourceUpdate.current.proteinG)}p · {Math.round(sourceUpdate.current.carbsG)}c
-						· {Math.round(sourceUpdate.current.fatG)}f
+						{Math.round(sourceUpdate.current.proteinG)}p · {Math.round(
+							sourceUpdate.current.carbsG
+						)}c · {Math.round(sourceUpdate.current.fatG)}f
 					</div>
 				</div>
 				<div class="rounded-xl bg-white/5 p-3">
@@ -548,7 +602,7 @@
 			onclick={async () => {
 				message = '';
 				status = 'scanning';
-				await Promise.resolve();
+				await tick(); // let the <video> element mount before binding the stream
 				await initLiveScan();
 			}}
 		>
