@@ -21,6 +21,13 @@ export async function PATCH({ params, request }) {
 	const [food] = await db.select().from(foods).where(eq(foods.id, entry.foodId));
 	if (!food) throw error(404, 'food not found');
 
+	// Gram/volume units need a serving weight to convert; without one, toServings
+	// would silently treat the amount as servings (188g → 188 servings). A food can
+	// lose its serving weight after a source sync, so guard here rather than trust it.
+	if (unit !== 'serving' && !(food.servingGrams && food.servingGrams > 0)) {
+		throw error(400, `Cannot log "${food.name}" by ${unit}: it has no serving weight.`);
+	}
+
 	const servings = toServings(amount, unit, food.servingGrams);
 
 	const [updated] = await db

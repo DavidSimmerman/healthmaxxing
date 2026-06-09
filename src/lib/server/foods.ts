@@ -1,6 +1,7 @@
 import { db } from '$lib/server/db';
 import { foods, dailyLog, quickAdds, type Ingredient } from '$lib/server/db/schema';
-import { and, desc, eq, ilike, isNull } from 'drizzle-orm';
+import { and, desc, eq, ilike, isNull, sql } from 'drizzle-orm';
+import { canonicalBarcode } from '$lib/barcode';
 import { sanitizeNutrients, scaleNutrients, sumNutrients } from '$lib/nutrients';
 import type { Nutrients } from '$lib/nutrients';
 import { toServings, UNITS, type Unit } from '$lib/units';
@@ -12,6 +13,33 @@ type FoodRow = typeof foods.$inferSelect;
 type LogRow = typeof dailyLog.$inferSelect;
 
 const posNum = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+
+// Find a cataloged food by barcode, matching on the CANONICAL form so a UPC-A
+// (12-digit) scan resolves to the same row a 13-digit EAN-13 override was saved
+// under, and vice versa. Normalizes stored values at query time, so it also
+// catches rows written before canonicalization — no data migration required.
+// If duplicates exist for one product, prefer an override, then most-recent.
+export async function findFoodByBarcode(code: string): Promise<FoodRow | null> {
+	const canon = canonicalBarcode(code);
+	if (!canon) return null;
+	// Mirror canonicalBarcode() in SQL: alphanumeric codes are preserved (trimmed);
+	// numeric codes collapse separators to digits and pad only 12–14-digit GTINs to
+	// 14, leaving other lengths as their raw digits. Keep this in sync with the JS.
+	const digits = sql`regexp_replace(${foods.barcode}, '[^0-9]', '', 'g')`;
+	const [food] = await db
+		.select()
+		.from(foods)
+		.where(
+			sql`${foods.barcode} is not null and (case
+				when ${foods.barcode} ~ '[A-Za-z]' then btrim(${foods.barcode})
+				when length(${digits}) between 12 and 14 then lpad(${digits}, 14, '0')
+				else ${digits}
+			end) = ${canon}`
+		)
+		.orderBy(desc(foods.overridden), desc(foods.updatedAt))
+		.limit(1);
+	return food ?? null;
+}
 
 // ── Recipe macros ───────────────────────────────────────────────────────────
 // Ingredient macros are whole-recipe contributions; per-serving = sum / makesServings.
@@ -95,7 +123,7 @@ export async function prepFood(input: PrepFoodInput): Promise<FoodRow> {
 		[existing] = await db.select().from(foods).where(eq(foods.id, input.id));
 		if (!existing) throw new FoodInputError(`No food with id ${input.id}`);
 	} else if (input.barcode) {
-		[existing] = await db.select().from(foods).where(eq(foods.barcode, input.barcode));
+		existing = await findFoodByBarcode(input.barcode);
 	}
 
 	// Effective ingredients: explicit input wins, else keep what's stored.
@@ -148,7 +176,17 @@ export async function prepFood(input: PrepFoodInput): Promise<FoodRow> {
 	const values = {
 		name: input.name?.trim() ?? existing!.name,
 		brand: input.brand !== undefined ? (input.brand ?? null) : (existing?.brand ?? null),
-		barcode: input.barcode !== undefined ? input.barcode || null : (existing?.barcode ?? null),
+		// Store the canonical (GTIN-14) barcode on NEW rows so future scans in either
+		// format match. Never rewrite an EXISTING row's barcode: with legacy
+		// UPC-A/EAN-13 duplicates around, canonicalizing the selected row could collide
+		// with the unique barcode the other row already holds. Query-time normalization
+		// in findFoodByBarcode means existing rows still match regardless of stored form.
+		barcode: existing
+			? (existing.barcode ??
+				(input.barcode !== undefined ? canonicalBarcode(input.barcode) || null : null))
+			: input.barcode !== undefined
+				? canonicalBarcode(input.barcode) || null
+				: null,
 		servingSize:
 			input.servingSize !== undefined
 				? (input.servingSize ?? null)
@@ -166,6 +204,12 @@ export async function prepFood(input: PrepFoodInput): Promise<FoodRow> {
 		totalGrams: isRecipe ? totalGrams : null,
 		source: input.source ?? existing?.source ?? 'claude_code',
 		sourcePayload: payload as unknown,
+		// A hand-entered/curated food is a deliberate value: a scan keeps showing it
+		// and only NOTIFIES on a source change (vs. plain OFF rows, which mirror the
+		// source). Re-baseline against the source on the next scan.
+		overridden: true,
+		sourceMacros: null,
+		sourceCheckedAt: null,
 		archivedAt: null, // prepping/curating a food revives it into search
 		updatedAt: new Date()
 	};
@@ -333,7 +377,7 @@ export type BarcodeLookup = {
 // the personal cache (which may hold user-corrected values) over Open Food Facts.
 // Recipe ingredients are looked up, not cataloged — so this never inserts.
 export async function lookupBarcodeMacros(code: string): Promise<BarcodeLookup> {
-	const [cached] = await db.select().from(foods).where(eq(foods.barcode, code));
+	const cached = await findFoodByBarcode(code);
 	if (cached) {
 		const grams = cached.servingGrams;
 		const hasGrams = !!grams && grams > 0;

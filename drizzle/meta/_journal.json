@@ -50,6 +50,13 @@
       "when": 1780978061718,
       "tag": "0006_magical_black_tarantula",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1781028391870,
+      "tag": "0007_stale_overlord",
+      "breakpoints": true
     }
   ]
 }

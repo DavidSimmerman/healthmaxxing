@@ -12,6 +12,14 @@
 	let message = $state('');
 	let result = $state<any>(null);
 	let scannedCode = $state('');
+	// Set when the scan finds the source (Open Food Facts) now disagrees with our
+	// saved override — { current: yours, incoming: source }. Drives the banner.
+	let sourceUpdate = $state<{
+		current: { calories: number; proteinG: number; carbsG: number; fatG: number };
+		incoming: { calories: number; proteinG: number; carbsG: number; fatG: number };
+		servingSize?: string | null;
+	} | null>(null);
+	let reconciling = $state(false);
 	// Amount to log from the "found" card, in `unit` (grams/volume convert via servingGrams).
 	let unit = $state<Unit>('serving');
 	let amount = $state(1);
@@ -149,14 +157,44 @@
 
 	async function lookup(code: string) {
 		status = 'looking_up';
+		sourceUpdate = null;
 		const res = await fetch(`/api/barcode/${code}`);
 		const body = await res.json();
 		if (body.food) {
 			result = body.food;
+			sourceUpdate = body.sourceUpdate ?? null;
 			status = 'found';
 		} else {
 			status = 'not_found';
 			message = body.message ?? '';
+		}
+	}
+
+	// Resolve a flagged source change. "update" trusts the new source (the server
+	// drops the override and mirrors it going forward); "dismiss" keeps our value
+	// and re-baselines so the same change won't alert again.
+	async function reconcile(action: 'update' | 'dismiss') {
+		reconciling = true;
+		try {
+			const res = await fetch(`/api/barcode/${scannedCode}`, {
+				method: 'PUT',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ action })
+			});
+			if (res.ok) {
+				if (action === 'update') {
+					result = (await res.json()).food;
+					// The new source value may have no serving weight; a stale g/cup/tbsp
+					// selection would then log a gram amount as servings. Reset to serving.
+					if (!(result.servingGrams && result.servingGrams > 0)) {
+						unit = 'serving';
+						amount = 1;
+					}
+				}
+				sourceUpdate = null;
+			}
+		} finally {
+			reconciling = false;
 		}
 	}
 
@@ -350,6 +388,59 @@
 				· {result.servingSize}{/if}
 		</p>
 	</div>
+
+	{#if sourceUpdate}
+		<div
+			class="mt-4 rounded-2xl border p-4"
+			style="border-color: rgba(251,146,60,0.45); background: rgba(251,146,60,0.08);"
+		>
+			<p class="text-xs font-semibold tracking-wider uppercase" style="color: #fdba74;">
+				↻ Source updated
+			</p>
+			<p class="mt-1 text-sm text-white">
+				Open Food Facts now lists different macros for this item. Your saved version is still being
+				used — review the change below.
+			</p>
+			<div class="mt-3 grid grid-cols-2 gap-2 text-center">
+				<div class="rounded-xl bg-white/5 p-3">
+					<div class="text-xs" style="color: var(--color-text-subtle);">Yours (kept)</div>
+					<div class="mt-1 font-bold text-white">{Math.round(sourceUpdate.current.calories)} kcal</div>
+					<div class="text-xs" style="color: var(--color-text-subtle);">
+						{Math.round(sourceUpdate.current.proteinG)}p · {Math.round(sourceUpdate.current.carbsG)}c
+						· {Math.round(sourceUpdate.current.fatG)}f
+					</div>
+				</div>
+				<div class="rounded-xl bg-white/5 p-3">
+					<div class="text-xs" style="color: var(--color-text-subtle);">New (source)</div>
+					<div class="mt-1 font-bold" style="color: #fdba74;">
+						{Math.round(sourceUpdate.incoming.calories)} kcal
+					</div>
+					<div class="text-xs" style="color: var(--color-text-subtle);">
+						{Math.round(sourceUpdate.incoming.proteinG)}p · {Math.round(
+							sourceUpdate.incoming.carbsG
+						)}c · {Math.round(sourceUpdate.incoming.fatG)}f
+					</div>
+				</div>
+			</div>
+			<div class="mt-3 flex gap-2">
+				<button
+					class="card-sm flex-1 py-2.5 text-sm font-semibold text-white transition active:scale-95 disabled:opacity-50"
+					disabled={reconciling}
+					onclick={() => reconcile('dismiss')}
+				>
+					Keep mine
+				</button>
+				<button
+					class="accent-gradient flex-1 rounded-2xl py-2.5 text-sm font-bold text-white disabled:opacity-50"
+					disabled={reconciling}
+					onclick={() => reconcile('update')}
+				>
+					{reconciling ? '…' : 'Use new'}
+				</button>
+			</div>
+		</div>
+	{/if}
+
 	<button
 		class="accent-gradient mt-4 w-full rounded-2xl py-4 font-bold text-white disabled:opacity-50"
 		disabled={!(Number(amount) > 0)}

@@ -64,6 +64,21 @@ export const foods = pgTable(
 		source: text('source').notNull(), // 'off' | 'manual' | 'label_ocr' | 'claude_code' | 'estimate'
 		sourcePayload: jsonb('source_payload'), // raw API/OCR response for debugging
 
+		// Source-tracking (so a hand-corrected food isn't silently stale).
+		// `overridden` = the stored macros are a deliberate correction, so a scan
+		// keeps showing them and only NOTIFIES when the external source changes.
+		// Non-overridden rows just mirror the source on each scan. `sourceMacros`
+		// is the last external (Open Food Facts) snapshot we reconciled with — the
+		// baseline a fresh lookup is compared against; null until first established.
+		overridden: boolean('overridden').notNull().default(false),
+		sourceMacros: jsonb('source_macros').$type<{
+			calories: number;
+			proteinG: number;
+			carbsG: number;
+			fatG: number;
+		}>(),
+		sourceCheckedAt: timestamp('source_checked_at'),
+
 		// Soft-delete: hidden from search/quick-adds but kept so historical day
 		// entries (which reference foodId and render from cached macros) still resolve.
 		archivedAt: timestamp('archived_at'),
