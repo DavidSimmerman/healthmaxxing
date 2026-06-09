@@ -86,6 +86,7 @@
 				value={totals.proteinG}
 				target={data.settings.proteinTargetG}
 				color="var(--color-protein)"
+				remaining
 			/>
 			<MacroBar label="Carbs" value={totals.carbsG} color="var(--color-carbs)" />
 			<MacroBar label="Fat" value={totals.fatG} color="var(--color-fat)" />
