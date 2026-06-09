@@ -2,9 +2,12 @@ import { json } from '@sveltejs/kit';
 import { validateAccessToken } from '$lib/server/oauth';
 import {
 	createAndLogFood,
+	prepFood,
+	searchFoods,
 	lookupBarcodeMacros,
 	FoodInputError,
-	type CreateAndLogInput
+	type CreateAndLogInput,
+	type PrepFoodInput
 } from '$lib/server/foods';
 
 const PROTOCOL_VERSION = '2025-03-26';
@@ -22,7 +25,7 @@ function toolResult(id: Id, text: string, isError = false) {
 	return rpcResult(id, { content: [{ type: 'text', text }], isError });
 }
 
-// ── The one tool ──────────────────────────────────────────────────────────────
+// ── Tools ───────────────────────────────────────────────────────────────────
 const NUTRIENT_KEYS =
 	'fiberG, sugarG, addedSugarG, sugarAlcoholG, satFatG, transFatG, monoFatG, polyFatG, ' +
 	'omega3G, omega6G, cholesterolMg, sodiumMg, potassiumMg, calciumMg, ironMg, magnesiumMg, ' +
@@ -41,13 +44,13 @@ const LOG_FOOD_TOOL = {
 		'the user to send a photo of the nutrition label before logging, rather than guessing. ' +
 		'Only fall back to an estimate (source="estimate", note the assumptions in resolverNote) ' +
 		'if the user says they can’t provide a label. ' +
-			'BEFORE submitting, double-check your work: verify the macros roughly satisfy the ' +
-			'Atwater check (proteinG×4 + carbsG×4 + fatG×9 should be within ~10% of calories), that ' +
-			'values are per the intended serving (not accidentally per-100g or per-package), and that ' +
-			'recipe totals equal the sum of the scaled ingredients. Call out to the user — in your ' +
-			'reply, not silently — anything that seems off or low-confidence (Atwater mismatch, an ' +
-			'implausible value, a guessed serving size, a barcode whose data looked stale or wrong) ' +
-			'so they can give it a second look, and record the caveat in resolverNote.',
+		'BEFORE submitting, double-check your work: verify the macros roughly satisfy the ' +
+		'Atwater check (proteinG×4 + carbsG×4 + fatG×9 should be within ~10% of calories), that ' +
+		'values are per the intended serving (not accidentally per-100g or per-package), and that ' +
+		'recipe totals equal the sum of the scaled ingredients. Call out to the user — in your ' +
+		'reply, not silently — anything that seems off or low-confidence (Atwater mismatch, an ' +
+		'implausible value, a guessed serving size, a barcode whose data looked stale or wrong) ' +
+		'so they can give it a second look, and record the caveat in resolverNote.',
 	inputSchema: {
 		type: 'object',
 		properties: {
@@ -78,9 +81,128 @@ const LOG_FOOD_TOOL = {
 			},
 			logToday: { type: 'boolean', description: 'Add to today’s log (default true)' },
 			servings: { type: 'number', description: 'Servings actually eaten (default 1)' },
+			amount: {
+				type: 'number',
+				description:
+					'Amount eaten in `unit` (e.g. 188 with unit="gram"). Overrides servings; needs servingGrams for non-serving units.'
+			},
+			unit: {
+				type: 'string',
+				enum: ['serving', 'gram', 'cup', 'tbsp', 'tsp'],
+				description: 'Unit for `amount` (default serving)'
+			},
 			pinToQuickAdds: { type: 'boolean' }
 		},
 		required: ['name', 'calories']
+	}
+};
+
+const PREP_FOOD_TOOL = {
+	name: 'prep_food',
+	description:
+		'Create or UPDATE a food/recipe in the catalog WITHOUT logging it to today — for meal prep. ' +
+		'The food becomes searchable in the app so the user can log it later when they actually eat it. ' +
+		'This never touches today’s macros. ' +
+		'TO UPDATE an existing recipe (e.g. the user swapped an ingredient or changed a portion), FIRST ' +
+		'call list_foods to find it, then call prep_food with its `id` and the full updated `ingredients` ' +
+		'array — keeping the id avoids creating a duplicate. You only need to change the one ingredient ' +
+		'that differs; resend the rest as-is from list_foods. ' +
+		'For a recipe, pass `ingredients` (each ingredient’s macros are its contribution to the WHOLE ' +
+		'recipe, not per serving), `makesServings` (how many servings the batch yields), and `totalGrams` ' +
+		'(cooked batch weight, so the user can later log it by grams). Per-serving macros are computed ' +
+		'automatically as sum(ingredients) / makesServings. For a simple (non-recipe) food, omit ' +
+		'ingredients and pass per-serving calories/macros directly. ' +
+		'Resolve each ingredient’s macros from a photo, description, or barcode (use lookup_barcode) ' +
+		'before calling; if unsure of a packaged item, ask the user for a nutrition-label photo rather ' +
+		'than guessing. Double-check the Atwater balance (protein×4 + carbs×4 + fat×9 ≈ calories within ' +
+		'~10%) on the per-serving totals, and call out anything low-confidence in your reply + resolverNote.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			id: {
+				type: 'string',
+				description: 'Existing food id to UPDATE (from list_foods). Omit to create a new food.'
+			},
+			name: { type: 'string', description: 'Food/recipe name, e.g. "Chicken & Rice Bowl"' },
+			brand: { type: 'string' },
+			barcode: {
+				type: 'string',
+				description: 'UPC/EAN if a packaged item; matches/updates on barcode'
+			},
+			servingSize: { type: 'string', description: 'e.g. "1 bowl" or "1 container (170g)"' },
+			servingGrams: {
+				type: 'number',
+				description:
+					'Grams per serving (for non-recipes). Recipes derive this from totalGrams/makesServings.'
+			},
+			calories: {
+				type: 'number',
+				description: 'Per serving — for a simple food (omit when using ingredients)'
+			},
+			proteinG: { type: 'number', description: 'Per serving (simple food)' },
+			carbsG: { type: 'number', description: 'Per serving (simple food)' },
+			fatG: { type: 'number', description: 'Per serving (simple food)' },
+			nutrients: {
+				type: 'object',
+				description: `Optional extended nutrients per serving (simple food). Allowed keys: ${NUTRIENT_KEYS}.`
+			},
+			ingredients: {
+				type: 'array',
+				description:
+					'Recipe breakdown. Each ingredient’s macros are its contribution to the WHOLE recipe.',
+				items: {
+					type: 'object',
+					properties: {
+						name: { type: 'string' },
+						amount: {
+							type: 'string',
+							description: 'Quantity as entered, e.g. "6 oz", "1 cup cooked"'
+						},
+						barcode: { type: 'string' },
+						calories: {
+							type: 'number',
+							description: 'This ingredient’s contribution to the whole recipe'
+						},
+						proteinG: { type: 'number' },
+						carbsG: { type: 'number' },
+						fatG: { type: 'number' },
+						nutrients: { type: 'object', description: `Allowed keys: ${NUTRIENT_KEYS}` }
+					},
+					required: ['name', 'calories']
+				}
+			},
+			makesServings: {
+				type: 'number',
+				description: 'How many servings the recipe yields (default 1)'
+			},
+			totalGrams: {
+				type: 'number',
+				description: 'Cooked batch weight in grams (enables logging by grams)'
+			},
+			source: { type: 'string', enum: ['claude_code', 'label_ocr', 'estimate'] },
+			resolverNote: { type: 'string', description: 'Confidence / assumptions to record' },
+			pinToQuickAdds: {
+				type: 'boolean',
+				description: 'Also pin as a one-tap tile on the today view'
+			}
+		},
+		required: ['name']
+	}
+};
+
+const LIST_FOODS_TOOL = {
+	name: 'list_foods',
+	description:
+		'Search the food catalog (read-only). Use this to find an existing food/recipe before updating ' +
+		'it with prep_food — match on name, grab its `id`, and reuse its `ingredients`. Returns per-serving ' +
+		'macros plus, for recipes, the ingredient breakdown, makesServings and totalGrams. Archived ' +
+		'(deleted-from-search) foods are excluded. Omit `query` to list the most recently updated foods.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			query: { type: 'string', description: 'Substring to match against food names' },
+			limit: { type: 'number', description: 'Max results (default 25, max 100)' }
+		}
 	}
 };
 
@@ -166,6 +288,48 @@ function round1(n: number): number {
 	return Math.round(n * 10) / 10;
 }
 
+async function callPrepFood(id: Id, args: Record<string, unknown>) {
+	try {
+		const input = { ...args } as unknown as PrepFoodInput;
+		const food = await prepFood(input);
+		const isRecipe = Array.isArray(food.ingredients) && food.ingredients.length > 0;
+		const verb = args.id ? 'Updated' : 'Saved';
+		const recipeBit = isRecipe
+			? ` Recipe of ${food.ingredients!.length} ingredient${
+					food.ingredients!.length === 1 ? '' : 's'
+				}, makes ${round1(food.makesServings ?? 1)} serving${food.makesServings === 1 ? '' : 's'}${
+					food.totalGrams ? `, ${Math.round(food.totalGrams)}g batch` : ''
+				}.`
+			: '';
+		return toolResult(
+			id,
+			`${verb} "${food.name}"${food.brand ? ` (${food.brand})` : ''} — not logged to today.${recipeBit} ` +
+				`Per serving: ${Math.round(food.calories)} kcal, ${round1(food.proteinG)}g protein, ${round1(
+					food.carbsG
+				)}g carbs, ${round1(food.fatG)}g fat. It’s now searchable in the app to log when eaten.`
+		);
+	} catch (e) {
+		if (e instanceof FoodInputError) return toolResult(id, `Could not prep: ${e.message}`, true);
+		console.error('prep_food failed:', e);
+		return toolResult(id, 'Could not prep: an internal error occurred.', true);
+	}
+}
+
+async function callListFoods(id: Id, args: Record<string, unknown>) {
+	try {
+		const query = typeof args.query === 'string' ? args.query : undefined;
+		const limit = typeof args.limit === 'number' ? args.limit : undefined;
+		const results = await searchFoods(query, limit);
+		const summary = `Found ${results.length} food${results.length === 1 ? '' : 's'}${
+			query ? ` matching "${query}"` : ''
+		}.`;
+		return toolResult(id, `${summary}\n${JSON.stringify({ results }, null, 2)}`);
+	} catch (e) {
+		console.error('list_foods failed:', e);
+		return toolResult(id, 'Could not list foods: an internal error occurred.', true);
+	}
+}
+
 // ── HTTP handlers ─────────────────────────────────────────────────────────────
 function unauthorized(origin: string) {
 	return new Response(JSON.stringify({ error: 'invalid_token' }), {
@@ -212,11 +376,15 @@ export async function POST({ request, url }) {
 			});
 		}
 		case 'tools/list':
-			return rpcResult(id, { tools: [LOG_FOOD_TOOL, LOOKUP_BARCODE_TOOL] });
+			return rpcResult(id, {
+				tools: [LOG_FOOD_TOOL, PREP_FOOD_TOOL, LIST_FOODS_TOOL, LOOKUP_BARCODE_TOOL]
+			});
 		case 'tools/call': {
 			const name = params?.name;
 			const args = (params?.arguments ?? {}) as Record<string, unknown>;
 			if (name === 'log_food') return callLogFood(id, args);
+			if (name === 'prep_food') return callPrepFood(id, args);
+			if (name === 'list_foods') return callListFoods(id, args);
 			if (name === 'lookup_barcode') return callLookupBarcode(id, args);
 			return rpcError(id, -32602, `Unknown tool: ${String(name)}`);
 		}

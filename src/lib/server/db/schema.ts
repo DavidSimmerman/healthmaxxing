@@ -11,6 +11,21 @@ import {
 } from 'drizzle-orm/pg-core';
 import type { Nutrients } from '$lib/nutrients';
 
+// One component of a recipe. Macros are this ingredient's contribution to the
+// WHOLE recipe (not per serving). `amount` is the free-text quantity as entered
+// (e.g. "6 oz", "1 cup cooked") — kept for display and so a single ingredient
+// can be tweaked later without re-entering the rest.
+export type Ingredient = {
+	name: string;
+	amount?: string | null;
+	barcode?: string | null;
+	calories: number;
+	proteinG: number;
+	carbsG: number;
+	fatG: number;
+	nutrients?: Partial<Nutrients> | null;
+};
+
 // Master food catalog. Populated as you scan/log new foods.
 // Acts as your personal cache — a barcode looked up once is local forever.
 export const foods = pgTable(
@@ -36,9 +51,22 @@ export const foods = pgTable(
 		// Open Food Facts. Not displayed — used to widen fuzzy search coverage.
 		categories: text('categories'),
 
+		// Recipe / meal-prep support. A food may be composed of sub-ingredients so a
+		// single one can be tweaked later and the per-serving macros recomputed.
+		// `ingredients` holds whole-recipe contributions; the per-serving macros above
+		// = sum(ingredients) / makesServings. `servingGrams` above = totalGrams /
+		// makesServings, which lets a recipe be logged by grams.
+		ingredients: jsonb('ingredients').$type<Ingredient[]>(),
+		makesServings: real('makes_servings'), // servings the recipe yields (null = not a recipe)
+		totalGrams: real('total_grams'), // cooked batch weight, for logging by grams
+
 		// Provenance
 		source: text('source').notNull(), // 'off' | 'manual' | 'label_ocr' | 'claude_code' | 'estimate'
 		sourcePayload: jsonb('source_payload'), // raw API/OCR response for debugging
+
+		// Soft-delete: hidden from search/quick-adds but kept so historical day
+		// entries (which reference foodId and render from cached macros) still resolve.
+		archivedAt: timestamp('archived_at'),
 
 		createdAt: timestamp('created_at').notNull().defaultNow(),
 		updatedAt: timestamp('updated_at').notNull().defaultNow()

@@ -2,6 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { foods } from '$lib/server/db/schema';
 import { eq } from 'drizzle-orm';
+import { archiveFood } from '$lib/server/foods';
 
 // PATCH /api/foods/[id]
 // Edit a food's catalog fields. Used to correct names that came in incomplete
@@ -27,4 +28,14 @@ export async function PATCH({ params, request }) {
 	const [food] = await db.update(foods).set(updates).where(eq(foods.id, params.id)).returning();
 	if (!food) throw error(404, 'food not found');
 	return json({ food });
+}
+
+// DELETE /api/foods/[id]
+// Soft-delete: hide the food from search (and remove any quick-add tile) while
+// keeping the row so historical day entries that reference it still render from
+// their own cached macros. Session-gated like the rest of /api/* — browser-only.
+export async function DELETE({ params }) {
+	const food = await archiveFood(params.id);
+	if (!food) throw error(404, 'food not found');
+	return json({ ok: true });
 }

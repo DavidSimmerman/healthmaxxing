@@ -85,6 +85,24 @@ export function scaleNutrients(
 	return Object.keys(out).length > 0 ? out : null;
 }
 
+// Sum several nutrient bags into one (e.g. a recipe's ingredients → whole-recipe
+// totals). Returns null when nothing valid, so callers can store null instead of {}.
+export function sumNutrients(
+	inputs: (Partial<Nutrients> | null | undefined)[]
+): Partial<Nutrients> | null {
+	const out: Partial<Nutrients> = {};
+	for (const input of inputs) {
+		if (!input || typeof input !== 'object') continue;
+		for (const key of NUTRIENT_KEYS) {
+			const v = input[key];
+			if (typeof v === 'number' && Number.isFinite(v) && v >= 0) {
+				out[key] = (out[key] ?? 0) + v;
+			}
+		}
+	}
+	return Object.keys(out).length > 0 ? out : null;
+}
+
 // Validate + strip an arbitrary object down to known nutrient keys with finite-number values.
 // Returns null when nothing valid remains, so callers can store null instead of {}.
 export function sanitizeNutrients(input: unknown): Partial<Nutrients> | null {

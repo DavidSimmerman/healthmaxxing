@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
+	import { UNITS, UNIT_LABEL, toServings, type Unit } from '$lib/units';
 
 	type Props = { onback: () => void; onlogged: () => void };
 	let { onback, onlogged }: Props = $props();
@@ -11,7 +12,9 @@
 	let message = $state('');
 	let result = $state<any>(null);
 	let scannedCode = $state('');
-	let servings = $state(1);
+	// Amount to log from the "found" card, in `unit` (grams/volume convert via servingGrams).
+	let unit = $state<Unit>('serving');
+	let amount = $state(1);
 	let manualCode = $state('');
 	let fileInput: HTMLInputElement;
 
@@ -157,11 +160,33 @@
 		}
 	}
 
+	let hasGrams = $derived(!!result?.servingGrams && result.servingGrams > 0);
+	let servingsPreview = $derived(
+		result ? toServings(Number(amount) || 0, unit, result.servingGrams) : 0
+	);
+
+	function unitAvail(u: Unit): boolean {
+		return u === 'serving' || hasGrams;
+	}
+
+	function step(): number {
+		switch (unit) {
+			case 'gram':
+				return 5;
+			case 'tbsp':
+			case 'tsp':
+				return 1;
+			default:
+				return 0.25;
+		}
+	}
+
 	async function logIt() {
+		if (!(Number(amount) > 0)) return; // ignore cleared/NaN amount
 		await fetch('/api/log', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ foodId: result.id, servings })
+			body: JSON.stringify({ foodId: result.id, amount: Number(amount), unit })
 		});
 		onlogged();
 	}
@@ -254,45 +279,82 @@
 		{/if}
 		<div class="mt-4 grid grid-cols-4 gap-2 text-center">
 			<div>
-				<div class="text-lg font-bold text-white">{Math.round(result.calories)}</div>
+				<div class="text-lg font-bold text-white">
+					{Math.round(result.calories * servingsPreview)}
+				</div>
 				<div class="text-xs" style="color: var(--color-text-subtle);">kcal</div>
 			</div>
 			<div>
 				<div class="text-lg font-bold" style="color: var(--color-protein);">
-					{Math.round(result.proteinG)}
+					{Math.round(result.proteinG * servingsPreview)}
 				</div>
 				<div class="text-xs" style="color: var(--color-text-subtle);">protein</div>
 			</div>
 			<div>
 				<div class="text-lg font-bold" style="color: var(--color-carbs);">
-					{Math.round(result.carbsG)}
+					{Math.round(result.carbsG * servingsPreview)}
 				</div>
 				<div class="text-xs" style="color: var(--color-text-subtle);">carbs</div>
 			</div>
 			<div>
 				<div class="text-lg font-bold" style="color: var(--color-fat);">
-					{Math.round(result.fatG)}
+					{Math.round(result.fatG * servingsPreview)}
 				</div>
 				<div class="text-xs" style="color: var(--color-text-subtle);">fat</div>
 			</div>
 		</div>
 
-		<div class="mt-4 flex items-center justify-between">
-			<span class="text-sm" style="color: var(--color-text-subtle);">Servings</span>
-			<div class="flex items-center gap-3">
+		<!-- Unit picker — log by serving, grams, or volume -->
+		<div class="no-scrollbar mt-4 flex gap-1 overflow-x-auto rounded-full bg-white/5 p-1">
+			{#each UNITS as u (u)}
+				{@const enabled = unitAvail(u)}
 				<button
-					class="card-sm flex h-9 w-9 items-center justify-center text-lg"
-					onclick={() => (servings = Math.max(0.25, servings - 0.5))}>−</button
+					type="button"
+					disabled={!enabled}
+					onclick={() => (unit = u)}
+					class="shrink-0 rounded-full px-4 py-1.5 text-sm font-semibold transition"
+					class:accent-gradient={unit === u}
+					class:text-white={unit === u}
+					style={unit === u ? '' : `color: ${enabled ? '#e5e5e7' : '#52525b'};`}
 				>
-				<span class="w-10 text-center font-bold text-white">{servings}</span>
-				<button
-					class="card-sm flex h-9 w-9 items-center justify-center text-lg"
-					onclick={() => (servings += 0.5)}>+</button
-				>
-			</div>
+					{UNIT_LABEL[u]}
+				</button>
+			{/each}
 		</div>
+
+		<div class="mt-3 flex items-center justify-center gap-3">
+			<button
+				class="card-sm flex h-10 w-10 items-center justify-center text-xl text-white"
+				type="button"
+				aria-label="Less"
+				onclick={() => (amount = Math.max(0, Number((Number(amount) - step()).toFixed(2))))}
+				>−</button
+			>
+			<input
+				bind:value={amount}
+				type="number"
+				step={step()}
+				min="0"
+				inputmode="decimal"
+				class="card-sm w-28 bg-transparent py-2.5 text-center text-2xl font-bold text-white outline-none"
+			/>
+			<button
+				class="card-sm flex h-10 w-10 items-center justify-center text-xl text-white"
+				type="button"
+				aria-label="More"
+				onclick={() => (amount = Number((Number(amount) + step()).toFixed(2)))}>+</button
+			>
+		</div>
+		<p class="mt-1 text-center text-xs" style="color: var(--color-text-subtle);">
+			{UNIT_LABEL[unit]}{#if result.servingSize}
+				· {result.servingSize}{/if}
+		</p>
 	</div>
-	<button class="accent-gradient mt-4 w-full rounded-2xl py-4 font-bold text-white" onclick={logIt}>
+	<button
+		class="accent-gradient mt-4 w-full rounded-2xl py-4 font-bold text-white disabled:opacity-50"
+		disabled={!(Number(amount) > 0)}
+		onclick={logIt}
+	>
 		Log to today
 	</button>
 {:else if status === 'not_found'}

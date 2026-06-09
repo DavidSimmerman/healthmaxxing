@@ -43,6 +43,13 @@
       "when": 1780968115894,
       "tag": "0005_tan_moonstone",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1780978061718,
+      "tag": "0006_magical_black_tarantula",
+      "breakpoints": true
     }
   ]
 }

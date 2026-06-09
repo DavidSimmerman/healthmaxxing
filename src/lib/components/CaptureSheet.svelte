@@ -2,6 +2,16 @@
 	import { onMount } from 'svelte';
 	import BarcodeScan from './BarcodeScan.svelte';
 	import { fuzzySearch } from '$lib/fuzzy';
+	import { UNITS, UNIT_LABEL, toServings, formatAmount, type Unit } from '$lib/units';
+
+	type Ingredient = {
+		name: string;
+		amount: string | null;
+		calories: number;
+		proteinG: number;
+		carbsG: number;
+		fatG: number;
+	};
 
 	type HistoryFood = {
 		foodId: string;
@@ -14,7 +24,10 @@
 		carbsG: number;
 		fatG: number;
 		categories: string | null;
-		lastLoggedAt: string;
+		ingredients: Ingredient[] | null;
+		makesServings: number | null;
+		totalGrams: number | null;
+		lastLoggedAt: string | null;
 		countTotal: number;
 		count14d: number;
 	};
@@ -29,8 +42,13 @@
 	let loaded = $state(false);
 	let query = $state('');
 	let selected = $state<HistoryFood | null>(null);
-	let servings = $state(1);
+	// Amount the user is logging, in `unit`. Grams/volume convert via servingGrams.
+	let unit = $state<Unit>('serving');
+	let amount = $state(1);
 	let logging = $state(false);
+	let deletingId = $state<string | null>(null);
+
+	const isRecipe = (f: HistoryFood) => !!f.ingredients && f.ingredients.length > 0;
 
 	// Inline name editing (OFF names are often incomplete; let the user fix them).
 	let editingName = $state(false);
@@ -89,7 +107,9 @@
 		history
 			.filter((f) => f.count14d > 0)
 			.sort(
-				(a, b) => b.count14d - a.count14d || Date.parse(b.lastLoggedAt) - Date.parse(a.lastLoggedAt)
+				(a, b) =>
+					b.count14d - a.count14d ||
+					Date.parse(b.lastLoggedAt ?? '') - Date.parse(a.lastLoggedAt ?? '')
 			)
 			.slice(0, 12)
 	);
@@ -99,7 +119,7 @@
 			? fuzzySearch(query, history, {
 					text: (f) => `${f.name} ${f.brand ?? ''}`,
 					keywords: (f) => f.categories,
-					lastLogged: (f) => f.lastLoggedAt,
+					lastLogged: (f) => f.lastLoggedAt ?? '',
 					now: Date.now(),
 					limit: 50
 				}).map((r) => r.item)
@@ -141,10 +161,125 @@
 
 	function pick(f: HistoryFood) {
 		selected = f;
-		servings = 1;
+		unit = 'serving';
+		amount = 1;
 		mode = 'detail';
 		searchFocused = false;
 		editingName = false;
+	}
+
+	// Detail-view amount → servings multiplier (grams/volume convert via servingGrams).
+	let hasGrams = $derived(!!selected?.servingGrams && selected.servingGrams > 0);
+	let servingsPreview = $derived(
+		selected ? toServings(Number(amount) || 0, unit, selected.servingGrams) : 0
+	);
+
+	function unitAvail(u: Unit): boolean {
+		return u === 'serving' || hasGrams;
+	}
+
+	// Step size by unit — fine for fractional servings, coarser for grams.
+	function step(): number {
+		switch (unit) {
+			case 'gram':
+				return 5;
+			case 'tbsp':
+			case 'tsp':
+				return 1;
+			default:
+				return 0.25;
+		}
+	}
+
+	// Swipe-to-delete: archive a food so it never shows in search again. Past days
+	// keep it (they render from cached macros), so this is a soft delete.
+	async function deleteFood(f: HistoryFood) {
+		if (deletingId) return;
+		if (!confirm(`Remove "${f.name}" from search? Past days keep it.`)) return;
+		deletingId = f.foodId;
+		try {
+			const res = await fetch(`/api/foods/${f.foodId}`, { method: 'DELETE' });
+			if (res.ok) history = history.filter((h) => h.foodId !== f.foodId);
+		} finally {
+			deletingId = null;
+		}
+	}
+
+	// Reveal a Delete button by swiping a row left (pointer events → works for touch
+	// and mouse). Suppresses the click that would otherwise fire `pick` after a drag.
+	function swipeRow(node: HTMLElement) {
+		const REVEAL = 88;
+		let startX = 0;
+		let startY = 0;
+		let dx = 0;
+		let dragging = false;
+		let decided = false;
+		let horizontal = false;
+		let moved = false;
+		let openState = false;
+
+		const setX = (x: number, animate: boolean) => {
+			node.style.transition = animate ? 'transform 0.18s ease' : 'none';
+			node.style.transform = `translateX(${x}px)`;
+		};
+		const onDown = (e: PointerEvent) => {
+			startX = e.clientX;
+			startY = e.clientY;
+			dragging = true;
+			decided = false;
+			horizontal = false;
+			moved = false;
+		};
+		const onMove = (e: PointerEvent) => {
+			if (!dragging) return;
+			const ddx = e.clientX - startX;
+			const ddy = e.clientY - startY;
+			if (!decided) {
+				if (Math.abs(ddx) < 6 && Math.abs(ddy) < 6) return;
+				decided = true;
+				horizontal = Math.abs(ddx) > Math.abs(ddy);
+			}
+			if (!horizontal) return;
+			moved = true;
+			e.preventDefault();
+			const base = openState ? -REVEAL : 0;
+			dx = Math.max(-REVEAL - 16, Math.min(0, base + ddx));
+			setX(dx, false);
+		};
+		const onUp = () => {
+			if (!dragging) return;
+			dragging = false;
+			if (moved && horizontal) {
+				openState = dx < -REVEAL / 2;
+				setX(openState ? -REVEAL : 0, true);
+			} else if (openState) {
+				// A tap on an open row closes it instead of picking.
+				openState = false;
+				moved = true;
+				setX(0, true);
+			}
+		};
+		const onClick = (e: MouseEvent) => {
+			if (moved) {
+				e.stopPropagation();
+				e.preventDefault();
+				moved = false;
+			}
+		};
+		node.addEventListener('pointerdown', onDown);
+		node.addEventListener('pointermove', onMove);
+		node.addEventListener('pointerup', onUp);
+		node.addEventListener('pointercancel', onUp);
+		node.addEventListener('click', onClick, true);
+		return {
+			destroy() {
+				node.removeEventListener('pointerdown', onDown);
+				node.removeEventListener('pointermove', onMove);
+				node.removeEventListener('pointerup', onUp);
+				node.removeEventListener('pointercancel', onUp);
+				node.removeEventListener('click', onClick, true);
+			}
+		};
 	}
 
 	function startEditName() {
@@ -182,12 +317,13 @@
 	}
 
 	async function logFood(foodId: string) {
+		if (!(Number(amount) > 0)) return; // ignore cleared/NaN amount
 		logging = true;
 		try {
 			await fetch('/api/log', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ foodId, servings })
+				body: JSON.stringify({ foodId, amount: Number(amount), unit })
 			});
 			reload();
 		} finally {
@@ -321,27 +457,50 @@
 				{:else}
 					<div class="space-y-2 pb-2">
 						{#each shown as f (f.foodId)}
-							<button
-								type="button"
-								class="card-sm flex w-full items-center gap-3 p-3.5 text-left transition hover:bg-white/5 active:scale-[0.99]"
-								onclick={() => pick(f)}
-							>
-								<div class="min-w-0 flex-1">
-									<div class="truncate font-semibold text-white">{f.name}</div>
-									<div class="truncate text-xs" style="color: var(--color-text-subtle);">
-										{#if subBrand(f)}{subBrand(f)} ·
-										{/if}{Math.round(f.calories)} kcal · {Math.round(f.proteinG)}p
+							<div class="relative overflow-hidden rounded-[14px]">
+								<!-- Revealed by swiping the row left -->
+								<button
+									type="button"
+									class="absolute inset-y-0 right-0 flex w-[88px] items-center justify-center bg-rose-600 text-sm font-semibold text-white disabled:opacity-60"
+									aria-label={`Remove ${f.name} from search`}
+									disabled={deletingId === f.foodId}
+									onclick={() => deleteFood(f)}
+								>
+									{deletingId === f.foodId ? '…' : 'Delete'}
+								</button>
+								<button
+									type="button"
+									use:swipeRow
+									class="card-sm relative flex w-full touch-pan-y items-center gap-3 p-3.5 text-left transition hover:bg-white/5"
+									onclick={() => pick(f)}
+								>
+									<div class="min-w-0 flex-1">
+										<div class="flex items-center gap-2">
+											<span class="truncate font-semibold text-white">{f.name}</span>
+											{#if isRecipe(f)}
+												<span
+													class="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold tracking-wide"
+													style="background: rgba(251,146,60,0.14); color: #fdba74;"
+												>
+													RECIPE
+												</span>
+											{/if}
+										</div>
+										<div class="truncate text-xs" style="color: var(--color-text-subtle);">
+											{#if subBrand(f)}{subBrand(f)} ·
+											{/if}{Math.round(f.calories)} kcal · {Math.round(f.proteinG)}p
+										</div>
 									</div>
-								</div>
-								{#if !query && f.count14d > 1}
-									<span
-										class="shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold"
-										style="background: rgba(251,146,60,0.15); color: #fdba74;"
-									>
-										{f.count14d}×
-									</span>
-								{/if}
-							</button>
+									{#if !query && f.count14d > 1}
+										<span
+											class="shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold"
+											style="background: rgba(251,146,60,0.15); color: #fdba74;"
+										>
+											{f.count14d}×
+										</span>
+									{/if}
+								</button>
+							</div>
 						{/each}
 					</div>
 				{/if}
@@ -430,62 +589,128 @@
 						{/if}
 					{/if}
 
+					{#if isRecipe(selected)}
+						<span
+							class="mt-2 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold"
+							style="background: rgba(251,146,60,0.12); color: #fdba74;"
+						>
+							🍳 Recipe · makes {formatAmount(selected.makesServings ?? 1)}{#if selected.totalGrams}
+								· {Math.round(selected.totalGrams)}g batch{/if}
+						</span>
+					{/if}
+
 					<div class="mt-4 grid grid-cols-4 gap-2 text-center">
 						<div>
 							<div class="text-lg font-bold text-white">
-								{Math.round(selected.calories * servings)}
+								{Math.round(selected.calories * servingsPreview)}
 							</div>
 							<div class="text-xs" style="color: var(--color-text-subtle);">kcal</div>
 						</div>
 						<div>
 							<div class="text-lg font-bold" style="color: var(--color-protein);">
-								{Math.round(selected.proteinG * servings)}
+								{Math.round(selected.proteinG * servingsPreview)}
 							</div>
 							<div class="text-xs" style="color: var(--color-text-subtle);">protein</div>
 						</div>
 						<div>
 							<div class="text-lg font-bold" style="color: var(--color-carbs);">
-								{Math.round(selected.carbsG * servings)}
+								{Math.round(selected.carbsG * servingsPreview)}
 							</div>
 							<div class="text-xs" style="color: var(--color-text-subtle);">carbs</div>
 						</div>
 						<div>
 							<div class="text-lg font-bold" style="color: var(--color-fat);">
-								{Math.round(selected.fatG * servings)}
+								{Math.round(selected.fatG * servingsPreview)}
 							</div>
 							<div class="text-xs" style="color: var(--color-text-subtle);">fat</div>
 						</div>
 					</div>
 
-					<div class="mt-4 flex items-center justify-between">
-						<span class="text-sm" style="color: var(--color-text-subtle);">
-							Servings{#if selected.servingSize}<span class="text-zinc-500">
-									· {selected.servingSize}</span
-								>{/if}
-						</span>
-						<div class="flex items-center gap-3">
+					<!-- Unit picker — log by serving, grams, or volume -->
+					<div class="no-scrollbar mt-4 flex gap-1 overflow-x-auto rounded-full bg-white/5 p-1">
+						{#each UNITS as u (u)}
+							{@const enabled = unitAvail(u)}
 							<button
-								class="card-sm flex h-9 w-9 items-center justify-center text-lg text-white"
-								aria-label="Fewer servings"
-								onclick={() => (servings = Math.max(0.25, +(servings - 0.5).toFixed(2)))}
+								type="button"
+								disabled={!enabled}
+								onclick={() => (unit = u)}
+								class="shrink-0 rounded-full px-4 py-1.5 text-sm font-semibold transition"
+								class:accent-gradient={unit === u}
+								class:text-white={unit === u}
+								style={unit === u ? '' : `color: ${enabled ? '#e5e5e7' : '#52525b'};`}
 							>
-								−
+								{UNIT_LABEL[u]}
 							</button>
-							<span class="w-10 text-center font-bold text-white">{servings}</span>
-							<button
-								class="card-sm flex h-9 w-9 items-center justify-center text-lg text-white"
-								aria-label="More servings"
-								onclick={() => (servings = +(servings + 0.5).toFixed(2))}
-							>
-								+
-							</button>
-						</div>
+						{/each}
 					</div>
+					{#if !hasGrams}
+						<p class="mt-2 text-center text-xs" style="color: var(--color-text-subtle);">
+							Set a serving weight on this food to log by g / cup / tbsp / tsp.
+						</p>
+					{/if}
+
+					<!-- Amount + stepper -->
+					<div class="mt-3 flex items-center justify-center gap-3">
+						<button
+							class="card-sm flex h-10 w-10 items-center justify-center text-xl text-white"
+							aria-label="Less"
+							type="button"
+							onclick={() => (amount = Math.max(0, Number((Number(amount) - step()).toFixed(2))))}
+						>
+							−
+						</button>
+						<input
+							bind:value={amount}
+							type="number"
+							step={step()}
+							min="0"
+							inputmode="decimal"
+							class="card-sm w-28 bg-transparent py-2.5 text-center text-2xl font-bold text-white outline-none"
+						/>
+						<button
+							class="card-sm flex h-10 w-10 items-center justify-center text-xl text-white"
+							aria-label="More"
+							type="button"
+							onclick={() => (amount = Number((Number(amount) + step()).toFixed(2)))}
+						>
+							+
+						</button>
+					</div>
+					<p class="mt-1 text-center text-xs" style="color: var(--color-text-subtle);">
+						{UNIT_LABEL[unit]}{#if selected.servingSize}
+							· {selected.servingSize}{/if}
+					</p>
+
+					{#if isRecipe(selected) && selected.ingredients}
+						<div class="mt-4 border-t pt-3" style="border-color: var(--color-border);">
+							<p
+								class="mb-2 text-xs font-semibold tracking-wider uppercase"
+								style="color: var(--color-text-subtle);"
+							>
+								Ingredients · whole recipe
+							</p>
+							<div class="space-y-1.5">
+								{#each selected.ingredients as ing, i (i)}
+									<div class="flex items-baseline justify-between gap-2 text-sm">
+										<span class="min-w-0 truncate text-zinc-200">
+											{ing.name}{#if ing.amount}<span
+													class="ml-1.5 text-xs"
+													style="color: var(--color-text-subtle);">{ing.amount}</span
+												>{/if}
+										</span>
+										<span class="shrink-0 text-xs" style="color: var(--color-text-subtle);">
+											{Math.round(ing.calories)} kcal
+										</span>
+									</div>
+								{/each}
+							</div>
+						</div>
+					{/if}
 				</div>
 
 				<button
 					class="accent-gradient mt-4 w-full rounded-2xl py-4 font-bold text-white disabled:opacity-50"
-					disabled={logging}
+					disabled={logging || !(Number(amount) > 0)}
 					onclick={() => logFood(selected!.foodId)}
 				>
 					{logging ? 'Logging…' : 'Log to today'}

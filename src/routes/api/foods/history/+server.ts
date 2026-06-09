@@ -1,13 +1,14 @@
 import { json } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { foods, dailyLog } from '$lib/server/db/schema';
-import { eq, sql, desc } from 'drizzle-orm';
+import { eq, sql, desc, isNull } from 'drizzle-orm';
 
 // GET /api/foods/history
-// Every distinct food you've ever logged, with per-serving macros plus the
-// freshness signals the capture sheet needs: when it was last logged, how many
-// times total, and how many times in the last 14 days (for the "popular" list).
-// Session-gated like the rest of /api/* — browser-only, no Bearer token.
+// Every food in the catalog the capture sheet can offer — including ones that were
+// meal-prepped but never logged (LEFT JOIN, so they still appear with a null
+// lastLoggedAt). Archived (deleted-from-search) foods are excluded. Carries the
+// per-serving macros plus freshness signals for the "popular" list and the recipe
+// fields the detail view needs. Session-gated like the rest of /api/* — browser-only.
 export async function GET() {
 	const rows = await db
 		.select({
@@ -21,14 +22,19 @@ export async function GET() {
 			carbsG: foods.carbsG,
 			fatG: foods.fatG,
 			categories: foods.categories,
-			lastLoggedAt: sql<string>`max(${dailyLog.loggedAt})`,
-			countTotal: sql<number>`(count(*))::int`,
-			count14d: sql<number>`(count(*) filter (where ${dailyLog.loggedAt} >= now() - interval '14 days'))::int`
+			ingredients: foods.ingredients,
+			makesServings: foods.makesServings,
+			totalGrams: foods.totalGrams,
+			lastLoggedAt: sql<string | null>`max(${dailyLog.loggedAt})`,
+			countTotal: sql<number>`(count(${dailyLog.id}))::int`,
+			count14d: sql<number>`(count(${dailyLog.id}) filter (where ${dailyLog.loggedAt} >= now() - interval '14 days'))::int`
 		})
-		.from(dailyLog)
-		.innerJoin(foods, eq(dailyLog.foodId, foods.id))
+		.from(foods)
+		.leftJoin(dailyLog, eq(dailyLog.foodId, foods.id))
+		.where(isNull(foods.archivedAt))
 		.groupBy(foods.id)
-		.orderBy(desc(sql`max(${dailyLog.loggedAt})`));
+		// Sort by most recent activity — last logged, or when prepped/edited if never logged.
+		.orderBy(desc(sql`coalesce(max(${dailyLog.loggedAt}), ${foods.updatedAt})`));
 
 	return json({ foods: rows });
 }
