@@ -19,6 +19,7 @@ automatically on container start; uploads live on a mounted volume.
 | `API_TOKEN`         |          | Bearer token for the `/api/*` endpoints used by the desktop `/log-food` slash command. Leave unset to disable that auth (not recommended in prod).                                                  |
 | `BODY_SIZE_LIMIT`   |          | Raise above adapter-node's 512K default so label-photo uploads succeed, e.g. `10M`.                                                                                                                 |
 | `UPLOAD_DIR`        |          | Absolute path for uploaded images, e.g. `/data/uploads`. Defaults to `./uploads` (ephemeral). Set this and mount a volume.                                                                          |
+| `APP_TZ`            |          | IANA timezone whose calendar day defines "today" for the dashboard and `/api/today`. Defaults to `America/New_York`. Set to your timezone so the day doesn't roll over at midnight UTC.             |
 
 ## 3. Persistent volume
 

@@ -1,17 +1,7 @@
 import { db } from '$lib/server/db';
 import { dailyLog, foods, quickAdds, settings, pendingItems } from '$lib/server/db/schema';
-import { and, asc, desc, eq, gte, lt } from 'drizzle-orm';
-
-function startOfToday(): Date {
-	const d = new Date();
-	d.setHours(0, 0, 0, 0);
-	return d;
-}
-function startOfTomorrow(): Date {
-	const d = startOfToday();
-	d.setDate(d.getDate() + 1);
-	return d;
-}
+import { asc, eq } from 'drizzle-orm';
+import { loggedToday } from '$lib/server/day';
 
 export async function load() {
 	const [settingsRow] = await db.select().from(settings).where(eq(settings.id, 1));
@@ -38,7 +28,7 @@ export async function load() {
 		})
 		.from(dailyLog)
 		.innerJoin(foods, eq(dailyLog.foodId, foods.id))
-		.where(and(gte(dailyLog.loggedAt, startOfToday()), lt(dailyLog.loggedAt, startOfTomorrow())))
+		.where(loggedToday())
 		.orderBy(asc(dailyLog.loggedAt));
 
 	const quickAddItems = await db

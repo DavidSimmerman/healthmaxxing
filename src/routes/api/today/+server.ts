@@ -1,15 +1,12 @@
 import { json } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { dailyLog, foods, settings } from '$lib/server/db/schema';
-import { and, asc, eq, gte, lt } from 'drizzle-orm';
+import { asc, eq } from 'drizzle-orm';
 import { requireApiToken } from '$lib/server/auth';
+import { loggedToday, todayLabel } from '$lib/server/day';
 
 export async function GET({ request }) {
 	requireApiToken(request);
-	const start = new Date();
-	start.setHours(0, 0, 0, 0);
-	const end = new Date(start);
-	end.setDate(end.getDate() + 1);
 
 	const entries = await db
 		.select({
@@ -24,13 +21,13 @@ export async function GET({ request }) {
 		})
 		.from(dailyLog)
 		.innerJoin(foods, eq(dailyLog.foodId, foods.id))
-		.where(and(gte(dailyLog.loggedAt, start), lt(dailyLog.loggedAt, end)))
+		.where(loggedToday())
 		.orderBy(asc(dailyLog.loggedAt));
 
 	const [s] = await db.select().from(settings).where(eq(settings.id, 1));
 
 	return json({
-		date: start.toISOString().slice(0, 10),
+		date: todayLabel(),
 		entries,
 		targets: s ?? null
 	});
