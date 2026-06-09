@@ -1,8 +1,9 @@
 import { db } from '$lib/server/db';
 import { foods, dailyLog, quickAdds } from '$lib/server/db/schema';
 import { eq } from 'drizzle-orm';
-import { sanitizeNutrients } from '$lib/nutrients';
+import { sanitizeNutrients, scaleNutrients } from '$lib/nutrients';
 import type { Nutrients } from '$lib/nutrients';
+import { lookupBarcodeRich, type MacroBundle } from '$lib/server/openFoodFacts';
 
 export type CreateAndLogInput = {
 	name: string;
@@ -121,4 +122,85 @@ export async function createAndLogFood(
 	}
 
 	return { food, logEntry };
+}
+
+// ── Read-only barcode resolution for the MCP `lookup_barcode` tool ─────────────
+export type BarcodeLookup = {
+	barcode: string;
+	found: boolean;
+	source: 'cache' | 'off' | null;
+	name?: string;
+	brand?: string | null;
+	servingSize?: string | null;
+	servingGrams?: number | null;
+	dataBasis?: '100g' | 'serving';
+	per100g?: MacroBundle | null;
+	perServing?: MacroBundle | null;
+	note?: string;
+};
+
+// Resolve one barcode to macros on both bases without writing anything. Prefers
+// the personal cache (which may hold user-corrected values) over Open Food Facts.
+// Recipe ingredients are looked up, not cataloged — so this never inserts.
+export async function lookupBarcodeMacros(code: string): Promise<BarcodeLookup> {
+	const [cached] = await db.select().from(foods).where(eq(foods.barcode, code));
+	if (cached) {
+		const grams = cached.servingGrams;
+		const hasGrams = !!grams && grams > 0;
+		const stored: MacroBundle = {
+			calories: cached.calories,
+			proteinG: cached.proteinG,
+			carbsG: cached.carbsG,
+			fatG: cached.fatG,
+			nutrients: cached.nutrients ?? null
+		};
+		const scale = (factor: number): MacroBundle => ({
+			calories: stored.calories * factor,
+			proteinG: stored.proteinG * factor,
+			carbsG: stored.carbsG * factor,
+			fatG: stored.fatG * factor,
+			nutrients: scaleNutrients(stored.nutrients, factor)
+		});
+		// Rows the browser /api/barcode route cached from an OFF product that had
+		// no serving weight store per-100g macros with servingGrams null. Every
+		// other row (manual entries, OFF rows with a weight) stores per-serving.
+		const storedIs100g = cached.source === 'off' && !hasGrams;
+		const per100g = storedIs100g ? stored : hasGrams ? scale(100 / grams!) : null;
+		const perServing = storedIs100g ? null : stored;
+		return {
+			barcode: code,
+			found: true,
+			source: 'cache',
+			name: cached.name,
+			brand: cached.brand,
+			servingSize: cached.servingSize,
+			servingGrams: grams,
+			dataBasis: storedIs100g ? '100g' : 'serving',
+			per100g,
+			perServing
+		};
+	}
+
+	const off = await lookupBarcodeRich(code);
+	if (off.ok) {
+		return {
+			barcode: code,
+			found: true,
+			source: 'off',
+			name: off.name,
+			brand: off.brand,
+			servingSize: off.servingSize,
+			servingGrams: off.servingGrams,
+			dataBasis: off.dataBasis,
+			per100g: off.per100g,
+			perServing: off.perServing
+		};
+	}
+
+	return {
+		barcode: code,
+		found: false,
+		source: null,
+		note: `Barcode ${code} not resolvable (${off.reason}). Do not guess macros.`
+	};
 }
