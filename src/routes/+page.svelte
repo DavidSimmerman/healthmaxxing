@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import MacroRing from '$lib/components/MacroRing.svelte';
 	import MacroBar from '$lib/components/MacroBar.svelte';
 	import { sumMacros, pct, formatTime } from '$lib/macros';
@@ -12,6 +13,20 @@
 	let goalPct = $derived(pct(totals.calories, data.settings.calorieTarget));
 	let captureOpen = $state(false);
 	let editingEntry = $state<(typeof data.todayEntries)[number] | null>(null);
+
+	// Whether the calorie ring and protein bar lead with what's left vs. consumed.
+	// Shared across both so a tap on either keeps them consistent; persisted locally.
+	const MODE_KEY = 'macroDisplayMode';
+	let showRemaining = $state(true);
+
+	onMount(() => {
+		if (localStorage.getItem(MODE_KEY) === 'consumed') showRemaining = false;
+	});
+
+	function toggleMode() {
+		showRemaining = !showRemaining;
+		localStorage.setItem(MODE_KEY, showRemaining ? 'remaining' : 'consumed');
+	}
 
 	const today = new Date();
 	const weekday = today.toLocaleDateString('en-US', { weekday: 'long' });
@@ -68,7 +83,12 @@
 			</span>
 		</div>
 		<div class="mb-4 flex justify-center">
-			<MacroRing value={totals.calories} target={data.settings.calorieTarget} />
+			<MacroRing
+				value={totals.calories}
+				target={data.settings.calorieTarget}
+				{showRemaining}
+				ontoggle={toggleMode}
+			/>
 		</div>
 		<div class="grid grid-cols-3 gap-3">
 			<MacroBar
@@ -76,7 +96,8 @@
 				value={totals.proteinG}
 				target={data.settings.proteinTargetG}
 				color="var(--color-protein)"
-				remaining
+				remaining={showRemaining}
+				ontoggle={toggleMode}
 			/>
 			<MacroBar label="Carbs" value={totals.carbsG} color="var(--color-carbs)" />
 			<MacroBar label="Fat" value={totals.fatG} color="var(--color-fat)" />

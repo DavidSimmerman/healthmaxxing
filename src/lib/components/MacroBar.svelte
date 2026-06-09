@@ -5,19 +5,21 @@
 		target?: number | null;
 		color: string;
 		remaining?: boolean;
+		ontoggle?: () => void;
 	};
-	let { label, value, target = null, color, remaining = false }: Props = $props();
+	let { label, value, target = null, color, remaining = false, ontoggle }: Props = $props();
 	let hasTarget = $derived(target != null && target > 0);
 	let pct = $derived(hasTarget ? Math.min(100, (value / (target as number)) * 100) : 0);
 
 	// In `remaining` mode lead with what's left toward the target, not consumed.
 	let left = $derived(hasTarget ? (target as number) - value : 0);
 	let over = $derived(left < 0);
+	let showLeft = $derived(remaining && hasTarget);
 </script>
 
-<div class="text-center">
+{#snippet content()}
 	<div class="mb-1 text-xs text-text-subtle" style="color: var(--color-text-subtle);">{label}</div>
-	{#if remaining && hasTarget}
+	{#if showLeft}
 		<div class="font-bold" style="color: {over ? '#fb7185' : '#fff'};">
 			{Math.round(Math.abs(left))}<span class="text-xs" style="color: var(--color-text-subtle);">
 				g {over ? 'over' : 'left'}</span
@@ -35,4 +37,17 @@
 			<div class="h-full" style="width: {pct}%; background-color: {color};"></div>
 		</div>
 	{/if}
-</div>
+{/snippet}
+
+{#if ontoggle}
+	<button
+		type="button"
+		onclick={ontoggle}
+		class="w-full text-center transition active:scale-95"
+		aria-label={`${label} ${showLeft ? 'left' : 'consumed'} — tap to toggle`}
+	>
+		{@render content()}
+	</button>
+{:else}
+	<div class="text-center">{@render content()}</div>
+{/if}

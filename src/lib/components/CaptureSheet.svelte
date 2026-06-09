@@ -457,11 +457,11 @@
 				{:else}
 					<div class="space-y-2 pb-2">
 						{#each shown as f (f.foodId)}
-							<div class="relative overflow-hidden rounded-[14px]">
+							<div class="relative overflow-hidden rounded-2xl">
 								<!-- Revealed by swiping the row left -->
 								<button
 									type="button"
-									class="absolute inset-y-0 right-0 flex w-[88px] items-center justify-center bg-rose-600 text-sm font-semibold text-white disabled:opacity-60"
+									class="absolute inset-y-0 right-0 flex w-[88px] items-center justify-center rounded-r-2xl bg-rose-600 text-sm font-semibold text-white disabled:opacity-60"
 									aria-label={`Remove ${f.name} from search`}
 									disabled={deletingId === f.foodId}
 									onclick={() => deleteFood(f)}
@@ -472,6 +472,7 @@
 									type="button"
 									use:swipeRow
 									class="card-sm relative flex w-full touch-pan-y items-center gap-3 p-3.5 text-left transition hover:bg-white/5"
+									style="border-radius: 0;"
 									onclick={() => pick(f)}
 								>
 									<div class="min-w-0 flex-1">
