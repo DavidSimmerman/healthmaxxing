@@ -1,13 +1,15 @@
-import { json } from '@sveltejs/kit';
+import { json, error } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
-import { foods, pendingItems } from '$lib/server/db/schema';
+import { foods } from '$lib/server/db/schema';
 import { eq } from 'drizzle-orm';
 import { lookupBarcode } from '$lib/server/openFoodFacts';
+import { createAndLogFood, FoodInputError } from '$lib/server/foods';
 
 // Lookup flow:
 //   1. Check personal cache (foods.barcode) — instant if seen before.
 //   2. Hit Open Food Facts.
-//   3. If both miss, create a pending_items row and let Claude Code resolve later.
+//   3. If both miss, tell the caller so they can enter the macros by hand (or
+//      ask Claude to log it via the MCP connector).
 export async function GET({ params }) {
 	const code = params.code;
 
@@ -37,15 +39,27 @@ export async function GET({ params }) {
 		return json({ food: inserted, source: 'off' });
 	}
 
-	// Create a pending item so Claude Code can resolve it later.
-	const [pending] = await db
-		.insert(pendingItems)
-		.values({ kind: 'barcode', barcode: code })
-		.returning();
-
 	return json({
 		food: null,
-		pendingId: pending.id,
-		message: `Barcode ${code} not in Open Food Facts (${off.reason}). Saved as pending.`
+		message: `Barcode ${code} not in Open Food Facts (${off.reason}).`
 	});
+}
+
+// POST /api/barcode/:code — save a food the user entered by hand for a barcode
+// Open Food Facts didn't know, caching it under the barcode for next time.
+// Browser-only (session-gated by hooks); upserts by barcode and logs to today.
+export async function POST({ params, request }) {
+	const body = await request.json();
+	try {
+		const { food, logEntry } = await createAndLogFood({
+			...body,
+			barcode: params.code,
+			source: body.source ?? 'manual',
+			logToday: true
+		});
+		return json({ food, logEntry });
+	} catch (e) {
+		if (e instanceof FoodInputError) throw error(400, e.message);
+		throw e;
+	}
 }

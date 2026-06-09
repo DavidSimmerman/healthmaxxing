@@ -33,16 +33,6 @@
 			<h1 class="text-2xl font-bold text-white">{monthDay}</h1>
 		</div>
 		<div class="flex items-center gap-2">
-			{#if data.pendingCount > 0}
-				<a
-					href="/pending"
-					class="card-sm flex items-center gap-2 px-3 py-2 transition hover:brightness-125"
-					title="Items awaiting Claude Code processing"
-				>
-					<span class="h-2 w-2 animate-pulse rounded-full bg-orange-400"></span>
-					<span class="text-xs text-white">{data.pendingCount} pending</span>
-				</a>
-			{/if}
 			<a
 				href="/settings"
 				class="card-sm flex h-9 w-9 items-center justify-center text-white transition hover:brightness-125"

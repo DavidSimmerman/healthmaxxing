@@ -79,27 +79,6 @@ export const quickAdds = pgTable('quick_adds', {
 	createdAt: timestamp('created_at').notNull().defaultNow()
 });
 
-// Items captured but not yet resolved into a real Food.
-// Examples: a label photo, a pasted description, a barcode OFF didn't know.
-// Claude Code reads this table, resolves each item, posts back via API.
-export const pendingItems = pgTable(
-	'pending_items',
-	{
-		id: uuid('id').primaryKey().defaultRandom(),
-		kind: text('kind').notNull(), // 'barcode' | 'label_photo' | 'paste' | 'photo_with_caption'
-		barcode: text('barcode'), // for kind='barcode' or 'photo_with_caption'
-		imagePath: text('image_path'), // path to uploaded image in /static/uploads or similar
-		text: text('text'), // pasted description or caption
-		servings: real('servings').notNull().default(1),
-		status: text('status').notNull().default('pending'), // 'pending' | 'resolved' | 'failed'
-		resolvedFoodId: uuid('resolved_food_id').references(() => foods.id),
-		resolverNote: text('resolver_note'), // Claude Code can leave a note (assumptions, confidence, etc)
-		createdAt: timestamp('created_at').notNull().defaultNow(),
-		resolvedAt: timestamp('resolved_at')
-	},
-	(t) => [index('pending_status_idx').on(t.status)]
-);
-
 // User-configurable daily targets. Single-row table for now (solo app).
 export const settings = pgTable('settings', {
 	id: integer('id').primaryKey().default(1),

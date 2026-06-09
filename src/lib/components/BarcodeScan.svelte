@@ -6,12 +6,11 @@
 
 	let liveScanner: any = null;
 	let status = $state<
-		'scanning' | 'decoding_file' | 'looking_up' | 'found' | 'pending_created' | 'error'
+		'scanning' | 'decoding_file' | 'looking_up' | 'found' | 'not_found' | 'error'
 	>('scanning');
 	let message = $state('');
 	let result = $state<any>(null);
 	let scannedCode = $state('');
-	let pendingId = $state<string | null>(null);
 	let servings = $state(1);
 	let manualCode = $state('');
 	let fileInput: HTMLInputElement;
@@ -153,8 +152,7 @@
 			result = body.food;
 			status = 'found';
 		} else {
-			pendingId = body.pendingId ?? null;
-			status = 'pending_created';
+			status = 'not_found';
 			message = body.message ?? '';
 		}
 	}
@@ -176,10 +174,10 @@
 			resolveFat !== null
 	);
 
-	async function resolvePending() {
-		if (!pendingId || !resolveValid) return;
+	async function saveManual() {
+		if (!resolveValid) return;
 		resolveBusy = true;
-		const res = await fetch(`/api/pending/${pendingId}/resolve`, {
+		const res = await fetch(`/api/barcode/${scannedCode}`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({
@@ -191,8 +189,7 @@
 				proteinG: resolveProtein,
 				carbsG: resolveCarbs,
 				fatG: resolveFat,
-				source: 'manual',
-				logToday: true
+				source: 'manual'
 			})
 		});
 		if (res.ok) onlogged();
@@ -298,12 +295,13 @@
 	<button class="accent-gradient mt-4 w-full rounded-2xl py-4 font-bold text-white" onclick={logIt}>
 		Log to today
 	</button>
-{:else if status === 'pending_created'}
+{:else if status === 'not_found'}
 	<div class="card-sm mt-4 p-5">
 		<p class="text-xs tracking-wider uppercase" style="color: #fdba74;">● Not in Open Food Facts</p>
 		<p class="mt-2 text-sm text-white">
 			Barcode <span class="font-mono">{scannedCode}</span> isn't in the database. Enter the macros from
-			the label below — we'll save them under this barcode so next time it's instant.
+			the label below — we'll save them under this barcode so next time it's instant. Or ask Claude to
+			log it for you.
 		</p>
 	</div>
 
@@ -367,7 +365,7 @@
 	<button
 		class="accent-gradient mt-3 w-full rounded-2xl py-4 font-bold text-white disabled:opacity-50"
 		disabled={!resolveValid || resolveBusy}
-		onclick={resolvePending}
+		onclick={saveManual}
 	>
 		{resolveBusy ? 'Saving…' : 'Save & log to today'}
 	</button>
@@ -375,9 +373,9 @@
 	<button
 		class="mt-2 w-full py-3 text-center text-sm"
 		style="color: var(--color-text-subtle);"
-		onclick={onlogged}
+		onclick={onback}
 	>
-		Skip — let Claude Code resolve later
+		Cancel
 	</button>
 {:else if status === 'error'}
 	<div class="card-sm mt-4 p-5 text-center">

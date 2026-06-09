@@ -1,5 +1,5 @@
 import { db } from '$lib/server/db';
-import { dailyLog, foods, quickAdds, settings, pendingItems } from '$lib/server/db/schema';
+import { dailyLog, foods, quickAdds, settings } from '$lib/server/db/schema';
 import { asc, eq } from 'drizzle-orm';
 import { loggedToday } from '$lib/server/day';
 
@@ -43,11 +43,6 @@ export async function load() {
 		.innerJoin(foods, eq(quickAdds.foodId, foods.id))
 		.orderBy(asc(quickAdds.sortOrder));
 
-	const pendingCount = await db
-		.select({ id: pendingItems.id })
-		.from(pendingItems)
-		.where(eq(pendingItems.status, 'pending'));
-
 	return {
 		settings: settingsRow ?? {
 			calorieTarget: 2100,
@@ -56,7 +51,6 @@ export async function load() {
 			fatTargetG: 70
 		},
 		todayEntries,
-		quickAddItems,
-		pendingCount: pendingCount.length
+		quickAddItems
 	};
 }
