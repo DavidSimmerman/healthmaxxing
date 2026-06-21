@@ -1,5 +1,6 @@
 import { json } from '@sveltejs/kit';
 import { validateAccessToken } from '$lib/server/oauth';
+import { keycloakEnabled, validateMcpToken } from '$lib/server/keycloak';
 import {
 	createAndLogFood,
 	prepFood,
@@ -347,7 +348,13 @@ export async function POST({ request, url }) {
 	// kicking off the OAuth flow.
 	const auth = request.headers.get('authorization') ?? '';
 	const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-	if (!token || !(await validateAccessToken(token))) {
+	// Keycloak mode: validate the realm-issued JWT (signature via JWKS, issuer,
+	// and that the audience targets THIS /mcp resource). Legacy mode: look the
+	// opaque token up in our own oauthTokens table.
+	const tokenOk = keycloakEnabled()
+		? !!token && !!(await validateMcpToken(token, `${url.origin}/mcp`))
+		: !!token && !!(await validateAccessToken(token));
+	if (!tokenOk) {
 		return unauthorized(url.origin);
 	}
 
@@ -372,7 +379,7 @@ export async function POST({ request, url }) {
 			return rpcResult(id, {
 				protocolVersion: requested,
 				capabilities: { tools: {} },
-				serverInfo: { name: 'health-dashboard-mcp', version: '1.0.0' }
+				serverInfo: { name: 'healthmaxxing-mcp', version: '1.0.0' }
 			});
 		}
 		case 'tools/list':

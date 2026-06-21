@@ -30,7 +30,7 @@
 					class="text-xs font-semibold tracking-widest uppercase"
 					style="color: var(--color-text-subtle);"
 				>
-					Health Dashboard
+					Healthmaxxing
 				</p>
 				<h1 class="text-xl font-bold text-white">Sign in</h1>
 			</div>

@@ -1,6 +1,8 @@
 import { json, type Handle } from '@sveltejs/kit';
+import { env } from '$env/dynamic/private';
 import { authEnabled, sessionValid, SESSION_COOKIE } from '$lib/server/session';
 import { apiTokenOk } from '$lib/server/auth';
+import { keycloakEnabled } from '$lib/server/keycloak';
 
 // Paths that participate in the OAuth + MCP flow and need permissive CORS so
 // Claude.ai (web) can complete discovery, registration, and token exchange.
@@ -12,6 +14,7 @@ function isPublicPath(pathname: string): boolean {
 	return (
 		pathname === '/login' ||
 		pathname === '/logout' ||
+		pathname === '/auth/callback' ||
 		pathname === '/authorize' ||
 		pathname === '/token' ||
 		pathname === '/register' ||
@@ -56,16 +59,20 @@ export const handle: Handle = async ({ event, resolve }) => {
 	const reqOrigin = event.request.headers.get('origin');
 
 	// OAuth 2.0 Protected Resource Metadata (RFC 9728) — tells Claude.ai which
-	// authorization server guards /mcp.
+	// authorization server guards /mcp. With Keycloak configured, point Claude at
+	// the Keycloak realm; otherwise advertise our own homegrown AS (this origin).
 	if (pathname === '/.well-known/oauth-protected-resource') {
+		const authServer = keycloakEnabled() ? env.KEYCLOAK_ISSUER : origin;
 		return applyCors(
-			json({ resource: `${origin}/mcp`, authorization_servers: [origin] }),
+			json({ resource: `${origin}/mcp`, authorization_servers: [authServer] }),
 			reqOrigin
 		);
 	}
 
-	// OAuth 2.0 Authorization Server Metadata (RFC 8414).
-	if (pathname === '/.well-known/oauth-authorization-server') {
+	// OAuth 2.0 Authorization Server Metadata (RFC 8414). Only served by the
+	// homegrown AS — when Keycloak is the authorization server, Claude discovers
+	// metadata from the Keycloak realm instead, so we don't advertise our own.
+	if (pathname === '/.well-known/oauth-authorization-server' && !keycloakEnabled()) {
 		return applyCors(
 			json({
 				issuer: origin,

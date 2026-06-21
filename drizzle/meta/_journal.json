@@ -57,6 +57,20 @@
       "when": 1781028391870,
       "tag": "0007_stale_overlord",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1781045284053,
+      "tag": "0008_confused_lockjaw",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1781052944350,
+      "tag": "0009_fancy_eternals",
+      "breakpoints": true
     }
   ]
 }

@@ -1,6 +1,6 @@
 {
-	"name": "Health Dashboard",
-	"short_name": "Health",
+	"name": "Healthmaxxing",
+	"short_name": "Healthmaxxing",
 	"start_url": "/",
 	"scope": "/",
 	"display": "standalone",

@@ -6,6 +6,26 @@
 	let calorieTarget = $state(data.settings.calorieTarget);
 	let proteinTargetG = $state(data.settings.proteinTargetG);
 
+	// Profile (BMR inputs). Height is entered as ft/in, stored as cm.
+	const initialHeightCm = data.settings.heightCm ?? null;
+	let heightFt = $state(
+		initialHeightCm ? Math.floor(initialHeightCm / 2.54 / 12) : ('' as '' | number)
+	);
+	let heightIn = $state(
+		initialHeightCm ? Math.round((initialHeightCm / 2.54) % 12) : ('' as '' | number)
+	);
+	let birthDate = $state(data.settings.birthDate ?? '');
+	let sex = $state(data.settings.sex ?? '');
+
+	// A cleared number input binds as '' / null / undefined depending on path —
+	// treat all as blank so clearing both fields saves null, not 0.
+	const blank = (v: unknown) => v === '' || v == null;
+	let heightCm = $derived(
+		blank(heightFt) && blank(heightIn)
+			? null
+			: Math.round((Number(heightFt || 0) * 12 + Number(heightIn || 0)) * 2.54 * 10) / 10
+	);
+
 	let saving = $state(false);
 	let savedAt = $state<number | null>(null);
 	let saveError = $state<string | null>(null);
@@ -14,7 +34,11 @@
 	let busy = $state<string | null>(null);
 
 	let dirty = $derived(
-		calorieTarget !== data.settings.calorieTarget || proteinTargetG !== data.settings.proteinTargetG
+		calorieTarget !== data.settings.calorieTarget ||
+			proteinTargetG !== data.settings.proteinTargetG ||
+			heightCm !== (data.settings.heightCm ?? null) ||
+			birthDate !== (data.settings.birthDate ?? '') ||
+			sex !== (data.settings.sex ?? '')
 	);
 
 	async function saveTargets(e: SubmitEvent) {
@@ -27,7 +51,10 @@
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
 					calorieTarget: Number(calorieTarget),
-					proteinTargetG: Number(proteinTargetG)
+					proteinTargetG: Number(proteinTargetG),
+					heightCm,
+					birthDate: birthDate || null,
+					sex: sex || null
 				})
 			});
 			if (!res.ok) {
@@ -153,6 +180,74 @@
 					bind:value={proteinTargetG}
 					class="rounded-lg border bg-transparent px-3 py-2 text-white outline-none focus:border-orange-400"
 					style="border-color: var(--color-border);"
+				/>
+			</label>
+		</div>
+
+		<h2 class="mt-6 mb-4 text-sm font-semibold tracking-wide text-white uppercase">
+			Profile
+			<span class="ml-1 text-xs font-normal normal-case" style="color: var(--color-text-subtle);">
+				— used to estimate calories burned
+			</span>
+		</h2>
+
+		<div class="grid grid-cols-2 gap-3">
+			<div class="flex flex-col gap-1">
+				<span class="text-xs font-medium" style="color: var(--color-text-subtle);">Height</span>
+				<div class="flex gap-2">
+					<div class="relative flex-1">
+						<input
+							type="number"
+							min="3"
+							max="8"
+							bind:value={heightFt}
+							aria-label="Height feet"
+							class="w-full rounded-lg border bg-transparent px-3 py-2 pr-7 text-white outline-none focus:border-orange-400"
+							style="border-color: var(--color-border);"
+						/>
+						<span
+							class="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-xs"
+							style="color: var(--color-text-subtle);">ft</span
+						>
+					</div>
+					<div class="relative flex-1">
+						<input
+							type="number"
+							min="0"
+							max="11"
+							bind:value={heightIn}
+							aria-label="Height inches"
+							class="w-full rounded-lg border bg-transparent px-3 py-2 pr-7 text-white outline-none focus:border-orange-400"
+							style="border-color: var(--color-border);"
+						/>
+						<span
+							class="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-xs"
+							style="color: var(--color-text-subtle);">in</span
+						>
+					</div>
+				</div>
+			</div>
+
+			<label class="flex flex-col gap-1">
+				<span class="text-xs font-medium" style="color: var(--color-text-subtle);">Sex</span>
+				<select
+					bind:value={sex}
+					class="rounded-lg border bg-transparent px-3 py-2 text-white outline-none focus:border-orange-400"
+					style="border-color: var(--color-border); color-scheme: dark;"
+				>
+					<option value="">—</option>
+					<option value="male">Male</option>
+					<option value="female">Female</option>
+				</select>
+			</label>
+
+			<label class="col-span-2 flex flex-col gap-1">
+				<span class="text-xs font-medium" style="color: var(--color-text-subtle);">Birth date</span>
+				<input
+					type="date"
+					bind:value={birthDate}
+					class="rounded-lg border bg-transparent px-3 py-2 text-white outline-none focus:border-orange-400"
+					style="border-color: var(--color-border); color-scheme: dark;"
 				/>
 			</label>
 		</div>

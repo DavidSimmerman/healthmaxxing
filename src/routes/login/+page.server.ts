@@ -1,5 +1,6 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { verifyConsentPassword } from '$lib/server/oauth';
+import { buildLoginRedirect, keycloakEnabled } from '$lib/server/keycloak';
 import {
 	SESSION_COOKIE,
 	SESSION_MAX_AGE,
@@ -15,12 +16,36 @@ function safeTarget(target: string | null | undefined): string {
 	return '/';
 }
 
+// Short-lived cookies that carry the PKCE verifier + state + post-login target
+// across the round trip to Keycloak. Consumed (and cleared) by /auth/callback.
+const TEMP_COOKIE_OPTS = (secure: boolean) =>
+	({ path: '/', httpOnly: true, sameSite: 'lax', secure, maxAge: 600 }) as const;
+
 export const load: PageServerLoad = async ({ url, cookies }) => {
-	// Nothing to log into if auth is off, or already signed in.
-	if (!authEnabled() || sessionValid(cookies.get(SESSION_COOKIE))) {
-		redirect(303, safeTarget(url.searchParams.get('redirect')));
+	const target = safeTarget(url.searchParams.get('redirect'));
+
+	// Already signed in — nothing to do.
+	if (sessionValid(cookies.get(SESSION_COOKIE))) redirect(303, target);
+
+	// Keycloak mode: kick off the OIDC auth-code flow by redirecting to Keycloak.
+	// The password form below is never rendered in this mode.
+	if (keycloakEnabled()) {
+		const {
+			url: kcUrl,
+			codeVerifier,
+			state
+		} = await buildLoginRedirect(`${url.origin}/auth/callback`);
+		const opts = TEMP_COOKIE_OPTS(url.protocol === 'https:');
+		cookies.set('kc_verifier', codeVerifier, opts);
+		cookies.set('kc_state', state, opts);
+		cookies.set('kc_redirect', target, opts);
+		redirect(303, kcUrl);
 	}
-	return { redirectTo: safeTarget(url.searchParams.get('redirect')) };
+
+	// Legacy password mode: nothing to log into if auth is off entirely.
+	if (!authEnabled()) redirect(303, target);
+
+	return { redirectTo: target };
 };
 
 export const actions: Actions = {

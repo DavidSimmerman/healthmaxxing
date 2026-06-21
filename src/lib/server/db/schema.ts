@@ -128,7 +128,46 @@ export const settings = pgTable('settings', {
 	calorieTarget: integer('calorie_target').notNull().default(2100),
 	proteinTargetG: integer('protein_target_g').notNull().default(180),
 	carbsTargetG: integer('carbs_target_g').notNull().default(220),
-	fatTargetG: integer('fat_target_g').notNull().default(70)
+	fatTargetG: integer('fat_target_g').notNull().default(70),
+
+	// Profile inputs for BMR estimation — Mifflin-St Jeor fallback for when a
+	// weigh-in has no body-fat % (Katch-McArdle needs lean mass).
+	heightCm: real('height_cm'),
+	birthDate: text('birth_date'), // 'YYYY-MM-DD'
+	sex: text('sex') // 'male' | 'female'
+});
+
+// ── HealthKit sync (pushed by the iOS wrapper app) ──────────────────────────
+
+// One row per weigh-in. Sourced from HealthKit (smart scale → Fit Days → Apple
+// Health → iOS app). `hkUuid` is the HealthKit sample UUID — the upsert key, so
+// re-syncs are idempotent. Body fat / lean mass are nullable: a manual weight
+// entry in Apple Health has no composition data.
+export const bodyComp = pgTable(
+	'body_comp',
+	{
+		id: uuid('id').primaryKey().defaultRandom(),
+		hkUuid: text('hk_uuid').notNull().unique(),
+		measuredAt: timestamp('measured_at').notNull(),
+		weightKg: real('weight_kg').notNull(),
+		bodyFatPct: real('body_fat_pct'), // 0–100, not 0–1
+		leanMassKg: real('lean_mass_kg'),
+		source: text('source'), // HK source bundle id (e.g. the Fit Days app)
+		createdAt: timestamp('created_at').notNull().defaultNow()
+	},
+	(t) => [index('body_comp_measured_at_idx').on(t.measuredAt)]
+);
+
+// One row per local calendar day of activity, aggregated on-device by the iOS
+// app (HKStatisticsCollectionQuery already dedupes overlapping Watch/iPhone
+// samples). The current day gets re-pushed with growing totals — upsert by date.
+export const activityDays = pgTable('activity_days', {
+	date: text('date').primaryKey(), // 'YYYY-MM-DD' in the device's local time
+	activeKcal: real('active_kcal'),
+	basalKcal: real('basal_kcal'), // Apple's basal estimate — kept to compare against our BMR
+	steps: integer('steps'),
+	exerciseMin: integer('exercise_min'),
+	updatedAt: timestamp('updated_at').notNull().defaultNow()
 });
 
 // ── OAuth 2.1 (for the MCP connector Claude.ai adds) ────────────────────────

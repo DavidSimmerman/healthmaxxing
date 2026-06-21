@@ -14,10 +14,33 @@ export async function PUT({ request }) {
 		}
 	}
 
+	// Optional profile fields (BMR inputs). Empty/absent → null, not an error.
+	const profile: Record<string, unknown> = {};
+	if ('heightCm' in body) {
+		const h = body.heightCm;
+		if (h !== null && (typeof h !== 'number' || !Number.isFinite(h) || h < 50 || h > 280)) {
+			throw error(400, 'invalid heightCm');
+		}
+		profile.heightCm = h;
+	}
+	if ('birthDate' in body) {
+		const d = body.birthDate;
+		if (d !== null && (typeof d !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(d))) {
+			throw error(400, 'invalid birthDate');
+		}
+		profile.birthDate = d;
+	}
+	if ('sex' in body) {
+		const s = body.sex;
+		if (s !== null && s !== 'male' && s !== 'female') throw error(400, 'invalid sex');
+		profile.sex = s;
+	}
+
+	const set = { ...targets, ...profile };
 	await db
 		.insert(settings)
-		.values({ id: 1, ...targets })
-		.onConflictDoUpdate({ target: settings.id, set: targets });
+		.values({ id: 1, ...set })
+		.onConflictDoUpdate({ target: settings.id, set });
 
 	const [row] = await db.select().from(settings).where(eq(settings.id, 1));
 	return json({ settings: row });

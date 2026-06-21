@@ -94,7 +94,7 @@ export async function lookupBarcode(barcode: string): Promise<OffResult> {
 	const url = `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(barcode)}?fields=${FIELDS}`;
 	let res: Response;
 	try {
-		res = await fetch(url, { headers: { 'User-Agent': 'health-dashboard/0.1 (personal)' } });
+		res = await fetch(url, { headers: { 'User-Agent': 'healthmaxxing/0.1 (personal)' } });
 	} catch {
 		return { ok: false, reason: 'http_error' };
 	}
@@ -190,7 +190,7 @@ export async function lookupBarcodeRich(barcode: string): Promise<RichOffResult>
 	const url = `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(barcode)}?fields=${FIELDS}`;
 	let res: Response;
 	try {
-		res = await fetch(url, { headers: { 'User-Agent': 'health-dashboard/0.1 (personal)' } });
+		res = await fetch(url, { headers: { 'User-Agent': 'healthmaxxing/0.1 (personal)' } });
 	} catch {
 		return { ok: false, reason: 'http_error' };
 	}

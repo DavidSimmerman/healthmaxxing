@@ -39,7 +39,7 @@
 				>
 					Authorize access
 				</p>
-				<h1 class="text-xl font-bold text-white">Health Dashboard</h1>
+				<h1 class="text-xl font-bold text-white">Healthmaxxing</h1>
 			</div>
 		</div>
 
