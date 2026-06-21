@@ -20,6 +20,26 @@ Branch: `feat/health-insights` · Worktree: `.claude/worktrees/health-insights`
 - [x] Verify: typecheck, playwright screenshots, MCP smoke, codex review
 - [x] Commit + final log
 
+## Final state (morning read)
+- All 4 tasks built, type-clean (`pnpm check`: 0 errors), and verified live.
+- Commits on branch `feat/health-insights` (NOT merged, NOT pushed — per nightshift rules):
+  - `55e555d` projection foundation
+  - `6d16df3` day view + trends + projections + MCP
+  (plus `473670b` the earlier iOS sync-button fix already on main).
+- **To ship:** from the main worktree `git rebase`/merge `feat/health-insights` into main, then deploy (migration 0011 runs on deploy). I left it unmerged so you can eyeball it first and because your iOS-widget WIP is live in the main tree.
+
+## Verified (evidence)
+- `npx tsx src/lib/energy.selfcheck.ts` → all assertions pass (regression, interpolation, ETA, date math).
+- `pnpm check` → 0 errors (2 benign `$state`-prefill warnings on /trends, same pattern as /settings).
+- Seeded realistic data (10 weigh-ins, food w/ nutrients, water, workout), screenshotted /trends (chart + rates + projections + goal ETAs), /day/<date> (all cards), /deficit (date picker + tappable rows). Then **deleted all seed data** — dev DB is back to 0 rows.
+- MCP end-to-end (temp OAuth token, since cleaned): `tools/list` → 7 tools; `get_body_trends`/`get_nutrition`/`get_energy_ledger` returned correct computed summaries; bad auth → 401.
+- codex review: 4 findings (3×P2, 1×P3) — ALL fixed + re-verified live (future day → 404; `/trends?window=Infinity` → 200 in 13ms, no hang; water divisor; APP_TZ weigh-in date).
+
+## Known-minor (revisitable, not blockers)
+- Deficit-implied weight rate only spans days with *logged food*; with sparse logging it reads steeper than the measured trend (it's shown as corroboration with the day count, not the primary projection).
+- Active-energy on /day comes from `activity_days` (HK daily active), not from `workouts` — a logged workout won't add to "Active" unless HK also recorded active energy that day. Matches how /deficit already works.
+- `get_energy_ledger`/`get_nutrition` clamp the `days` arg, but an explicit huge `from..to` span is bounded-but-slow (acceptable for a single-user, auth-gated tool).
+
 ## Decisions (autonomous calls)
 - Worktree to avoid colliding with the user's live iOS-widget WIP in the main tree (mutagen-synced).
 - No chart library — inline SVG line chart. Avoids a dependency for a couple of polylines.
