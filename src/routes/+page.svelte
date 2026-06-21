@@ -49,6 +49,25 @@
 		</div>
 		<div class="flex items-center gap-2">
 			<a
+				href="/trends"
+				class="card-sm flex h-9 w-9 items-center justify-center text-white transition hover:brightness-125"
+				aria-label="Trends"
+			>
+				<svg
+					width="16"
+					height="16"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+				>
+					<polyline points="3 17 9 11 13 15 21 7" />
+					<polyline points="15 7 21 7 21 13" />
+				</svg>
+			</a>
+			<a
 				href="/data"
 				class="card-sm flex h-9 w-9 items-center justify-center text-white transition hover:brightness-125"
 				aria-label="Data sources"

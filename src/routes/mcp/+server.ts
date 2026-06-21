@@ -1,3 +1,8 @@
+// MCP server for the health dashboard. The write tools (log_food, prep_food)
+// let Claude.ai resolve and log foods; the read tools (get_energy_ledger,
+// get_body_trends, get_nutrition) let Claude review the user's nutrition & health
+// data and suggest improvements. More signals (blood sugar, insulin, sleep) will
+// be added later, so tools should degrade gracefully when a metric has no data.
 import { json } from '@sveltejs/kit';
 import { validateAccessToken } from '$lib/server/oauth';
 import { keycloakEnabled, validateMcpToken } from '$lib/server/keycloak';
@@ -10,6 +15,11 @@ import {
 	type CreateAndLogInput,
 	type PrepFoodInput
 } from '$lib/server/foods';
+import { deficitDays } from '$lib/server/deficit';
+import { fillBmrGaps, bodyInsights } from '$lib/server/projections';
+import { todayLabel } from '$lib/server/day';
+import { addDays } from '$lib/energy';
+import { nutritionReport } from '$lib/server/nutrition';
 
 const PROTOCOL_VERSION = '2025-03-26';
 
@@ -331,6 +341,159 @@ async function callListFoods(id: Id, args: Record<string, unknown>) {
 	}
 }
 
+// ── Read-only review tools ────────────────────────────────────────────────────
+// These let Claude.ai review the user's nutrition & health data and suggest
+// improvements. They never modify data. More signals (blood sugar, insulin,
+// sleep) will be added later, so each tool degrades gracefully when a metric has
+// no data rather than erroring.
+
+const GET_ENERGY_LEDGER_TOOL = {
+	name: 'get_energy_ledger',
+	description:
+		'Read-only. The daily calorie-in/out ledger over a date range: for each day, ' +
+		'intake (kcal + protein), resting burn (BMR), active burn, digestion burn (TEF), ' +
+		'total burned, and the resulting deficit (positive = burned more than eaten), plus ' +
+		'the latest weigh-in carried forward. Use this to assess whether the user’s calorie ' +
+		'deficit is healthy and sustainable (e.g. not too aggressive, adequate intake). ' +
+		'Days with no expenditure estimate have null burn/deficit; protein/intake may be 0 on ' +
+		'unlogged days. Default range is the last 14 days ending today.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			from: { type: 'string', description: 'Start date YYYY-MM-DD (inclusive)' },
+			to: { type: 'string', description: 'End date YYYY-MM-DD (inclusive, default today)' },
+			days: {
+				type: 'number',
+				description: 'Number of trailing days ending at `to` (default 14, max 370). Ignored if `from` is given.'
+			}
+		}
+	}
+};
+
+const GET_BODY_TRENDS_TOOL = {
+	name: 'get_body_trends',
+	description:
+		'Read-only. Weight, body-fat %, and lean/muscle mass trends with future projections ' +
+		'(+1/2/3 months) and time-to-goal estimates. Use this to judge the rate of weight loss, ' +
+		'whether muscle is being retained, and whether goals are feasible at the current pace. ' +
+		'`leanMass` is HealthKit lean body mass — the best available proxy for muscle mass. ' +
+		'ratePerWeek negative = decreasing. Trends/projections are null when there aren’t enough ' +
+		'weigh-ins to fit a line; degrades gracefully when composition data is sparse.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			windowDays: {
+				type: 'number',
+				description: 'Trailing window of weigh-ins to fit the trend over (default 90)'
+			},
+			targetDate: {
+				type: 'string',
+				description: 'Optional extra future date YYYY-MM-DD to project to'
+			}
+		}
+	}
+};
+
+const GET_NUTRITION_TOOL = {
+	name: 'get_nutrition',
+	description:
+		'Read-only. Total and daily-average intake over a date range: calories, macros, water, ' +
+		'and ALL extended nutrients that were logged — fiber, sugar, sodium, potassium, calcium, ' +
+		'iron, magnesium, zinc, vitamins A/C/D/E/K/B6/B12, folate, omega-3/6, saturated/trans fat, ' +
+		'cholesterol, caffeine, and more. Use this to flag nutrient deficiencies or excesses, an ' +
+		'over-restrictive diet, or imbalanced macros, and to recommend improvements. Daily averages ' +
+		'are per logged day. Extended nutrients are only as complete as what has been logged per ' +
+		'food, so a missing nutrient may just mean it wasn’t recorded. Default range is the last 7 days.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			from: { type: 'string', description: 'Start date YYYY-MM-DD (inclusive)' },
+			to: { type: 'string', description: 'End date YYYY-MM-DD (inclusive, default today)' },
+			days: {
+				type: 'number',
+				description: 'Number of trailing days ending at `to` (default 7). Ignored if `from` is given.'
+			}
+		}
+	}
+};
+
+async function callGetEnergyLedger(id: Id, args: Record<string, unknown>) {
+	try {
+		const to = typeof args.to === 'string' ? args.to : todayLabel();
+		let days = typeof args.days === 'number' ? Math.floor(args.days) : 14;
+		if (!Number.isFinite(days) || days < 1) days = 14;
+		if (days > 370) days = 370;
+		const from = typeof args.from === 'string' ? args.from : addDays(to, -(days - 1));
+
+		const ledger = fillBmrGaps(await deficitDays(from, to));
+		const counted = ledger.filter((d) => d.deficitKcal != null && d.intakeKcal > 0);
+		const n = counted.length;
+		const avg = (sum: number) => (n ? Math.round(sum / n) : null);
+		const summary = {
+			countedDays: n,
+			avgDeficitKcal: avg(counted.reduce((a, d) => a + (d.deficitKcal ?? 0), 0)),
+			avgIntakeKcal: avg(counted.reduce((a, d) => a + d.intakeKcal, 0)),
+			avgProteinG: avg(counted.reduce((a, d) => a + d.proteinG, 0))
+		};
+		const payload = { from, to, summary, days: ledger };
+		const line = n
+			? `Energy ledger ${from} → ${to}: ${n} counted day${n === 1 ? '' : 's'}, ` +
+				`avg deficit ${summary.avgDeficitKcal} kcal, avg intake ${summary.avgIntakeKcal} kcal, ` +
+				`avg protein ${summary.avgProteinG}g.`
+			: `Energy ledger ${from} → ${to}: no days with both intake and an expenditure estimate.`;
+		return toolResult(id, `${line}\n${JSON.stringify(payload, null, 2)}`);
+	} catch (e) {
+		console.error('get_energy_ledger failed:', e);
+		return toolResult(id, 'Could not load the energy ledger: an internal error occurred.', true);
+	}
+}
+
+async function callGetBodyTrends(id: Id, args: Record<string, unknown>) {
+	try {
+		const windowDays = typeof args.windowDays === 'number' ? args.windowDays : undefined;
+		const targetDate = typeof args.targetDate === 'string' ? args.targetDate : undefined;
+		const insights = await bodyInsights({ windowDays, targetDate });
+		const w = insights.weight;
+		const lm = insights.leanMass;
+		const line =
+			insights.series.length === 0
+				? `No weigh-ins synced yet — body trends unavailable.`
+				: `Body trends as of ${insights.asOf} over ${insights.series.length} weigh-in${
+						insights.series.length === 1 ? '' : 's'
+					}: ` +
+					`weight ${w ? `${round1(w.current)}kg @ ${round1(w.ratePerWeek)}kg/wk` : 'n/a'}, ` +
+					`lean mass ${lm ? `${round1(lm.current)}kg @ ${round1(lm.ratePerWeek)}kg/wk` : 'n/a'}.`;
+		return toolResult(id, `${line}\n${JSON.stringify(insights, null, 2)}`);
+	} catch (e) {
+		console.error('get_body_trends failed:', e);
+		return toolResult(id, 'Could not load body trends: an internal error occurred.', true);
+	}
+}
+
+async function callGetNutrition(id: Id, args: Record<string, unknown>) {
+	try {
+		const to = typeof args.to === 'string' ? args.to : todayLabel();
+		let days = typeof args.days === 'number' ? Math.floor(args.days) : 7;
+		if (!Number.isFinite(days) || days < 1) days = 7;
+		if (days > 370) days = 370;
+		const from = typeof args.from === 'string' ? args.from : addDays(to, -(days - 1));
+
+		const report = await nutritionReport(from, to);
+		const line =
+			report.loggedDays === 0
+				? `Nutrition ${from} → ${to}: nothing logged in this range.`
+				: `Nutrition ${from} → ${to}: ${report.loggedDays}/${report.calendarDays} day${
+						report.calendarDays === 1 ? '' : 's'
+					} logged, ` +
+					`avg ${report.dailyAvg.calories} kcal, ${report.dailyAvg.proteinG}g protein, ` +
+					`${report.dailyAvg.waterL}L water per logged day.`;
+		return toolResult(id, `${line}\n${JSON.stringify(report, null, 2)}`);
+	} catch (e) {
+		console.error('get_nutrition failed:', e);
+		return toolResult(id, 'Could not load nutrition: an internal error occurred.', true);
+	}
+}
+
 // ── HTTP handlers ─────────────────────────────────────────────────────────────
 function unauthorized(origin: string) {
 	return new Response(JSON.stringify({ error: 'invalid_token' }), {
@@ -384,7 +547,15 @@ export async function POST({ request, url }) {
 		}
 		case 'tools/list':
 			return rpcResult(id, {
-				tools: [LOG_FOOD_TOOL, PREP_FOOD_TOOL, LIST_FOODS_TOOL, LOOKUP_BARCODE_TOOL]
+				tools: [
+					LOG_FOOD_TOOL,
+					PREP_FOOD_TOOL,
+					LIST_FOODS_TOOL,
+					LOOKUP_BARCODE_TOOL,
+					GET_ENERGY_LEDGER_TOOL,
+					GET_BODY_TRENDS_TOOL,
+					GET_NUTRITION_TOOL
+				]
 			});
 		case 'tools/call': {
 			const name = params?.name;
@@ -393,6 +564,9 @@ export async function POST({ request, url }) {
 			if (name === 'prep_food') return callPrepFood(id, args);
 			if (name === 'list_foods') return callListFoods(id, args);
 			if (name === 'lookup_barcode') return callLookupBarcode(id, args);
+			if (name === 'get_energy_ledger') return callGetEnergyLedger(id, args);
+			if (name === 'get_body_trends') return callGetBodyTrends(id, args);
+			if (name === 'get_nutrition') return callGetNutrition(id, args);
 			return rpcError(id, -32602, `Unknown tool: ${String(name)}`);
 		}
 		case 'ping':

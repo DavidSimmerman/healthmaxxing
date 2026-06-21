@@ -140,6 +140,10 @@ export async function bodyInsights({
 	horizons?: { days: number; label: string }[];
 	targetDate?: string;
 } = {}): Promise<BodyInsights> {
+	// Clamp untrusted input (URL ?window=, MCP args) — an Infinite/huge window
+	// would make addDays throw and deficitDays iterate forever. 1–1825 days.
+	windowDays = Math.min(Math.max(1, Math.floor(Number(windowDays)) || 90), 1825);
+
 	const today = todayLabel();
 	const all = await weighInsThrough(today);
 

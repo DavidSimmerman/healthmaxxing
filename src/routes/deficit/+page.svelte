@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { KCAL_PER_LB } from '$lib/energy';
+	import { goto } from '$app/navigation';
 
 	let { data } = $props();
 
@@ -36,7 +37,8 @@
 	const bmrSourceLabel: Record<string, string> = {
 		katch: 'BMR via Katch-McArdle from your latest body comp',
 		mifflin: 'BMR via Mifflin-St Jeor (no body-fat data — sync a weigh-in to upgrade)',
-		'apple-basal': 'Using Apple Watch basal estimate (no body comp or profile yet)'
+		'apple-basal': 'Using Apple Watch basal estimate (no body comp or profile yet)',
+		interpolated: 'BMR interpolated from nearby weigh-ins'
 	};
 
 	function avg(values: (number | null)[]): number | null {
@@ -111,6 +113,15 @@
 			{/each}
 		</nav>
 	</header>
+
+	<input
+		type="date"
+		max={data.today}
+		onchange={(e) => goto('/day/' + e.currentTarget.value)}
+		class="card-sm mb-4 w-full px-3 py-2 text-sm text-white"
+		style="color-scheme: dark; background: var(--color-bg-elevated);"
+		aria-label="Jump to a specific day"
+	/>
 
 	{#if counted.length === 0}
 		<div class="card p-6 text-center text-sm" style="color: var(--color-text-subtle);">
@@ -187,7 +198,7 @@
 					Daily breakdown
 				</p>
 				{#each listed as day (day.date)}
-					<div class="ledger-row">
+					<a href="/day/{day.date}" class="ledger-row ledger-link">
 						<span class="w-16 shrink-0"
 							>{data.range === 'w' ? dayName(day.date) : shortDate(day.date)}</span
 						>
@@ -212,7 +223,18 @@
 						{:else}
 							<b style="color: var(--color-text-subtle); font-weight: 400;">no data</b>
 						{/if}
-					</div>
+						<svg
+							class="ml-1.5 shrink-0"
+							width="13"
+							height="13"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="var(--color-text-subtle)"
+							stroke-width="2.5"
+							stroke-linecap="round"
+							stroke-linejoin="round"><path d="M9 18l6-6-6-6" /></svg
+						>
+					</a>
 				{/each}
 			</section>
 		{:else if counted.length === 1}
@@ -257,5 +279,15 @@
 	.ledger-row b {
 		color: white;
 		font-weight: 600;
+	}
+	.ledger-link {
+		text-decoration: none;
+		margin: 0 -6px;
+		padding: 3px 6px;
+		border-radius: 8px;
+		transition: background 0.12s;
+	}
+	.ledger-link:active {
+		background: rgba(255, 255, 255, 0.05);
 	}
 </style>
