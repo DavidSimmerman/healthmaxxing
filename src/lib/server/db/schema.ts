@@ -7,7 +7,8 @@ import {
 	uuid,
 	jsonb,
 	boolean,
-	index
+	index,
+	primaryKey
 } from 'drizzle-orm/pg-core';
 import type { Nutrients } from '$lib/nutrients';
 
@@ -169,6 +170,41 @@ export const activityDays = pgTable('activity_days', {
 	exerciseMin: integer('exercise_min'),
 	updatedAt: timestamp('updated_at').notNull().defaultNow()
 });
+
+// One row per HKWorkout session, pushed by the iOS app (anchored query — only
+// new/edited workouts arrive). `hkUuid` is the upsert key, so a re-sync or an
+// edit in Apple Health (same UUID) is idempotent. avg/max HR are from the
+// workout's heart-rate samples; null when none were recorded.
+export const workouts = pgTable(
+	'workouts',
+	{
+		hkUuid: text('hk_uuid').primaryKey(),
+		name: text('name').notNull(), // activity type, e.g. 'Strength Training'
+		startedAt: timestamp('started_at').notNull(),
+		endedAt: timestamp('ended_at'),
+		kcal: real('kcal'), // total energy burned, if recorded
+		avgHr: real('avg_hr'),
+		maxHr: real('max_hr'),
+		createdAt: timestamp('created_at').notNull().defaultNow()
+	},
+	(t) => [index('workouts_started_at_idx').on(t.startedAt)]
+);
+
+// Daily vitals from HealthKit — water, resting/avg/min/max HR, HRV, SpO2,
+// respiratory rate, VO2max, BMI. One value per (date, metric), recomputed and
+// re-pushed for a trailing window each sync (same upsert-by-day idea as
+// activity_days). The metric name is free-form so the iOS app can ship a new
+// metric without a server release.
+export const dailyMetrics = pgTable(
+	'daily_metrics',
+	{
+		date: text('date').notNull(), // 'YYYY-MM-DD' in device-local time
+		metric: text('metric').notNull(), // e.g. 'water_l', 'resting_hr', 'hrv_ms'
+		value: real('value').notNull(),
+		updatedAt: timestamp('updated_at').notNull().defaultNow()
+	},
+	(t) => [primaryKey({ columns: [t.date, t.metric] })]
+);
 
 // ── OAuth 2.1 (for the MCP connector Claude.ai adds) ────────────────────────
 // We are our own authorization server. Claude.ai registers dynamically, runs
