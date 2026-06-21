@@ -135,7 +135,12 @@ export const settings = pgTable('settings', {
 	// weigh-in has no body-fat % (Katch-McArdle needs lean mass).
 	heightCm: real('height_cm'),
 	birthDate: text('birth_date'), // 'YYYY-MM-DD'
-	sex: text('sex') // 'male' | 'female'
+	sex: text('sex'), // 'male' | 'female'
+
+	// Body-composition goals — drive the "time to goal" projection. Either, both,
+	// or neither may be set.
+	goalWeightKg: real('goal_weight_kg'),
+	goalBodyFatPct: real('goal_body_fat_pct') // 0–100
 });
 
 // ── HealthKit sync (pushed by the iOS wrapper app) ──────────────────────────

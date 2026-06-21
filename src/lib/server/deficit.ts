@@ -12,7 +12,7 @@ export type DayEnergy = {
 	intakeKcal: number;
 	proteinG: number;
 	bmrKcal: number | null; // our BMR (Katch-McArdle or Mifflin)
-	bmrSource: 'katch' | 'mifflin' | 'apple-basal' | null;
+	bmrSource: 'katch' | 'mifflin' | 'apple-basal' | 'interpolated' | null;
 	activeKcal: number | null;
 	tefKcal: number;
 	burnedKcal: number | null;
