@@ -5,6 +5,7 @@ struct ContentView: View {
     @State private var serverURL = SyncConfig.serverURL.absoluteString
     @State private var apiToken = SyncConfig.apiToken ?? ""
     @State private var healthAuthorized = UserDefaults.standard.bool(forKey: "healthAuthorized")
+    @State private var syncing = false
 
     var body: some View {
         WebView(url: SyncConfig.serverURL)
@@ -31,9 +32,10 @@ struct ContentView: View {
                             UserDefaults.standard.set(true, forKey: "healthAuthorized")
                         }
                     }
-                    Button("Sync now") {
-                        Task { await HealthSync.shared.syncNow() }
-                    }
+                    Button(syncing ? "Syncing…" : "Sync now") { runSync() }
+                        .disabled(syncing)
+                    // Read straight from the store so a background / scene-activation
+                    // sync is reflected too; `syncing` toggling forces the re-read.
                     if let last = HealthSync.shared.lastSyncDescription {
                         Text(last).font(.footnote).foregroundStyle(.secondary)
                     }
@@ -44,9 +46,20 @@ struct ContentView: View {
                 Button("Done") {
                     SyncConfig.save(serverURL: serverURL, apiToken: apiToken)
                     showSettings = false
-                    Task { await HealthSync.shared.syncNow() }
+                    runSync()
                 }
             }
+        }
+    }
+
+    // Runs a sync and surfaces the result. Button actions run on the main actor,
+    // so these @State writes re-render the sheet — without this the status text
+    // never updated and the button looked dead even when sync succeeded.
+    private func runSync() {
+        Task {
+            syncing = true
+            await HealthSync.shared.syncNow()
+            syncing = false // re-render picks up the new lastSyncDescription
         }
     }
 }

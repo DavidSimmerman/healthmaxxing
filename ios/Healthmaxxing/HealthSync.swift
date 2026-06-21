@@ -88,7 +88,14 @@ final class HealthSync {
     // MARK: - Sync
 
     func syncNow() async {
-        guard SyncConfig.isConfigured, HKHealthStore.isHealthDataAvailable() else { return }
+        guard SyncConfig.isConfigured else {
+            lastSyncDescription = "Not configured — set the server URL and API token above"
+            return
+        }
+        guard HKHealthStore.isHealthDataAvailable() else {
+            lastSyncDescription = "Health data isn't available on this device"
+            return
+        }
         do {
             let days = try await collectDays()
             let comp = try await collectBodyComp()
