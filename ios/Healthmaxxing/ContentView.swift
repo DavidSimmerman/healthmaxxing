@@ -42,8 +42,7 @@ struct ContentView: View {
             .navigationTitle("Sync Settings")
             .toolbar {
                 Button("Done") {
-                    UserDefaults.standard.set(serverURL, forKey: "serverURL")
-                    UserDefaults.standard.set(apiToken, forKey: "apiToken")
+                    SyncConfig.save(serverURL: serverURL, apiToken: apiToken)
                     showSettings = false
                     Task { await HealthSync.shared.syncNow() }
                 }

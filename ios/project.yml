@@ -15,11 +15,16 @@ targets:
     type: application
     platform: iOS
     sources: [Healthmaxxing]
+    dependencies:
+      - target: HealthmaxxingWidget
+        embed: true
     entitlements:
       path: Healthmaxxing/Healthmaxxing.entitlements
       properties:
         com.apple.developer.healthkit: true
         com.apple.developer.healthkit.background-delivery: true
+        # Shared container so the widget extension can read the saved API token.
+        com.apple.security.application-groups: [group.tech.simmerman.healthmaxxing]
     info:
       path: Healthmaxxing/Info.plist
       properties:
@@ -35,9 +40,38 @@ targets:
           Used by the dashboard's barcode scanner to look up foods.
         # Wake the app for HealthKit background delivery pushes.
         UIBackgroundModes: [processing]
+        # Lets the home-screen widget open the app via healthmaxxing:// (so a tap
+        # lands in the app, not Safari).
+        CFBundleURLTypes:
+          - CFBundleURLSchemes: [healthmaxxing]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: tech.simmerman.healthmaxxing
         TARGETED_DEVICE_FAMILY: '1'
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: 'NO'
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+
+  # WidgetKit extension — "calories & protein left today" home-screen widget.
+  HealthmaxxingWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - HealthmaxxingWidget
+      - Healthmaxxing/SyncConfig.swift # shared config (server URL + token)
+    entitlements:
+      path: HealthmaxxingWidget/HealthmaxxingWidget.entitlements
+      properties:
+        com.apple.security.application-groups: [group.tech.simmerman.healthmaxxing]
+    info:
+      path: HealthmaxxingWidget/Info.plist
+      properties:
+        CFBundleDisplayName: Macros Left
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: tech.simmerman.healthmaxxing.widget
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: 'NO'
+    dependencies:
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
