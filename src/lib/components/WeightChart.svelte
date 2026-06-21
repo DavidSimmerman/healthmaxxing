@@ -1,20 +1,25 @@
 <script lang="ts">
-	import { daysBetween } from '$lib/energy';
+	import { daysBetween, LB_PER_KG } from '$lib/energy';
 	import type { WeighIn, Trend } from '$lib/server/projections';
 
 	let {
 		series,
 		weight,
+		leanMass,
 		bodyFat,
 		today,
 		horizonEnd
 	}: {
 		series: WeighIn[];
 		weight: Trend | null;
+		leanMass: Trend | null;
 		bodyFat: Trend | null;
 		today: string;
 		horizonEnd: string;
 	} = $props();
+
+	// Storage is kg; the chart shows lb. Convert at the edge.
+	const lb = (kg: number) => kg * LB_PER_KG;
 
 	// ── Geometry ────────────────────────────────────────────────────────────────
 	const W = 720;
@@ -28,6 +33,7 @@
 	const y1 = H - PAD.bottom; // bottom of plot (low values)
 
 	const WEIGHT_COLOR = '#fb923c'; // --color-accent-from
+	const LEAN_COLOR = '#fda4af'; // --color-protein
 	const BF_COLOR = '#7dd3fc'; // --color-fat
 	const SUBTLE = '#71717a'; // --color-text-subtle
 
@@ -42,10 +48,12 @@
 		return x0 + Math.max(0, Math.min(1, t)) * plotW;
 	}
 
-	// trend value at a date
+	// trend value at a date (in kg)
 	function trendAt(t: Trend, d: string): number {
 		return t.intercept + t.slopePerDay * daysBetween(t.anchorDate, d);
 	}
+	// trend value at a date, in lb
+	const trendLb = (t: Trend, d: string) => lb(trendAt(t, d));
 
 	// Build a value->y mapper for a domain, padded; flat domain falls back to mid.
 	function makeYOf(min: number, max: number) {
@@ -58,19 +66,19 @@
 		};
 	}
 
-	// ── Weight axis (left) ───────────────────────────────────────────────────────
-	let weightVals = $derived(series.map((s) => s.weightKg).filter((v) => Number.isFinite(v)));
-	let weightDomain = $derived.by(() => {
-		const vals = [...weightVals];
-		if (weight) {
-			vals.push(trendAt(weight, today), trendAt(weight, xmax));
+	// ── Mass axis (left) — weight + lean mass share it, both in lb ────────────────
+	let massDomain = $derived.by(() => {
+		const vals: number[] = [];
+		for (const s of series) {
+			if (Number.isFinite(s.weightKg)) vals.push(lb(s.weightKg));
+			if (s.leanMassKg != null && Number.isFinite(s.leanMassKg)) vals.push(lb(s.leanMassKg));
 		}
+		if (weight) vals.push(trendLb(weight, today), trendLb(weight, xmax));
+		if (leanMass) vals.push(trendLb(leanMass, today), trendLb(leanMass, xmax));
 		if (!vals.length) return null;
-		const lo = Math.min(...vals) - 1;
-		const hi = Math.max(...vals) + 1;
-		return { lo, hi };
+		return { lo: Math.min(...vals) - 2, hi: Math.max(...vals) + 2 };
 	});
-	let yW = $derived(weightDomain ? makeYOf(weightDomain.lo, weightDomain.hi) : null);
+	let yM = $derived(massDomain ? makeYOf(massDomain.lo, massDomain.hi) : null);
 
 	// ── Body-fat axis (right) ─────────────────────────────────────────────────────
 	let bfVals = $derived(
@@ -78,25 +86,25 @@
 	);
 	let bfDomain = $derived.by(() => {
 		const vals = [...bfVals];
-		if (bodyFat) {
-			vals.push(trendAt(bodyFat, today), trendAt(bodyFat, xmax));
-		}
+		if (bodyFat) vals.push(trendAt(bodyFat, today), trendAt(bodyFat, xmax));
 		if (!vals.length) return null;
-		const lo = Math.min(...vals) - 1;
-		const hi = Math.max(...vals) + 1;
-		return { lo, hi };
+		return { lo: Math.min(...vals) - 1, hi: Math.max(...vals) + 1 };
 	});
 	let yBf = $derived(bfDomain ? makeYOf(bfDomain.lo, bfDomain.hi) : null);
 
 	// ── Polylines / points ────────────────────────────────────────────────────────
-	let weightActual = $derived(
-		yW ? series.map((s) => `${xOf(s.date)},${yW!(s.weightKg)}`).join(' ') : ''
-	);
-	let weightPoints = $derived(yW ? series.map((s) => ({ x: xOf(s.date), y: yW!(s.weightKg) })) : []);
+	let weightActual = $derived(yM ? series.map((s) => `${xOf(s.date)},${yM!(lb(s.weightKg))}`).join(' ') : '');
+	let weightPoints = $derived(yM ? series.map((s) => ({ x: xOf(s.date), y: yM!(lb(s.weightKg)) })) : []);
 
-	let bfActualSeries = $derived(
-		series.filter((s) => s.bodyFatPct != null && Number.isFinite(s.bodyFatPct))
+	let leanSeries = $derived(series.filter((s) => s.leanMassKg != null && Number.isFinite(s.leanMassKg)));
+	let leanActual = $derived(
+		yM ? leanSeries.map((s) => `${xOf(s.date)},${yM!(lb(s.leanMassKg as number))}`).join(' ') : ''
 	);
+	let leanPoints = $derived(
+		yM ? leanSeries.map((s) => ({ x: xOf(s.date), y: yM!(lb(s.leanMassKg as number)) })) : []
+	);
+
+	let bfActualSeries = $derived(series.filter((s) => s.bodyFatPct != null && Number.isFinite(s.bodyFatPct)));
 	let bfActual = $derived(
 		yBf ? bfActualSeries.map((s) => `${xOf(s.date)},${yBf!(s.bodyFatPct as number)}`).join(' ') : ''
 	);
@@ -104,25 +112,15 @@
 		yBf ? bfActualSeries.map((s) => ({ x: xOf(s.date), y: yBf!(s.bodyFatPct as number) })) : []
 	);
 
-	// Projection (dashed) from today → horizonEnd along the trend.
-	let weightProj = $derived.by(() => {
-		if (!weight || !yW || xmax <= today) return null;
-		return {
-			x1: xOf(today),
-			y1: yW(trendAt(weight, today)),
-			x2: xOf(xmax),
-			y2: yW(trendAt(weight, xmax))
-		};
-	});
-	let bfProj = $derived.by(() => {
-		if (!bodyFat || !yBf || xmax <= today) return null;
-		return {
-			x1: xOf(today),
-			y1: yBf(trendAt(bodyFat, today)),
-			x2: xOf(xmax),
-			y2: yBf(trendAt(bodyFat, xmax))
-		};
-	});
+	// Projection (dashed) from today → horizonEnd along each trend.
+	function projLine(t: Trend | null, y: ((v: number) => number) | null, lbScale: boolean) {
+		if (!t || !y || xmax <= today) return null;
+		const at = (d: string) => (lbScale ? trendLb(t, d) : trendAt(t, d));
+		return { x1: xOf(today), y1: y(at(today)), x2: xOf(xmax), y2: y(at(xmax)) };
+	}
+	let weightProj = $derived(projLine(weight, yM, true));
+	let leanProj = $derived(projLine(leanMass, yM, true));
+	let bfProj = $derived(projLine(bodyFat, yBf, false));
 
 	// ── Ticks ──────────────────────────────────────────────────────────────────
 	function ticks(lo: number, hi: number, n = 4): number[] {
@@ -130,7 +128,7 @@
 		const step = (hi - lo) / n;
 		return Array.from({ length: n + 1 }, (_, i) => lo + step * i);
 	}
-	let weightTicks = $derived(weightDomain ? ticks(weightDomain.lo, weightDomain.hi) : []);
+	let massTicks = $derived(massDomain ? ticks(massDomain.lo, massDomain.hi) : []);
 	let bfTicks = $derived(bfDomain ? ticks(bfDomain.lo, bfDomain.hi) : []);
 
 	function fmtDate(d: string): string {
@@ -141,7 +139,6 @@
 		});
 	}
 
-	// A few date labels across the x-axis: start, today, end.
 	let xLabels = $derived.by(() => {
 		const out: { x: number; label: string }[] = [];
 		out.push({ x: xOf(xmin), label: fmtDate(xmin) });
@@ -150,7 +147,7 @@
 	});
 
 	let todayX = $derived(xOf(today));
-	let hasAny = $derived(series.length > 0 && yW !== null);
+	let hasAny = $derived(series.length > 0 && yM !== null);
 </script>
 
 <div style="width: 100%;">
@@ -158,50 +155,30 @@
 		viewBox="0 0 {W} {H}"
 		style="width: 100%; height: auto; display: block;"
 		role="img"
-		aria-label="Weight and body-fat trend chart"
+		aria-label="Weight, lean mass, and body-fat trend chart"
 	>
-		<!-- gridlines (weight ticks) -->
-		{#if yW}
-			{#each weightTicks as t (t)}
-				<line x1={x0} y1={yW(t)} x2={x1} y2={yW(t)} stroke="rgba(255,255,255,0.05)" />
-				<text
-					x={x0 - 6}
-					y={yW(t) + 3}
-					text-anchor="end"
-					font-size="10"
-					fill={SUBTLE}>{t.toFixed(0)}</text
-				>
+		<!-- gridlines (mass ticks, lb) -->
+		{#if yM}
+			{#each massTicks as t (t)}
+				<line x1={x0} y1={yM(t)} x2={x1} y2={yM(t)} stroke="rgba(255,255,255,0.05)" />
+				<text x={x0 - 6} y={yM(t) + 3} text-anchor="end" font-size="10" fill={SUBTLE}>{t.toFixed(0)}</text>
 			{/each}
 		{/if}
 
 		<!-- right axis (body fat %) labels -->
 		{#if yBf}
 			{#each bfTicks as t (t)}
-				<text
-					x={x1 + 6}
-					y={yBf(t) + 3}
-					text-anchor="start"
-					font-size="10"
-					fill={BF_COLOR}>{t.toFixed(0)}</text
-				>
+				<text x={x1 + 6} y={yBf(t) + 3} text-anchor="start" font-size="10" fill={BF_COLOR}>{t.toFixed(0)}</text>
 			{/each}
 		{/if}
 
 		<!-- today divider -->
 		{#if hasAny}
-			<line
-				x1={todayX}
-				y1={y0}
-				x2={todayX}
-				y2={y1}
-				stroke={SUBTLE}
-				stroke-width="1"
-				stroke-dasharray="3 3"
-			/>
+			<line x1={todayX} y1={y0} x2={todayX} y2={y1} stroke={SUBTLE} stroke-width="1" stroke-dasharray="3 3" />
 			<text x={todayX} y={y0 - 4} text-anchor="middle" font-size="10" fill={SUBTLE}>today</text>
 		{/if}
 
-		<!-- body fat: actual + projection (drawn first, under weight) -->
+		<!-- body fat: actual + projection (under the mass lines) -->
 		{#if yBf && bfActual}
 			<polyline points={bfActual} fill="none" stroke={BF_COLOR} stroke-width="2" />
 			{#each bfPoints as p (p.x + ':' + p.y)}
@@ -209,35 +186,29 @@
 			{/each}
 		{/if}
 		{#if bfProj}
-			<line
-				x1={bfProj.x1}
-				y1={bfProj.y1}
-				x2={bfProj.x2}
-				y2={bfProj.y2}
-				stroke={BF_COLOR}
-				stroke-width="2"
-				stroke-dasharray="5 4"
-				opacity="0.9"
-			/>
+			<line x1={bfProj.x1} y1={bfProj.y1} x2={bfProj.x2} y2={bfProj.y2} stroke={BF_COLOR} stroke-width="2" stroke-dasharray="5 4" opacity="0.9" />
 		{/if}
 
-		<!-- weight: actual + projection -->
-		{#if yW && weightActual}
+		<!-- lean mass: actual + projection -->
+		{#if yM && leanActual}
+			<polyline points={leanActual} fill="none" stroke={LEAN_COLOR} stroke-width="2" />
+			{#each leanPoints as p (p.x + ':' + p.y)}
+				<circle cx={p.x} cy={p.y} r="2.5" fill={LEAN_COLOR} />
+			{/each}
+		{/if}
+		{#if leanProj}
+			<line x1={leanProj.x1} y1={leanProj.y1} x2={leanProj.x2} y2={leanProj.y2} stroke={LEAN_COLOR} stroke-width="2" stroke-dasharray="5 4" opacity="0.9" />
+		{/if}
+
+		<!-- weight: actual + projection (on top) -->
+		{#if yM && weightActual}
 			<polyline points={weightActual} fill="none" stroke={WEIGHT_COLOR} stroke-width="2.5" />
 			{#each weightPoints as p (p.x + ':' + p.y)}
 				<circle cx={p.x} cy={p.y} r="3" fill={WEIGHT_COLOR} />
 			{/each}
 		{/if}
 		{#if weightProj}
-			<line
-				x1={weightProj.x1}
-				y1={weightProj.y1}
-				x2={weightProj.x2}
-				y2={weightProj.y2}
-				stroke={WEIGHT_COLOR}
-				stroke-width="2.5"
-				stroke-dasharray="6 4"
-			/>
+			<line x1={weightProj.x1} y1={weightProj.y1} x2={weightProj.x2} y2={weightProj.y2} stroke={WEIGHT_COLOR} stroke-width="2.5" stroke-dasharray="6 4" />
 		{/if}
 
 		<!-- x axis labels -->
@@ -247,22 +218,26 @@
 	</svg>
 
 	<!-- legend -->
-	<div
-		style="display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; margin-top: 6px; font-size: 11px; color: var(--color-text-muted);"
-	>
+	<div style="display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; margin-top: 6px; font-size: 11px; color: var(--color-text-muted);">
 		<span style="display: inline-flex; align-items: center; gap: 5px;">
 			<span style="width: 16px; height: 0; border-top: 2.5px solid {WEIGHT_COLOR};"></span>
-			Weight (kg)
+			Weight (lb)
 		</span>
-		<span style="display: inline-flex; align-items: center; gap: 5px;">
-			<span style="width: 16px; height: 0; border-top: 2.5px dashed {WEIGHT_COLOR};"></span>
-			Projected
-		</span>
+		{#if leanActual || leanProj}
+			<span style="display: inline-flex; align-items: center; gap: 5px;">
+				<span style="width: 16px; height: 0; border-top: 2px solid {LEAN_COLOR};"></span>
+				Lean mass (lb)
+			</span>
+		{/if}
 		{#if bfActual || bfProj}
 			<span style="display: inline-flex; align-items: center; gap: 5px;">
 				<span style="width: 16px; height: 0; border-top: 2px solid {BF_COLOR};"></span>
 				Body fat %
 			</span>
 		{/if}
+		<span style="display: inline-flex; align-items: center; gap: 5px;">
+			<span style="width: 16px; height: 0; border-top: 2.5px dashed {SUBTLE};"></span>
+			Projected
+		</span>
 	</div>
 </div>

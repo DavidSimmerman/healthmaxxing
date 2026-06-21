@@ -38,6 +38,12 @@ export function ageOn(onDate: string, birthDate: string): number {
 export const KCAL_PER_LB = 3500;
 export const KCAL_PER_KG = 7700;
 
+// Weigh-ins are stored in kg (HealthKit's native unit); the UI shows pounds.
+// Convert only at the display edge — never store lb.
+export const LB_PER_KG = 2.20462;
+export const kgToLb = (kg: number) => kg * LB_PER_KG;
+export const lbToKg = (lb: number) => lb / LB_PER_KG;
+
 // ── Trend / projection math (pure) ──────────────────────────────────────────
 // Body weight on a scale is noisy day to day (water, glycogen, gut contents), so
 // we fit a least-squares line through the weigh-ins and project off the SLOPE of

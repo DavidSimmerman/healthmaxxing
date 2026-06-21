@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { kgToLb } from '$lib/energy';
 
 	let { data } = $props();
 
@@ -263,14 +264,14 @@
 		{#if data.weighIn}
 			<div class="ledger-row">
 				<span>Weight</span>
-				<b>{data.weighIn.weightKg.toFixed(1)} kg · {(data.weighIn.weightKg * 2.20462).toFixed(1)} lb</b>
+				<b>{kgToLb(data.weighIn.weightKg).toFixed(1)} lb</b>
 			</div>
 			{#if data.weighIn.bodyFatPct != null}
 				<div class="ledger-row"><span>Body fat</span><b>{data.weighIn.bodyFatPct.toFixed(1)}%</b></div>
 			{/if}
 			{#if data.weighIn.leanMassKg != null}
 				<div class="ledger-row">
-					<span>Lean / muscle mass</span><b>{data.weighIn.leanMassKg.toFixed(1)} kg</b>
+					<span>Lean / muscle mass</span><b>{kgToLb(data.weighIn.leanMassKg).toFixed(1)} lb</b>
 				</div>
 			{/if}
 			<p class="mt-2 text-xs" style="color: var(--color-text-subtle);">

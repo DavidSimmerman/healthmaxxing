@@ -1,11 +1,9 @@
 <script lang="ts">
 	import { goto, invalidateAll } from '$app/navigation';
-	import { addDays } from '$lib/energy';
+	import { addDays, kgToLb, lbToKg, LB_PER_KG } from '$lib/energy';
 	import WeightChart from '$lib/components/WeightChart.svelte';
 
 	let { data } = $props();
-
-	const LB_PER_KG = 2.20462;
 
 	let insights = $derived(data.insights);
 	let series = $derived(insights.series);
@@ -19,8 +17,11 @@
 
 	let tomorrow = $derived(addDays(insights.asOf, 1));
 
-	// Goal form state — '' means cleared (→ null on save).
-	let goalWeightKg = $state<number | ''>(data.goals.goalWeightKg ?? '');
+	// Goal form state — '' means cleared (→ null on save). Weight entered in lb;
+	// stored in kg, so prefill the lb-converted value.
+	let goalWeightLb = $state<number | ''>(
+		data.goals.goalWeightKg != null ? Math.round(kgToLb(data.goals.goalWeightKg) * 10) / 10 : ''
+	);
 	let goalBodyFatPct = $state<number | ''>(data.goals.goalBodyFatPct ?? '');
 	let saving = $state(false);
 	let saveError = $state<string | null>(null);
@@ -28,6 +29,11 @@
 
 	function fmt(n: number | null | undefined, digits = 1): string {
 		return n == null || !Number.isFinite(n) ? '—' : n.toFixed(digits);
+	}
+
+	// Format a kg value as pounds (weigh-ins/projections are stored in kg).
+	function fmtLb(kg: number | null | undefined, digits = 1): string {
+		return kg == null || !Number.isFinite(kg) ? '—' : kgToLb(kg).toFixed(digits);
 	}
 
 	// Signed rate with a direction arrow. Negative = losing.
@@ -60,7 +66,7 @@
 				method: 'PUT',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({
-					goalWeightKg: goalWeightKg === '' ? null : Number(goalWeightKg),
+					goalWeightKg: goalWeightLb === '' ? null : lbToKg(Number(goalWeightLb)),
 					goalBodyFatPct: goalBodyFatPct === '' ? null : Number(goalBodyFatPct)
 				})
 			});
@@ -140,6 +146,7 @@
 			<WeightChart
 				{series}
 				weight={insights.weight}
+				leanMass={insights.leanMass}
 				bodyFat={insights.bodyFat}
 				today={insights.asOf}
 				horizonEnd={lastProjectionDate}
@@ -157,14 +164,7 @@
 			<div class="trend-row">
 				<span>Weight</span>
 				<b>
-					{#if insights.weight}
-						{rateLabel(insights.weight.ratePerWeek, 'kg')}
-						<span style="color: var(--color-text-subtle); font-weight: 400;">
-							({rateLabel(insights.weight.ratePerWeek * LB_PER_KG, 'lb')})
-						</span>
-					{:else}
-						—
-					{/if}
+					{insights.weight ? rateLabel(insights.weight.ratePerWeek * LB_PER_KG, 'lb') : '—'}
 				</b>
 			</div>
 			<div class="trend-row">
@@ -175,13 +175,13 @@
 			</div>
 			<div class="trend-row">
 				<span>Lean mass</span>
-				<b>{insights.leanMass ? rateLabel(insights.leanMass.ratePerWeek, 'kg') : '—'}</b>
+				<b>{insights.leanMass ? rateLabel(insights.leanMass.ratePerWeek * LB_PER_KG, 'lb') : '—'}</b>
 			</div>
 
 			{#if insights.deficitImplied}
 				<p class="mt-3 text-xs leading-relaxed" style="color: var(--color-text-subtle);">
-					Calorie-deficit implies {rateLabel(insights.deficitImplied.ratePerWeekKg, 'kg')} over the
-					last {insights.deficitImplied.days} days (avg deficit {insights.deficitImplied.avgDeficitKcal.toLocaleString()}
+					Calorie-deficit implies {rateLabel(insights.deficitImplied.ratePerWeekKg * LB_PER_KG, 'lb')} over
+					the last {insights.deficitImplied.days} days (avg deficit {insights.deficitImplied.avgDeficitKcal.toLocaleString()}
 					kcal).
 				</p>
 			{/if}
@@ -199,9 +199,9 @@
 				<thead>
 					<tr style="color: var(--color-text-subtle);" class="text-[11px] uppercase">
 						<th class="py-1 text-left font-medium">When</th>
-						<th class="py-1 text-right font-medium">Wt</th>
+						<th class="py-1 text-right font-medium">Wt (lb)</th>
 						<th class="py-1 text-right font-medium">BF%</th>
-						<th class="py-1 text-right font-medium">Lean</th>
+						<th class="py-1 text-right font-medium">Lean (lb)</th>
 					</tr>
 				</thead>
 				<tbody>
@@ -214,12 +214,12 @@
 								</div>
 							</td>
 							<td class="py-1.5 text-right font-semibold" style="color: var(--color-accent-from);">
-								{fmt(p.weightKg)}
+								{fmtLb(p.weightKg)}
 							</td>
 							<td class="py-1.5 text-right font-semibold" style="color: var(--color-fat);">
 								{fmt(p.bodyFatPct)}
 							</td>
-							<td class="py-1.5 text-right text-white">{fmt(p.leanMassKg)}</td>
+							<td class="py-1.5 text-right text-white">{fmtLb(p.leanMassKg)}</td>
 						</tr>
 					{/each}
 				</tbody>
@@ -253,14 +253,14 @@
 			<div class="grid grid-cols-2 gap-3">
 				<label class="flex flex-col gap-1">
 					<span class="text-xs font-medium" style="color: var(--color-text-subtle);"
-						>Goal weight (kg)</span
+						>Goal weight (lb)</span
 					>
 					<input
 						type="number"
-						min="20"
-						max="400"
+						min="44"
+						max="880"
 						step="0.1"
-						bind:value={goalWeightKg}
+						bind:value={goalWeightLb}
 						class="rounded-lg border bg-transparent px-3 py-2 text-white outline-none focus:border-orange-400"
 						style="border-color: var(--color-border);"
 					/>
@@ -306,11 +306,11 @@
 		{#if insights.goal.weight}
 			<p class="mt-4 text-sm" style="color: var(--color-text-muted);">
 				{#if insights.goal.weight.etaDate}
-					On track to hit <b class="text-white">{fmt(insights.goal.weight.goal)} kg</b> around
+					On track to hit <b class="text-white">{fmtLb(insights.goal.weight.goal)} lb</b> around
 					<b class="text-white">{fmtDate(insights.goal.weight.etaDate)}</b>
 					(~{insights.goal.weight.etaDays} days).
 				{:else}
-					Weight is not currently trending toward your {fmt(insights.goal.weight.goal)} kg goal.
+					Weight is not currently trending toward your {fmtLb(insights.goal.weight.goal)} lb goal.
 				{/if}
 			</p>
 		{/if}
