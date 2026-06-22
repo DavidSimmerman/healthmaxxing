@@ -7,13 +7,15 @@
 		weight,
 		leanMass,
 		bodyFat,
-		today
+		today,
+		show = { weight: true, lean: true, bodyFat: true }
 	}: {
 		series: WeighIn[];
 		weight: Trend | null;
 		leanMass: Trend | null;
 		bodyFat: Trend | null;
 		today: string;
+		show?: { weight: boolean; lean: boolean; bodyFat: boolean };
 	} = $props();
 
 	// Storage is kg; mass values are shown in lb when displayed numerically.
@@ -146,7 +148,7 @@
 			{ key: 'lean', label: 'Lean mass', color: LEAN_COLOR, trend: leanMass, isMass: true, pick: (s) => s.leanMassKg },
 			{ key: 'bodyFat', label: 'Body fat %', color: BF_COLOR, trend: bodyFat, isMass: false, pick: (s) => s.bodyFatPct }
 		];
-		return defs.map((d) => {
+		return defs.filter((d) => show[d.key]).map((d) => {
 			const actual = buildActual(d.pick);
 			return {
 				key: d.key,
@@ -361,22 +363,22 @@
 		return { day, cx, date, rows };
 	});
 
-	// Tooltip box: sized to fit the longest row; clamped fully inside the plot,
-	// horizontally and vertically. Flips left/up near the right/bottom edge.
-	const TIP_W = 168;
+	// Tooltip: sized to its content (width:max-content) and anchored on whichever
+	// side the crosshair is, with a px-accurate max-width cap, so its text can
+	// never overflow the chart regardless of how small the SVG is scaled.
 	const TIP_M = 6; // px margin from the rendered chart edges
-	// Position with CSS clamp()+calc() so the browser clamps in RENDERED pixels.
-	// The box is sized in px but the crosshair x is a % of the (scaled) width, so
-	// a viewBox-unit clamp would still overflow once the SVG shrinks on mobile.
-	let tipLeftCss = $derived.by(() => {
-		if (!crosshair) return '0px';
-		const cxPct = (crosshair.cx / W) * 100;
-		const anchor = cxPct > 55 ? `calc(${cxPct}% - ${TIP_W + 8}px)` : `calc(${cxPct}% + 8px)`;
-		return `clamp(${TIP_M}px, ${anchor}, calc(100% - ${TIP_W + TIP_M}px))`;
+	// Pin to the side OPPOSITE the crosshair and cap the width (max-width below):
+	// anchoring to one edge means `edge + width` can never cross the other edge,
+	// so it stays inside even on a phone-width chart with a wide (3-metric) box.
+	let tipPos = $derived.by(() => {
+		if (!crosshair) return '';
+		return (crosshair.cx / W) * 100 > 50 ? `left: ${TIP_M}px;` : `right: ${TIP_M}px;`;
 	});
 </script>
 
-<div style="width: 100%; position: relative;">
+<div
+	style="width: 100%; position: relative; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;"
+>
 	<svg
 		bind:this={svgEl}
 		viewBox="0 0 {W} {H}"
@@ -436,7 +438,7 @@
 	<!-- Tooltip (HTML overlay) -->
 	{#if crosshair}
 		<div
-			style="position: absolute; top: {TIP_M}px; left: {tipLeftCss}; width: {TIP_W}px; pointer-events: none;
+			style="position: absolute; top: {TIP_M}px; {tipPos} width: max-content; min-width: 130px; max-width: calc(100% - {2 * TIP_M}px); pointer-events: none;
 				background: rgba(12,12,16,0.94); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px;
 				padding: 7px 9px; font-size: 11px; color: var(--color-text-muted); box-shadow: 0 4px 16px rgba(0,0,0,0.4);
 				box-sizing: border-box;"

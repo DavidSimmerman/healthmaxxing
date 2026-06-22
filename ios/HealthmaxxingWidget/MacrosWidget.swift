@@ -117,7 +117,7 @@ struct MacrosWidgetEntryView: View {
                     .foregroundStyle(over)
             case .ok:
                 metric(value: entry.calLeft, unit: "kcal", color: calorie, size: 28)
-                metric(value: entry.proLeft, unit: "protein", color: protein, size: 20)
+                metric(value: entry.proLeft, unit: "protein", color: protein, size: 20, goodWhenOver: true)
                 if let deficit = entry.deficit {
                     deficitLine(deficit)
                 }
@@ -130,25 +130,29 @@ struct MacrosWidgetEntryView: View {
         .widgetURL(URL(string: "healthmaxxing://open"))
     }
 
+    // `goodWhenOver`: calories are good UNDER target (over → red); protein is good
+    // OVER target (over → green, under → red).
     @ViewBuilder
-    private func metric(value: Int, unit: String, color: Color, size: CGFloat) -> some View {
+    private func metric(value: Int, unit: String, color: Color, size: CGFloat, goodWhenOver: Bool = false) -> some View {
         let isOver = value < 0
+        let numColor: Color = goodWhenOver ? (isOver ? deficitColor : over) : (isOver ? over : color)
         HStack(alignment: .firstTextBaseline, spacing: 4) {
             Text(isOver ? "+\(-value)" : "\(value)")
                 .font(.system(size: size, weight: .bold))
-                .foregroundStyle(isOver ? over : color)
+                .foregroundStyle(numColor)
             Text(isOver ? "\(unit) over" : "\(unit) left")
                 .font(.system(size: 11))
                 .foregroundStyle(subtle)
         }
     }
 
-    // Today's energy burn vs. intake. Positive = deficit (cutting), negative = surplus.
+    // Today's energy burn vs. intake. A deficit (cutting) shows a minus, a surplus
+    // a plus — no up/down arrows (down shouldn't read as "bad").
     @ViewBuilder
     private func deficitLine(_ deficit: Int) -> some View {
         let isSurplus = deficit < 0
         HStack(alignment: .firstTextBaseline, spacing: 4) {
-            Text(isSurplus ? "▲ \(-deficit)" : "▼ \(deficit)")
+            Text(isSurplus ? "+\(-deficit)" : "−\(deficit)")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(isSurplus ? over : deficitColor)
             Text(isSurplus ? "surplus" : "deficit")

@@ -28,6 +28,14 @@
 
 	let tomorrow = $derived(addDays(insights.asOf, 1));
 
+	// Which metrics to show on the chart (each also draws its own trend line).
+	let visible = $state({ weight: true, lean: true, bodyFat: true });
+	const METRICS = [
+		{ key: 'weight', label: 'Weight', color: '#fb923c' },
+		{ key: 'lean', label: 'Lean mass', color: '#fda4af' },
+		{ key: 'bodyFat', label: 'Body fat %', color: '#7dd3fc' }
+	] as const;
+
 	// What-if deficit explorer — prefill with the scenario being shown (defaults
 	// to the current real deficit server-side).
 	let whatIfInput = $state<number | ''>(energy.whatIf?.deficitKcal ?? energy.currentDeficitKcal ?? 500);
@@ -37,7 +45,7 @@
 		p.set('window', String(data.windowDays));
 		if (data.target) p.set('target', data.target);
 		p.set('deficit', String(Math.round(Number(whatIfInput))));
-		goto(`/trends?${p}`);
+		goto(`/trends?${p}`, { noScroll: true, keepFocus: true });
 	}
 
 	// Goal form state — '' means cleared (→ null on save). Weight in lb; stored kg.
@@ -76,18 +84,18 @@
 		const p = new URLSearchParams();
 		p.set('window', String(days));
 		if (data.target) p.set('target', data.target);
-		goto(`/trends?${p}`);
+		goto(`/trends?${p}`, { noScroll: true, keepFocus: true });
 	}
 	function onTargetChange(e: Event) {
 		const v = (e.currentTarget as HTMLInputElement).value;
-		if (v) goto(`/trends?target=${v}&window=${data.windowDays}`);
+		if (v) goto(`/trends?target=${v}&window=${data.windowDays}`, { noScroll: true, keepFocus: true });
 	}
 
 	// "Am I on pace?" verdict copy.
 	let paceText = $derived.by(() => {
 		switch (energy.pace.verdict) {
 			case 'on-track':
-				return 'Losing about as fast as your calorie deficit predicts. 👍';
+				return 'Losing about as fast as your calorie deficit predicts. 👍';
 			case 'slower':
 				return 'Losing slower than your logged deficit predicts — your real maintenance looks lower than the formula’s estimate (or recent water retention is masking fat loss).';
 			case 'faster':
@@ -154,7 +162,21 @@
 		</div>
 	{:else}
 		<section class="card p-4">
-			<WeightChart {series} weight={insights.weight} leanMass={insights.leanMass} bodyFat={insights.bodyFat} today={insights.asOf} />
+			<!-- Metric selector — toggle which lines (each shows its own trend line). -->
+			<div class="mb-2 flex flex-wrap justify-center gap-2">
+				{#each METRICS as m (m.key)}
+					<button
+						class="chip"
+						class:chip-off={!visible[m.key]}
+						aria-pressed={visible[m.key]}
+						onclick={() => (visible = { ...visible, [m.key]: !visible[m.key] })}
+					>
+						<span class="chip-dot" style="background: {visible[m.key] ? m.color : 'transparent'}; border-color: {m.color};"></span>
+						{m.label}
+					</button>
+				{/each}
+			</div>
+			<WeightChart {series} weight={insights.weight} leanMass={insights.leanMass} bodyFat={insights.bodyFat} today={insights.asOf} show={visible} />
 			<p class="mt-1 text-center text-[11px]" style="color: var(--color-text-subtle);">% change since {fmtDate(series[0].date)} — dashed = trend. Tap or hover for values.</p>
 		</section>
 
@@ -217,7 +239,7 @@
 
 			<label class="mt-4 flex flex-col gap-1">
 				<span class="text-xs font-medium" style="color: var(--color-text-subtle);">Project to a specific date</span>
-				<input type="date" min={tomorrow} value={data.target ?? ''} onchange={onTargetChange} class="card-sm w-full px-3 py-2 text-sm text-white" style="color-scheme: dark; background: var(--color-bg-elevated);" />
+				<input type="date" min={tomorrow} value={data.target ?? ''} onchange={onTargetChange} class="card-sm w-full min-w-0 px-3 py-2 text-sm text-white" style="color-scheme: dark; background: var(--color-bg-elevated); max-width: 100%; box-sizing: border-box;" />
 			</label>
 		</section>
 
@@ -252,25 +274,27 @@
 			{#if energy.whatIf}
 				<div class="trend-row mt-4"><span>Projected loss</span><b>{rateLb(energy.whatIf.ratePerWeekKg)}</b></div>
 				<div class="trend-row"><span>Means eating</span><b>{energy.whatIf.plannedIntakeKcal.toLocaleString()} kcal/day</b></div>
-				{#if insights.goal.weight}
-					<p class="mt-3 text-sm" style="color: var(--color-text-muted);">
-						{#if energy.whatIf.goalWeightEtaDate}
-							Reach <b class="text-white">{fmtLb(insights.goal.weight.goal)} lb</b> by
-							<b class="text-white">{fmtDate(energy.whatIf.goalWeightEtaDate)}</b> (~{energy.whatIf.goalWeightEtaDays} days).
-						{:else}
-							Won't reach your {fmtLb(insights.goal.weight.goal)} lb goal at this deficit.
-						{/if}
-					</p>
-				{/if}
-				{#if insights.goal.bodyFat && energy.whatIf.goalBodyFatEtaDate}
-					<p class="mt-1 text-sm" style="color: var(--color-text-muted);">
-						Hit <b class="text-white">{fmt(insights.goal.bodyFat.goal)}% body fat</b> by
-						<b class="text-white">{fmtDate(energy.whatIf.goalBodyFatEtaDate)}</b> (~{energy.whatIf.goalBodyFatEtaDays} days).
-					</p>
-				{/if}
-				{#if !insights.goal.weight && !insights.goal.bodyFat}
-					<p class="mt-3 text-xs" style="color: var(--color-text-subtle);">Set a goal below to see time-to-goal at this deficit.</p>
-				{/if}
+				<div class="mt-4 border-t pt-3" style="border-color: var(--color-border);">
+					{#if insights.goal.weight}
+						<p class="text-sm" style="color: var(--color-text-muted);">
+							{#if energy.whatIf.goalWeightEtaDate}
+								Reach <b class="text-white">{fmtLb(insights.goal.weight.goal)} lb</b> by
+								<b class="text-white">{fmtDate(energy.whatIf.goalWeightEtaDate)}</b> (~{energy.whatIf.goalWeightEtaDays} days).
+							{:else}
+								Won't reach your {fmtLb(insights.goal.weight.goal)} lb goal at this deficit.
+							{/if}
+						</p>
+					{/if}
+					{#if insights.goal.bodyFat && energy.whatIf.goalBodyFatEtaDate}
+						<p class="mt-1 text-sm" style="color: var(--color-text-muted);">
+							Hit <b class="text-white">{fmt(insights.goal.bodyFat.goal)}% body fat</b> by
+							<b class="text-white">{fmtDate(energy.whatIf.goalBodyFatEtaDate)}</b> (~{energy.whatIf.goalBodyFatEtaDays} days).
+						</p>
+					{/if}
+					{#if !insights.goal.weight && !insights.goal.bodyFat}
+						<p class="text-xs" style="color: var(--color-text-subtle);">Set a goal below to see time-to-goal at this deficit.</p>
+					{/if}
+				</div>
 			{/if}
 		</section>
 	{/if}
@@ -297,23 +321,27 @@
 			</div>
 		</form>
 
-		{#if insights.goal.weight}
-			<p class="mt-4 text-sm" style="color: var(--color-text-muted);">
-				{#if insights.goal.weight.etaDate}
-					On track to hit <b class="text-white">{fmtLb(insights.goal.weight.goal)} lb</b> around <b class="text-white">{fmtDate(insights.goal.weight.etaDate)}</b> (~{insights.goal.weight.etaDays} days).
-				{:else}
-					Weight is not currently trending toward your {fmtLb(insights.goal.weight.goal)} lb goal.
+		{#if insights.goal.weight || insights.goal.bodyFat}
+			<div class="mt-4 border-t pt-3" style="border-color: var(--color-border);">
+				{#if insights.goal.weight}
+					<p class="text-sm" style="color: var(--color-text-muted);">
+						{#if insights.goal.weight.etaDate}
+							On track to hit <b class="text-white">{fmtLb(insights.goal.weight.goal)} lb</b> around <b class="text-white">{fmtDate(insights.goal.weight.etaDate)}</b> (~{insights.goal.weight.etaDays} days).
+						{:else}
+							Weight is not currently trending toward your {fmtLb(insights.goal.weight.goal)} lb goal.
+						{/if}
+					</p>
 				{/if}
-			</p>
-		{/if}
-		{#if insights.goal.bodyFat}
-			<p class="mt-2 text-sm" style="color: var(--color-text-muted);">
-				{#if insights.goal.bodyFat.etaDate}
-					On track to hit <b class="text-white">{fmt(insights.goal.bodyFat.goal)}% body fat</b> around <b class="text-white">{fmtDate(insights.goal.bodyFat.etaDate)}</b> (~{insights.goal.bodyFat.etaDays} days).
-				{:else}
-					Body fat is not currently trending toward your {fmt(insights.goal.bodyFat.goal)}% goal.
+				{#if insights.goal.bodyFat}
+					<p class="mt-2 text-sm" style="color: var(--color-text-muted);">
+						{#if insights.goal.bodyFat.etaDate}
+							On track to hit <b class="text-white">{fmt(insights.goal.bodyFat.goal)}% body fat</b> around <b class="text-white">{fmtDate(insights.goal.bodyFat.etaDate)}</b> (~{insights.goal.bodyFat.etaDays} days).
+						{:else}
+							Body fat is not currently trending toward your {fmt(insights.goal.bodyFat.goal)}% goal.
+						{/if}
+					</p>
 				{/if}
-			</p>
+			</div>
 		{/if}
 	</section>
 </main>
@@ -351,5 +379,28 @@
 	.seg-on {
 		background: #fb923c;
 		color: #000;
+	}
+	.chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		border-radius: 999px;
+		padding: 4px 11px;
+		font-size: 12px;
+		font-weight: 600;
+		color: var(--color-text);
+		background: var(--color-bg-elevated);
+		border: 1px solid var(--color-border);
+		transition: opacity 0.12s;
+	}
+	.chip-off {
+		opacity: 0.4;
+	}
+	.chip-dot {
+		width: 9px;
+		height: 9px;
+		border-radius: 999px;
+		border: 1.5px solid;
+		flex: none;
 	}
 </style>
