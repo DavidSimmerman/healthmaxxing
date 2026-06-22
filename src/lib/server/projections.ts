@@ -535,26 +535,31 @@ export async function energyInsights({
 		});
 	}
 
-	// Your real current deficit (calibrated maintenance − what you actually eat).
+	// Maintenance to project the what-if from: prefer the calibrated (measured)
+	// value, fall back to the formula estimate so the explorer still works before
+	// there's enough weigh-in/logging coverage to calibrate.
+	const maintenanceTdee = calibratedTdee ?? estimatedTdee;
+
+	// Your current average deficit over the selected window (maintenance − intake).
 	const currentDeficitKcal =
-		calibratedTdee != null && avgIntakeKcal != null
-			? Math.round(calibratedTdee - avgIntakeKcal)
+		maintenanceTdee != null && avgIntakeKcal != null
+			? Math.round(maintenanceTdee - avgIntakeKcal)
 			: null;
 
-	// "What if my deficit were X?" — hold a hypothetical deficit off calibrated
-	// maintenance and forward-simulate to the saved goal(s).
+	// "What if my deficit were X?" — hold a hypothetical deficit off maintenance
+	// and forward-simulate to the saved goal(s). Defaults to the current average.
 	let whatIf: WhatIf | null = null;
 	const widParam =
 		whatIfDeficitKcal != null && Number.isFinite(whatIfDeficitKcal)
 			? Math.max(-3000, Math.min(3000, whatIfDeficitKcal))
 			: null;
-	const wid = widParam ?? currentDeficitKcal; // default the scenario to the current real deficit
-	if (wid != null && calibratedTdee != null && startWeight != null) {
-		const plannedIntake = Math.max(0, calibratedTdee - wid);
+	const wid = widParam ?? currentDeficitKcal; // default the scenario to the current deficit
+	if (wid != null && maintenanceTdee != null && startWeight != null) {
+		const plannedIntake = Math.max(0, maintenanceTdee - wid);
 		const etas = simulateToGoals({
 			weightKg: startWeight,
 			bodyFatPct: startBf,
-			tdee0: calibratedTdee,
+			tdee0: maintenanceTdee,
 			plannedIntake,
 			proteinG: avgProteinG,
 			goalWeightKg: body.goal.weight?.goal ?? null,
@@ -563,7 +568,7 @@ export async function energyInsights({
 		whatIf = {
 			deficitKcal: Math.round(wid),
 			plannedIntakeKcal: Math.round(plannedIntake),
-			ratePerWeekKg: (-(calibratedTdee - plannedIntake) / RHO_KCAL_PER_KG) * 7,
+			ratePerWeekKg: (-(maintenanceTdee - plannedIntake) / RHO_KCAL_PER_KG) * 7,
 			goalWeightEtaDays: etas.weightEtaDays,
 			goalWeightEtaDate: etas.weightEtaDays == null ? null : addDays(today, etas.weightEtaDays),
 			goalBodyFatEtaDays: etas.bodyFatEtaDays,

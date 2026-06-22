@@ -88,7 +88,12 @@
 	}
 	function onTargetChange(e: Event) {
 		const v = (e.currentTarget as HTMLInputElement).value;
-		if (v) goto(`/trends?target=${v}&window=${data.windowDays}`, { noScroll: true, keepFocus: true });
+		// Navigate on clear too — dropping ?target removes the custom projection
+		// (otherwise "reset" in the picker appeared not to take effect).
+		const p = new URLSearchParams();
+		p.set('window', String(data.windowDays));
+		if (v) p.set('target', v);
+		goto(`/trends?${p}`, { noScroll: true, keepFocus: true });
 	}
 
 	// "Am I on pace?" verdict copy.
@@ -239,7 +244,7 @@
 
 			<label class="mt-4 flex flex-col gap-1">
 				<span class="text-xs font-medium" style="color: var(--color-text-subtle);">Project to a specific date</span>
-				<input type="date" min={tomorrow} value={data.target ?? ''} onchange={onTargetChange} class="card-sm w-full min-w-0 px-3 py-2 text-sm text-white" style="color-scheme: dark; background: var(--color-bg-elevated); max-width: 100%; box-sizing: border-box;" />
+				<input type="date" min={tomorrow} value={data.target ?? ''} onchange={onTargetChange} class="card-sm block w-full min-w-0 px-3 py-2 text-sm text-white" style="color-scheme: dark; background: var(--color-bg-elevated); width: 100%; max-width: 100%; box-sizing: border-box; -webkit-appearance: none; appearance: none;" />
 			</label>
 		</section>
 
@@ -248,27 +253,25 @@
 			<h2 class="mb-1 text-xs font-semibold tracking-widest uppercase" style="color: var(--color-text-subtle);">What if my deficit were…</h2>
 			<p class="mb-3 text-xs leading-relaxed" style="color: var(--color-text-subtle);">
 				{#if energy.currentDeficitKcal != null}
-					You're averaging a <b class="text-white">{energy.currentDeficitKcal >= 0 ? '−' : '+'}{Math.abs(energy.currentDeficitKcal).toLocaleString()}</b>
-					kcal/day {energy.currentDeficitKcal >= 0 ? 'deficit' : 'surplus'}. Try a different one:
+					Your current average is a <b class="text-white">{energy.currentDeficitKcal >= 0 ? '−' : '+'}{Math.abs(energy.currentDeficitKcal).toLocaleString()}</b>
+					kcal/day {energy.currentDeficitKcal >= 0 ? 'deficit' : 'surplus'} (prefilled below). Try a different one:
 				{:else}
-					Log more days of food so we can calibrate your maintenance first.
+					Log more days of food so we can estimate your maintenance first.
 				{/if}
 			</p>
-			<div class="flex items-end gap-2">
-				<label class="flex flex-1 flex-col gap-1">
-					<span class="text-xs font-medium" style="color: var(--color-text-subtle);">Daily deficit (kcal)</span>
-					<input
-						type="number"
-						min="-2000"
-						max="3000"
-						step="50"
-						bind:value={whatIfInput}
-						onchange={applyWhatIf}
-						class="rounded-lg border bg-transparent px-3 py-2 text-white outline-none focus:border-orange-400"
-						style="border-color: var(--color-border);"
-					/>
-				</label>
-				<button onclick={applyWhatIf} class="rounded-lg px-4 py-2 text-sm font-semibold text-black" style="background: #fb923c;">Project</button>
+			<span class="mb-1 block text-xs font-medium" style="color: var(--color-text-subtle);">Daily deficit (kcal)</span>
+			<div class="flex items-stretch gap-2">
+				<input
+					type="number"
+					min="-2000"
+					max="3000"
+					step="50"
+					bind:value={whatIfInput}
+					onchange={applyWhatIf}
+					class="min-w-0 flex-1 rounded-lg border bg-transparent px-3 py-2 text-white outline-none focus:border-orange-400"
+					style="border-color: var(--color-border);"
+				/>
+				<button onclick={applyWhatIf} class="shrink-0 rounded-lg px-4 text-sm font-semibold text-black" style="background: #fb923c;">Project</button>
 			</div>
 
 			{#if energy.whatIf}
