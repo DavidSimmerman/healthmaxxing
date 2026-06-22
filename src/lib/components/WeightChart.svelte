@@ -7,26 +7,22 @@
 		weight,
 		leanMass,
 		bodyFat,
-		today,
-		horizonEnd,
-		mode = 'absolute'
+		today
 	}: {
 		series: WeighIn[];
 		weight: Trend | null;
 		leanMass: Trend | null;
 		bodyFat: Trend | null;
 		today: string;
-		horizonEnd: string;
-		mode?: 'relative' | 'absolute';
 	} = $props();
 
-	// Storage is kg; the chart shows lb. Convert at the edge.
+	// Storage is kg; mass values are shown in lb when displayed numerically.
 	const lb = (kg: number) => kg * LB_PER_KG;
 
 	// ── Geometry ────────────────────────────────────────────────────────────────
 	const W = 720;
 	const H = 360;
-	const PAD = { top: 16, right: 44, bottom: 30, left: 44 };
+	const PAD = { top: 16, right: 16, bottom: 30, left: 44 };
 	const plotW = W - PAD.left - PAD.right;
 	const plotH = H - PAD.top - PAD.bottom;
 	const x0 = PAD.left;
@@ -39,9 +35,9 @@
 	const BF_COLOR = '#7dd3fc'; // --color-fat
 	const SUBTLE = '#71717a'; // --color-text-subtle
 
-	// X domain: first weigh-in (or today) → furthest projection.
+	// X domain: first weigh-in (or today) → today. Never projects past today.
 	let xmin = $derived(series.length ? series[0].date : today);
-	let xmax = $derived(horizonEnd > xmin ? horizonEnd : today > xmin ? today : xmin);
+	let xmax = $derived(today > xmin ? today : xmin);
 	let xSpan = $derived(daysBetween(xmin, xmax)); // may be 0 → guarded below
 
 	function xOf(d: string): number {
@@ -60,8 +56,6 @@
 	function trendAt(t: Trend, d: string): number {
 		return t.intercept + t.slopePerDay * daysBetween(t.anchorDate, d);
 	}
-	// trend value at a date, in lb (mass trends only)
-	const trendLb = (t: Trend, d: string) => lb(trendAt(t, d));
 
 	// Build a value->y mapper for a domain, padded; flat domain falls back to mid.
 	function makeYOf(min: number, max: number) {
@@ -77,7 +71,7 @@
 	const todayIndex = $derived(daysBetween(xmin, today));
 
 	// ════════════════════════════════════════════════════════════════════════════
-	// Shared per-series value-at-day model (drives the crosshair in BOTH modes).
+	// Shared per-series value-at-day model (drives the crosshair).
 	// Each series exposes sorted actual {dayIndex, value-in-native-unit} points and
 	// its trend. valueAt(day) returns the native-unit value (kg for mass, % for bf)
 	// or null if the series has no data.
@@ -132,13 +126,8 @@
 				return last.value;
 			}
 
-			// Past the last reading.
-			if (day > todayIndex && trend) {
-				// In the projected region → use the trend.
-				return trendAt(trend, addDays(xmin, day));
-			}
+			// Past the last reading but at/before today → ramp last actual → trend(today).
 			if (trend && todayIndex > last.dayIndex) {
-				// Between last reading and today → ramp last actual → trend(today).
 				const targetDay = Math.min(day, todayIndex);
 				const span = todayIndex - last.dayIndex;
 				if (span <= 0) return last.value;
@@ -173,95 +162,42 @@
 
 	const modelByKey = $derived(Object.fromEntries(models.map((m) => [m.key, m])) as Record<SeriesModel['key'], SeriesModel>);
 
-	// ── ABSOLUTE mode: mass axis (left) + body-fat axis (right) ───────────────────
-	let massDomain = $derived.by(() => {
-		const vals: number[] = [];
-		for (const s of series) {
-			if (Number.isFinite(s.weightKg)) vals.push(lb(s.weightKg));
-			if (s.leanMassKg != null && Number.isFinite(s.leanMassKg)) vals.push(lb(s.leanMassKg));
-		}
-		if (weight) vals.push(trendLb(weight, today), trendLb(weight, xmax));
-		if (leanMass) vals.push(trendLb(leanMass, today), trendLb(leanMass, xmax));
-		if (!vals.length) return null;
-		return { lo: Math.min(...vals) - 2, hi: Math.max(...vals) + 2 };
-	});
-	let yM = $derived(massDomain ? makeYOf(massDomain.lo, massDomain.hi) : null);
-
-	let bfVals = $derived(
-		series.map((s) => s.bodyFatPct).filter((v): v is number => v != null && Number.isFinite(v))
-	);
-	let bfDomain = $derived.by(() => {
-		const vals = [...bfVals];
-		if (bodyFat) vals.push(trendAt(bodyFat, today), trendAt(bodyFat, xmax));
-		if (!vals.length) return null;
-		return { lo: Math.min(...vals) - 1, hi: Math.max(...vals) + 1 };
-	});
-	let yBf = $derived(bfDomain ? makeYOf(bfDomain.lo, bfDomain.hi) : null);
-
-	// Absolute polylines / points.
-	let weightActual = $derived(yM ? series.map((s) => `${xOf(s.date)},${yM!(lb(s.weightKg))}`).join(' ') : '');
-	let weightPoints = $derived(yM ? series.map((s) => ({ x: xOf(s.date), y: yM!(lb(s.weightKg)) })) : []);
-
-	let leanSeries = $derived(series.filter((s) => s.leanMassKg != null && Number.isFinite(s.leanMassKg)));
-	let leanActual = $derived(
-		yM ? leanSeries.map((s) => `${xOf(s.date)},${yM!(lb(s.leanMassKg as number))}`).join(' ') : ''
-	);
-	let leanPoints = $derived(
-		yM ? leanSeries.map((s) => ({ x: xOf(s.date), y: yM!(lb(s.leanMassKg as number)) })) : []
-	);
-
-	let bfActualSeries = $derived(series.filter((s) => s.bodyFatPct != null && Number.isFinite(s.bodyFatPct)));
-	let bfActual = $derived(
-		yBf ? bfActualSeries.map((s) => `${xOf(s.date)},${yBf!(s.bodyFatPct as number)}`).join(' ') : ''
-	);
-	let bfPoints = $derived(
-		yBf ? bfActualSeries.map((s) => ({ x: xOf(s.date), y: yBf!(s.bodyFatPct as number) })) : []
-	);
-
-	// Projection (dashed) from today → horizonEnd along each trend (absolute mode).
-	function projLine(t: Trend | null, y: ((v: number) => number) | null, lbScale: boolean) {
-		if (!t || !y || xmax <= today) return null;
-		const at = (d: string) => (lbScale ? trendLb(t, d) : trendAt(t, d));
-		return { x1: xOf(today), y1: y(at(today)), x2: xOf(xmax), y2: y(at(xmax)) };
-	}
-	let weightProj = $derived(projLine(weight, yM, true));
-	let leanProj = $derived(projLine(leanMass, yM, true));
-	let bfProj = $derived(projLine(bodyFat, yBf, false));
-
-	// ── RELATIVE mode: every series as % change off its in-window baseline ─────────
+	// ── RELATIVE view: every series as % change off its in-window baseline ─────────
 	// Baseline = first actual value within the window (native unit). pct = (v-b)/b*100.
+	// A straight regression line (trendAt(xmin)→trendAt(today)) is overlaid in the
+	// same % space, on top of the jagged actual line.
 	type RelSeries = {
 		key: SeriesModel['key'];
 		color: string;
 		baseline: number;
 		actualPts: { x: number; y: number }[]; // already in viewBox coords
 		actualPolyline: string;
-		proj: { x1: number; y1: number; x2: number; y2: number } | null;
+		trendLine: { x1: number; y1: number; x2: number; y2: number } | null; // regression overlay
 	};
 
 	let relDomain = $derived.by(() => {
-		if (mode !== 'relative') return null;
 		const vals: number[] = [0]; // always include the 0% baseline
 		for (const m of models) {
 			if (!m.actual.length) continue;
 			const b = m.actual[0].value;
 			if (!Number.isFinite(b) || b === 0) continue;
 			for (const p of m.actual) vals.push(((p.value - b) / b) * 100);
-			if (m.trend && xmax > today) {
+			if (m.trend) {
+				vals.push(((trendAt(m.trend, xmin) - b) / b) * 100);
 				vals.push(((trendAt(m.trend, today) - b) / b) * 100);
-				vals.push(((trendAt(m.trend, xmax) - b) / b) * 100);
 			}
 		}
-		if (vals.length <= 1) return null; // only the synthetic 0 → no real series
-		const lo = Math.min(...vals);
-		const hi = Math.max(...vals);
+		const finite = vals.filter((v) => Number.isFinite(v));
+		if (finite.length <= 1) return null; // only the synthetic 0 → no real series
+		const lo = Math.min(...finite);
+		const hi = Math.max(...finite);
 		const padPct = Math.max(0.5, (hi - lo) * 0.1);
 		return { lo: lo - padPct, hi: hi + padPct };
 	});
 	let yRel = $derived(relDomain ? makeYOf(relDomain.lo, relDomain.hi) : null);
 
 	let relSeries = $derived.by<RelSeries[]>(() => {
-		if (mode !== 'relative' || !yRel) return [];
+		if (!yRel) return [];
 		const out: RelSeries[] = [];
 		for (const m of models) {
 			if (!m.actual.length) continue;
@@ -269,14 +205,13 @@
 			if (!Number.isFinite(b) || b === 0) continue;
 			const pct = (v: number) => ((v - b) / b) * 100;
 			const actualPts = m.actual.map((p) => ({ x: xOfDayIndex(p.dayIndex), y: yRel!(pct(p.value)) }));
-			let proj: RelSeries['proj'] = null;
-			if (m.trend && xmax > today) {
-				proj = {
-					x1: xOf(today),
-					y1: yRel!(pct(trendAt(m.trend, today))),
-					x2: xOf(xmax),
-					y2: yRel!(pct(trendAt(m.trend, xmax)))
-				};
+			let trendLine: RelSeries['trendLine'] = null;
+			if (m.trend) {
+				const py0 = pct(trendAt(m.trend, xmin));
+				const py1 = pct(trendAt(m.trend, today));
+				if (Number.isFinite(py0) && Number.isFinite(py1)) {
+					trendLine = { x1: xOf(xmin), y1: yRel!(py0), x2: xOf(today), y2: yRel!(py1) };
+				}
 			}
 			out.push({
 				key: m.key,
@@ -284,7 +219,7 @@
 				baseline: b,
 				actualPts,
 				actualPolyline: actualPts.map((p) => `${p.x},${p.y}`).join(' '),
-				proj
+				trendLine
 			});
 		}
 		return out;
@@ -297,8 +232,6 @@
 		const step = (hi - lo) / n;
 		return Array.from({ length: n + 1 }, (_, i) => lo + step * i);
 	}
-	let massTicks = $derived(massDomain ? ticks(massDomain.lo, massDomain.hi) : []);
-	let bfTicks = $derived(bfDomain ? ticks(bfDomain.lo, bfDomain.hi) : []);
 	let relTicks = $derived(relDomain ? ticks(relDomain.lo, relDomain.hi) : []);
 
 	function fmtDate(d: string): string {
@@ -324,11 +257,7 @@
 		return out;
 	});
 
-	let todayX = $derived(xOf(today));
-
-	let hasAny = $derived(
-		mode === 'relative' ? relSeries.length > 0 : series.length > 0 && yM !== null
-	);
+	let hasAny = $derived(relSeries.length > 0);
 
 	// ════════════════════════════════════════════════════════════════════════════
 	// Interactive crosshair / tooltip (mouse + touch). Self-contained state.
@@ -360,8 +289,9 @@
 		if (d !== null) hoverDay = d;
 	}
 	function onPointerUp() {
+		// Releasing a touch (or mouse) hides the crosshair / hover key.
 		dragging = false;
-		// keep the crosshair visible after a tap; cleared on mouse leave
+		hoverDay = null;
 	}
 	function onPointerLeave(e: PointerEvent) {
 		if (e.pointerType === 'mouse') {
@@ -389,16 +319,11 @@
 		};
 	});
 
-	// y for a series value (native unit) in the active mode, or null if unplottable.
+	// y for a series value (native unit), or null if unplottable.
 	function yForSeriesValue(key: SeriesModel['key'], value: number): number | null {
-		if (mode === 'relative') {
-			const b = relBaselineByKey[key];
-			if (b == null || b === 0 || !yRel) return null;
-			return yRel(((value - b) / b) * 100);
-		}
-		const m = modelByKey[key];
-		if (m.isMass) return yM ? yM(lb(value)) : null;
-		return yBf ? yBf(value) : null;
+		const b = relBaselineByKey[key];
+		if (b == null || b === 0 || !yRel) return null;
+		return yRel(((value - b) / b) * 100);
 	}
 
 	// Crosshair-resolved rows for the tooltip + the on-line dots.
@@ -410,7 +335,7 @@
 		isMass: boolean;
 		y: number; // viewBox y at the snapped day
 		display: string; // e.g. "182.4 lb" / "21.3 %"
-		pctDelta: number | null; // relative-mode %Δ off baseline
+		pctDelta: number | null; // %Δ off baseline
 	};
 
 	let crosshair = $derived.by(() => {
@@ -420,32 +345,34 @@
 		const date = addDays(xmin, day);
 		const rows: CrosshairRow[] = [];
 		for (const m of models) {
-			// In relative mode, skip series that aren't plotted (no/zero baseline).
-			if (mode === 'relative' && relBaselineByKey[m.key] == null) continue;
+			// Skip series that aren't plotted (no/zero baseline).
+			if (relBaselineByKey[m.key] == null) continue;
 			const v = m.valueAt(day);
 			if (v == null || !Number.isFinite(v)) continue;
 			const y = yForSeriesValue(m.key, v);
 			if (y == null || !Number.isFinite(y)) continue;
 			const display = m.isMass ? `${lb(v).toFixed(1)} lb` : `${v.toFixed(1)} %`;
 			let pctDelta: number | null = null;
-			if (mode === 'relative') {
-				const b = relBaselineByKey[m.key];
-				if (b != null && b !== 0) pctDelta = ((v - b) / b) * 100;
-			}
+			const b = relBaselineByKey[m.key];
+			if (b != null && b !== 0) pctDelta = ((v - b) / b) * 100;
 			rows.push({ key: m.key, label: m.label, color: m.color, valueNative: v, isMass: m.isMass, y, display, pctDelta });
 		}
 		if (!rows.length) return null;
-		return { day, cx, date, projected: day > todayIndex, rows };
+		return { day, cx, date, rows };
 	});
 
-	// Tooltip box: position near the crosshair, flip to the left if near the right edge.
-	const TIP_W = 150;
-	let tipLeftPct = $derived.by(() => {
-		if (!crosshair) return 0;
-		const nearRight = crosshair.cx > x0 + plotW * 0.62;
-		const px = nearRight ? crosshair.cx - TIP_W - 8 : crosshair.cx + 8;
-		const clamped = Math.max(x0, Math.min(W - TIP_W - 2, px));
-		return (clamped / W) * 100;
+	// Tooltip box: sized to fit the longest row; clamped fully inside the plot,
+	// horizontally and vertically. Flips left/up near the right/bottom edge.
+	const TIP_W = 168;
+	const TIP_M = 6; // px margin from the rendered chart edges
+	// Position with CSS clamp()+calc() so the browser clamps in RENDERED pixels.
+	// The box is sized in px but the crosshair x is a % of the (scaled) width, so
+	// a viewBox-unit clamp would still overflow once the SVG shrinks on mobile.
+	let tipLeftCss = $derived.by(() => {
+		if (!crosshair) return '0px';
+		const cxPct = (crosshair.cx / W) * 100;
+		const anchor = cxPct > 55 ? `calc(${cxPct}% - ${TIP_W + 8}px)` : `calc(${cxPct}% + 8px)`;
+		return `clamp(${TIP_M}px, ${anchor}, calc(100% - ${TIP_W + TIP_M}px))`;
 	});
 </script>
 
@@ -455,104 +382,49 @@
 		viewBox="0 0 {W} {H}"
 		style="width: 100%; height: auto; display: block; touch-action: pan-y;"
 		role="img"
-		aria-label="Weight, lean mass, and body-fat trend chart"
+		aria-label="Weight, lean mass, and body-fat trend chart (% change)"
 	>
-		{#if mode === 'relative'}
-			<!-- ── RELATIVE MODE ───────────────────────────────────────────────── -->
-			<!-- gridlines (% change ticks) -->
-			{#if yRel}
-				{#each relTicks as t (t)}
-					<line x1={x0} y1={yRel(t)} x2={x1} y2={yRel(t)} stroke="rgba(255,255,255,0.05)" />
-					<text x={x0 - 6} y={yRel(t) + 3} text-anchor="end" font-size="10" fill={SUBTLE}>
-						{t > 0 ? '+' : ''}{t.toFixed(0)}%
-					</text>
-				{/each}
-			{/if}
-
-			<!-- 0% reference line (subtle, solid) -->
-			{#if yRel}
-				<line x1={x0} y1={yRel(0)} x2={x1} y2={yRel(0)} stroke="rgba(255,255,255,0.18)" stroke-width="1" />
-			{/if}
-
-			<!-- today divider -->
-			{#if hasAny}
-				<line x1={todayX} y1={y0} x2={todayX} y2={y1} stroke={SUBTLE} stroke-width="1" stroke-dasharray="3 3" />
-				<text x={todayX} y={y0 - 4} text-anchor="middle" font-size="10" fill={SUBTLE}>today</text>
-			{/if}
-
-			<!-- each relative series: actual polyline + dots + dashed projection -->
-			{#each relSeries as rs (rs.key)}
-				<polyline points={rs.actualPolyline} fill="none" stroke={rs.color} stroke-width={rs.key === 'weight' ? 2.5 : 2} />
-				{#each rs.actualPts as p (p.x + ':' + p.y)}
-					<circle cx={p.x} cy={p.y} r={rs.key === 'weight' ? 3 : 2.5} fill={rs.color} />
-				{/each}
-				{#if rs.proj}
-					<line x1={rs.proj.x1} y1={rs.proj.y1} x2={rs.proj.x2} y2={rs.proj.y2} stroke={rs.color} stroke-width={rs.key === 'weight' ? 2.5 : 2} stroke-dasharray="6 4" opacity="0.9" />
-				{/if}
+		<!-- gridlines (% change ticks) -->
+		{#if yRel}
+			{#each relTicks as t (t)}
+				<line x1={x0} y1={yRel(t)} x2={x1} y2={yRel(t)} stroke="rgba(255,255,255,0.05)" />
+				<text x={x0 - 6} y={yRel(t) + 3} text-anchor="end" font-size="10" fill={SUBTLE}>
+					{t > 0 ? '+' : ''}{t.toFixed(0)}%
+				</text>
 			{/each}
-		{:else}
-			<!-- ── ABSOLUTE MODE ───────────────────────────────────────────────── -->
-			<!-- gridlines (mass ticks, lb) -->
-			{#if yM}
-				{#each massTicks as t (t)}
-					<line x1={x0} y1={yM(t)} x2={x1} y2={yM(t)} stroke="rgba(255,255,255,0.05)" />
-					<text x={x0 - 6} y={yM(t) + 3} text-anchor="end" font-size="10" fill={SUBTLE}>{t.toFixed(0)}</text>
-				{/each}
-			{/if}
-
-			<!-- right axis (body fat %) labels -->
-			{#if yBf}
-				{#each bfTicks as t (t)}
-					<text x={x1 + 6} y={yBf(t) + 3} text-anchor="start" font-size="10" fill={BF_COLOR}>{t.toFixed(0)}</text>
-				{/each}
-			{/if}
-
-			<!-- today divider -->
-			{#if hasAny}
-				<line x1={todayX} y1={y0} x2={todayX} y2={y1} stroke={SUBTLE} stroke-width="1" stroke-dasharray="3 3" />
-				<text x={todayX} y={y0 - 4} text-anchor="middle" font-size="10" fill={SUBTLE}>today</text>
-			{/if}
-
-			<!-- body fat: actual + projection (under the mass lines) -->
-			{#if yBf && bfActual}
-				<polyline points={bfActual} fill="none" stroke={BF_COLOR} stroke-width="2" />
-				{#each bfPoints as p (p.x + ':' + p.y)}
-					<circle cx={p.x} cy={p.y} r="2.5" fill={BF_COLOR} />
-				{/each}
-			{/if}
-			{#if bfProj}
-				<line x1={bfProj.x1} y1={bfProj.y1} x2={bfProj.x2} y2={bfProj.y2} stroke={BF_COLOR} stroke-width="2" stroke-dasharray="5 4" opacity="0.9" />
-			{/if}
-
-			<!-- lean mass: actual + projection -->
-			{#if yM && leanActual}
-				<polyline points={leanActual} fill="none" stroke={LEAN_COLOR} stroke-width="2" />
-				{#each leanPoints as p (p.x + ':' + p.y)}
-					<circle cx={p.x} cy={p.y} r="2.5" fill={LEAN_COLOR} />
-				{/each}
-			{/if}
-			{#if leanProj}
-				<line x1={leanProj.x1} y1={leanProj.y1} x2={leanProj.x2} y2={leanProj.y2} stroke={LEAN_COLOR} stroke-width="2" stroke-dasharray="5 4" opacity="0.9" />
-			{/if}
-
-			<!-- weight: actual + projection (on top) -->
-			{#if yM && weightActual}
-				<polyline points={weightActual} fill="none" stroke={WEIGHT_COLOR} stroke-width="2.5" />
-				{#each weightPoints as p (p.x + ':' + p.y)}
-					<circle cx={p.x} cy={p.y} r="3" fill={WEIGHT_COLOR} />
-				{/each}
-			{/if}
-			{#if weightProj}
-				<line x1={weightProj.x1} y1={weightProj.y1} x2={weightProj.x2} y2={weightProj.y2} stroke={WEIGHT_COLOR} stroke-width="2.5" stroke-dasharray="6 4" />
-			{/if}
 		{/if}
 
-		<!-- x axis labels (both modes) -->
+		<!-- 0% reference line (subtle, solid) -->
+		{#if yRel}
+			<line x1={x0} y1={yRel(0)} x2={x1} y2={yRel(0)} stroke="rgba(255,255,255,0.18)" stroke-width="1" />
+		{/if}
+
+		<!-- each series: actual polyline + dots, then the straight regression overlay -->
+		{#each relSeries as rs (rs.key)}
+			<polyline points={rs.actualPolyline} fill="none" stroke={rs.color} stroke-width={rs.key === 'weight' ? 2.5 : 2} />
+			{#each rs.actualPts as p (p.x + ':' + p.y)}
+				<circle cx={p.x} cy={p.y} r={rs.key === 'weight' ? 3 : 2.5} fill={rs.color} />
+			{/each}
+			{#if rs.trendLine}
+				<line
+					x1={rs.trendLine.x1}
+					y1={rs.trendLine.y1}
+					x2={rs.trendLine.x2}
+					y2={rs.trendLine.y2}
+					stroke={rs.color}
+					stroke-width="1.5"
+					stroke-dasharray="5 4"
+					opacity="0.7"
+				/>
+			{/if}
+		{/each}
+
+		<!-- x axis labels -->
 		{#each xLabels as l (l.label)}
 			<text x={l.x} y={y1 + 16} text-anchor="middle" font-size="10" fill={SUBTLE}>{l.label}</text>
 		{/each}
 
-		<!-- ── Crosshair (both modes) ─────────────────────────────────────────── -->
+		<!-- ── Crosshair ──────────────────────────────────────────────────────── -->
 		{#if crosshair}
 			<line x1={crosshair.cx} y1={y0} x2={crosshair.cx} y2={y1} stroke="rgba(255,255,255,0.5)" stroke-width="1" />
 			{#each crosshair.rows as row (row.key)}
@@ -561,22 +433,23 @@
 		{/if}
 	</svg>
 
-	<!-- Tooltip (HTML overlay, both modes) -->
+	<!-- Tooltip (HTML overlay) -->
 	{#if crosshair}
 		<div
-			style="position: absolute; top: 6px; left: {tipLeftPct}%; width: {TIP_W}px; pointer-events: none;
+			style="position: absolute; top: {TIP_M}px; left: {tipLeftCss}; width: {TIP_W}px; pointer-events: none;
 				background: rgba(12,12,16,0.94); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px;
-				padding: 7px 9px; font-size: 11px; color: var(--color-text-muted); box-shadow: 0 4px 16px rgba(0,0,0,0.4);"
+				padding: 7px 9px; font-size: 11px; color: var(--color-text-muted); box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+				box-sizing: border-box;"
 		>
 			<div style="font-weight: 600; color: #e4e4e7; margin-bottom: 5px;">
-				{fmtDateLong(crosshair.date)}{#if crosshair.projected}<span style="color: {SUBTLE}; font-weight: 400;"> · projected</span>{/if}
+				{fmtDateLong(crosshair.date)}
 			</div>
 			{#each crosshair.rows as row (row.key)}
 				<div style="display: flex; align-items: center; gap: 6px; margin-top: 2px;">
 					<span style="width: 9px; height: 9px; border-radius: 2px; background: {row.color}; flex: none;"></span>
 					<span style="flex: 1; white-space: nowrap;">{row.label}</span>
 					<span style="color: #e4e4e7; font-variant-numeric: tabular-nums; white-space: nowrap;">
-						{row.display}{#if mode === 'relative' && row.pctDelta != null}<span style="color: {SUBTLE};"> ({row.pctDelta >= 0 ? '+' : ''}{row.pctDelta.toFixed(1)}%)</span>{/if}
+						{row.display}{#if row.pctDelta != null}<span style="color: {SUBTLE};"> ({row.pctDelta >= 0 ? '+' : ''}{row.pctDelta.toFixed(1)}%)</span>{/if}
 					</span>
 				</div>
 			{/each}
@@ -585,38 +458,15 @@
 
 	<!-- legend -->
 	<div style="display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; margin-top: 6px; font-size: 11px; color: var(--color-text-muted);">
-		{#if mode === 'relative'}
-			{#each relSeries as rs (rs.key)}
-				<span style="display: inline-flex; align-items: center; gap: 5px;">
-					<span style="width: 16px; height: 0; border-top: {rs.key === 'weight' ? '2.5px' : '2px'} solid {rs.color};"></span>
-					{modelByKey[rs.key].label}
-				</span>
-			{/each}
+		{#each relSeries as rs (rs.key)}
 			<span style="display: inline-flex; align-items: center; gap: 5px;">
-				<span style="width: 16px; height: 0; border-top: 2.5px dashed {SUBTLE};"></span>
-				Projected
+				<span style="width: 16px; height: 0; border-top: {rs.key === 'weight' ? '2.5px' : '2px'} solid {rs.color};"></span>
+				{modelByKey[rs.key].label}
 			</span>
-		{:else}
-			<span style="display: inline-flex; align-items: center; gap: 5px;">
-				<span style="width: 16px; height: 0; border-top: 2.5px solid {WEIGHT_COLOR};"></span>
-				Weight (lb)
-			</span>
-			{#if leanActual || leanProj}
-				<span style="display: inline-flex; align-items: center; gap: 5px;">
-					<span style="width: 16px; height: 0; border-top: 2px solid {LEAN_COLOR};"></span>
-					Lean mass (lb)
-				</span>
-			{/if}
-			{#if bfActual || bfProj}
-				<span style="display: inline-flex; align-items: center; gap: 5px;">
-					<span style="width: 16px; height: 0; border-top: 2px solid {BF_COLOR};"></span>
-					Body fat %
-				</span>
-			{/if}
-			<span style="display: inline-flex; align-items: center; gap: 5px;">
-				<span style="width: 16px; height: 0; border-top: 2.5px dashed {SUBTLE};"></span>
-				Projected
-			</span>
-		{/if}
+		{/each}
+		<span style="display: inline-flex; align-items: center; gap: 5px;">
+			<span style="width: 16px; height: 0; border-top: 1.5px dashed {SUBTLE};"></span>
+			Trend
+		</span>
 	</div>
 </div>

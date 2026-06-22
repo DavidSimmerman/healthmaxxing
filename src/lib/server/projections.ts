@@ -278,6 +278,20 @@ export type EnergyInsights = {
 		verdict: 'on-track' | 'slower' | 'faster' | 'gaining' | 'surplus' | 'unknown';
 	};
 	methods: MethodProjection[];
+	currentDeficitKcal: number | null; // calibratedTDEE − avg intake (your real current deficit)
+	whatIf: WhatIf | null; // "what if my deficit were X?" scenario
+};
+
+// A hypothetical-deficit scenario: hold a chosen daily deficit and project the
+// loss rate + time to the saved goal(s) using calibrated maintenance.
+export type WhatIf = {
+	deficitKcal: number;
+	plannedIntakeKcal: number;
+	ratePerWeekKg: number;
+	goalWeightEtaDays: number | null;
+	goalWeightEtaDate: string | null;
+	goalBodyFatEtaDays: number | null;
+	goalBodyFatEtaDate: string | null;
 };
 
 // Share of a weight CHANGE that comes from LEAN mass (the p-ratio). Leaner
@@ -288,6 +302,29 @@ function leanLossFraction(bodyFatPct: number, proteinAdequate: boolean): number 
 	p = Math.min(0.45, Math.max(0.05, p));
 	if (!proteinAdequate) p = Math.min(0.6, p * 1.5); // too little protein → more lean lost
 	return p;
+}
+
+// One day of energy-balance dynamics: maintenance decays with lost mass, the
+// day's change is split fat/lean by the p-ratio. Shared by every projection.
+type CompState = { weight: number; fat: number | null; lean: number | null };
+function stepBodyComp(
+	s: CompState,
+	w0: number,
+	tdee0: number,
+	plannedIntake: number,
+	proteinG: number | null
+): CompState {
+	const tdee = tdee0 - (w0 - s.weight) * TDEE_DROP_PER_KG; // less mass → less maintenance
+	const dW = -(tdee - plannedIntake) / RHO_KCAL_PER_KG; // kg/day, neg when in a deficit
+	if (s.fat != null && s.lean != null) {
+		const bf = s.weight > 0 ? (s.fat / s.weight) * 100 : 0;
+		const adequate = proteinG != null && s.weight > 0 && proteinG / s.weight >= PROTEIN_ADEQUATE_G_PER_KG;
+		const leanShare = leanLossFraction(bf, adequate);
+		const fat = Math.max(0, s.fat + dW * (1 - leanShare));
+		const lean = Math.max(0, s.lean + dW * leanShare);
+		return { weight: fat + lean, fat, lean };
+	}
+	return { weight: Math.max(0, s.weight + dW), fat: null, lean: null };
 }
 
 // Forward-simulate body comp day by day from `today` to the furthest requested
@@ -307,38 +344,75 @@ function forwardSim(opts: {
 	if (maxDay <= 0) return { rows: [], ratePerWeekKg };
 
 	const w0 = opts.weightKg;
-	let weight = opts.weightKg;
-	let fat = opts.bodyFatPct != null ? (weight * opts.bodyFatPct) / 100 : null;
-	let lean = fat != null ? weight - fat : null;
+	let state: CompState = {
+		weight: opts.weightKg,
+		fat: opts.bodyFatPct != null ? (opts.weightKg * opts.bodyFatPct) / 100 : null,
+		lean: null
+	};
+	state.lean = state.fat != null ? opts.weightKg - state.fat : null;
 	const recordOn = new Map(opts.dates.map((d) => [daysBetween(opts.today, d.date), d.label]));
 	const rows: Projection[] = [];
 
 	for (let day = 1; day <= maxDay; day++) {
-		const tdee = opts.tdee0 - (w0 - weight) * TDEE_DROP_PER_KG; // less mass → less maintenance
-		const dW = -(tdee - opts.plannedIntake) / RHO_KCAL_PER_KG; // kg/day, neg when in a deficit
-		if (fat != null && lean != null) {
-			const bf = weight > 0 ? (fat / weight) * 100 : 0;
-			const adequate = opts.proteinG != null && weight > 0 && opts.proteinG / weight >= PROTEIN_ADEQUATE_G_PER_KG;
-			const leanShare = leanLossFraction(bf, adequate);
-			fat = Math.max(0, fat + dW * (1 - leanShare));
-			lean = Math.max(0, lean + dW * leanShare);
-			weight = fat + lean;
-		} else {
-			weight = Math.max(0, weight + dW);
-		}
+		state = stepBodyComp(state, w0, opts.tdee0, opts.plannedIntake, opts.proteinG);
 		const label = recordOn.get(day);
 		if (label !== undefined) {
-			const bf = fat != null && weight > 0 ? (fat / weight) * 100 : null;
+			const bf = state.fat != null && state.weight > 0 ? (state.fat / state.weight) * 100 : null;
 			rows.push({
 				date: addDays(opts.today, day),
 				label,
-				weightKg: round1(weight),
+				weightKg: round1(state.weight),
 				bodyFatPct: round1(bf),
-				leanMassKg: round1(lean)
+				leanMassKg: round1(state.lean)
 			});
 		}
 	}
 	return { rows, ratePerWeekKg };
+}
+
+// Day-by-day forward simulation until the weight and/or body-fat goal is met;
+// returns days-to-goal (null if not reached within the cap). Loss slows as TDEE
+// adapts, so this is more honest than dividing the gap by the current rate.
+function simulateToGoals(opts: {
+	weightKg: number;
+	bodyFatPct: number | null;
+	tdee0: number;
+	plannedIntake: number;
+	proteinG: number | null;
+	goalWeightKg: number | null;
+	goalBodyFatPct: number | null;
+	maxDays?: number;
+}): { weightEtaDays: number | null; bodyFatEtaDays: number | null } {
+	const maxDays = opts.maxDays ?? 1825;
+	const w0 = opts.weightKg;
+	let state: CompState = {
+		weight: opts.weightKg,
+		fat: opts.bodyFatPct != null ? (opts.weightKg * opts.bodyFatPct) / 100 : null,
+		lean: null
+	};
+	state.lean = state.fat != null ? opts.weightKg - state.fat : null;
+	const bfOf = (s: CompState) => (s.fat != null && s.weight > 0 ? (s.fat / s.weight) * 100 : null);
+
+	// Direction-aware: a goal above the current value is reached by going UP
+	// (surplus), below by going DOWN. `reached` crosses in the right direction.
+	const bf0 = bfOf(state);
+	const wDown = opts.goalWeightKg == null || state.weight >= opts.goalWeightKg;
+	const bfDown = opts.goalBodyFatPct == null || bf0 == null || bf0 >= opts.goalBodyFatPct;
+	const wReached = (v: number) =>
+		opts.goalWeightKg != null && (wDown ? v <= opts.goalWeightKg : v >= opts.goalWeightKg);
+	const bfReached = (v: number | null) =>
+		opts.goalBodyFatPct != null && v != null && (bfDown ? v <= opts.goalBodyFatPct : v >= opts.goalBodyFatPct);
+
+	let weightEtaDays: number | null = wReached(state.weight) ? 0 : null;
+	let bodyFatEtaDays: number | null = bfReached(bf0) ? 0 : null;
+
+	for (let day = 1; day <= maxDays && (weightEtaDays === null || bodyFatEtaDays === null); day++) {
+		state = stepBodyComp(state, w0, opts.tdee0, opts.plannedIntake, opts.proteinG);
+		if (weightEtaDays === null && wReached(state.weight)) weightEtaDays = day;
+		const bf = bfOf(state);
+		if (bodyFatEtaDays === null && bfReached(bf)) bodyFatEtaDays = day;
+	}
+	return { weightEtaDays, bodyFatEtaDays };
 }
 
 /**
@@ -352,11 +426,13 @@ export async function energyInsights({
 		{ days: 60, label: '+2 months' },
 		{ days: 90, label: '+3 months' }
 	],
-	targetDate
+	targetDate,
+	whatIfDeficitKcal
 }: {
 	windowDays?: number;
 	horizons?: { days: number; label: string }[];
 	targetDate?: string;
+	whatIfDeficitKcal?: number;
 } = {}): Promise<EnergyInsights & { body: BodyInsights }> {
 	windowDays = Math.min(Math.max(1, Math.floor(Number(windowDays)) || 30), 1825);
 	const today = todayLabel();
@@ -459,6 +535,42 @@ export async function energyInsights({
 		});
 	}
 
+	// Your real current deficit (calibrated maintenance − what you actually eat).
+	const currentDeficitKcal =
+		calibratedTdee != null && avgIntakeKcal != null
+			? Math.round(calibratedTdee - avgIntakeKcal)
+			: null;
+
+	// "What if my deficit were X?" — hold a hypothetical deficit off calibrated
+	// maintenance and forward-simulate to the saved goal(s).
+	let whatIf: WhatIf | null = null;
+	const widParam =
+		whatIfDeficitKcal != null && Number.isFinite(whatIfDeficitKcal)
+			? Math.max(-3000, Math.min(3000, whatIfDeficitKcal))
+			: null;
+	const wid = widParam ?? currentDeficitKcal; // default the scenario to the current real deficit
+	if (wid != null && calibratedTdee != null && startWeight != null) {
+		const plannedIntake = Math.max(0, calibratedTdee - wid);
+		const etas = simulateToGoals({
+			weightKg: startWeight,
+			bodyFatPct: startBf,
+			tdee0: calibratedTdee,
+			plannedIntake,
+			proteinG: avgProteinG,
+			goalWeightKg: body.goal.weight?.goal ?? null,
+			goalBodyFatPct: body.goal.bodyFat?.goal ?? null
+		});
+		whatIf = {
+			deficitKcal: Math.round(wid),
+			plannedIntakeKcal: Math.round(plannedIntake),
+			ratePerWeekKg: (-(calibratedTdee - plannedIntake) / RHO_KCAL_PER_KG) * 7,
+			goalWeightEtaDays: etas.weightEtaDays,
+			goalWeightEtaDate: etas.weightEtaDays == null ? null : addDays(today, etas.weightEtaDays),
+			goalBodyFatEtaDays: etas.bodyFatEtaDays,
+			goalBodyFatEtaDate: etas.bodyFatEtaDays == null ? null : addDays(today, etas.bodyFatEtaDays)
+		};
+	}
+
 	return {
 		body,
 		windowDays,
@@ -472,6 +584,8 @@ export async function energyInsights({
 		measuredRatePerWeekKg,
 		expectedRatePerWeekKg,
 		pace: { ratio, verdict },
-		methods
+		methods,
+		currentDeficitKcal,
+		whatIf
 	};
 }

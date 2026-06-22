@@ -4,6 +4,8 @@ import { dailyLog, foods, settings } from '$lib/server/db/schema';
 import { asc, eq } from 'drizzle-orm';
 import { requireApiToken } from '$lib/server/auth';
 import { loggedToday, todayLabel } from '$lib/server/day';
+import { deficitDays } from '$lib/server/deficit';
+import { fillBmrGaps } from '$lib/server/projections';
 
 export async function GET({ request }) {
 	requireApiToken(request);
@@ -26,9 +28,12 @@ export async function GET({ request }) {
 
 	const [s] = await db.select().from(settings).where(eq(settings.id, 1));
 
+	const [day] = fillBmrGaps(await deficitDays(todayLabel(), todayLabel()));
+
 	return json({
 		date: todayLabel(),
 		entries,
-		targets: s ?? null
+		targets: s ?? null,
+		burnedKcal: day?.burnedKcal ?? null
 	});
 }

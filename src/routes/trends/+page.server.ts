@@ -7,7 +7,7 @@ import { todayLabel } from '$lib/server/day';
 // Allowed lookback windows (days). Drives BOTH the chart range and the trend /
 // projection calculations, so projections reflect a recent diet rather than
 // months-old data. 9999 ≈ "all".
-const WINDOWS = [14, 30, 90, 180, 9999];
+const WINDOWS = [7, 14, 30, 90, 180, 9999];
 
 export async function load({ url }) {
 	const reqWindow = Number(url.searchParams.get('window'));
@@ -19,7 +19,15 @@ export async function load({ url }) {
 	const targetDate =
 		rawTarget && /^\d{4}-\d{2}-\d{2}$/.test(rawTarget) && rawTarget > today ? rawTarget : undefined;
 
-	const energy = await energyInsights({ windowDays, targetDate });
+	// Optional "what if my deficit were X kcal?" scenario. Note: get() returns null
+	// when absent and Number(null) === 0, so check presence explicitly.
+	const rawDef = url.searchParams.get('deficit');
+	const whatIfDeficitKcal =
+		rawDef !== null && rawDef.trim() !== '' && Number.isFinite(Number(rawDef))
+			? Math.max(-3000, Math.min(3000, Math.round(Number(rawDef))))
+			: undefined;
+
+	const energy = await energyInsights({ windowDays, targetDate, whatIfDeficitKcal });
 
 	const [s] = await db.select().from(settings).where(eq(settings.id, 1));
 	const goals = {
@@ -28,5 +36,12 @@ export async function load({ url }) {
 	};
 
 	// `insights` keeps the prior BodyInsights shape the page already renders.
-	return { insights: energy.body, energy, goals, windowDays, target: targetDate ?? null };
+	return {
+		insights: energy.body,
+		energy,
+		goals,
+		windowDays,
+		target: targetDate ?? null,
+		whatIfDeficit: whatIfDeficitKcal ?? null
+	};
 }

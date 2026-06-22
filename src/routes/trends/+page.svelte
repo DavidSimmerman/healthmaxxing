@@ -9,17 +9,16 @@
 	let energy = $derived(data.energy);
 	let series = $derived(insights.series);
 
-	// Chart display mode — "relative" compares rates (everything as % change from
-	// the window start); "absolute" shows lb / %. Default relative per request.
-	let chartMode = $state<'relative' | 'absolute'>('relative');
-
 	// Which projection method's table to show. Prefer the smart/calibrated one.
 	let method = $state<'trend' | 'deficit' | 'combined'>('combined');
 	let selectedMethod = $derived(
 		energy.methods.find((m) => m.method === method) ?? energy.methods[energy.methods.length - 1]
 	);
+	// Short tab labels so the segmented control fits on a phone.
+	const methodLabel: Record<string, string> = { trend: 'Trend', deficit: 'Deficit', combined: 'Smart' };
 
 	const WINDOWS = [
+		{ days: 7, label: '1W' },
 		{ days: 14, label: '2W' },
 		{ days: 30, label: '1M' },
 		{ days: 90, label: '3M' },
@@ -27,12 +26,19 @@
 		{ days: 9999, label: 'All' }
 	];
 
-	let lastProjectionDate = $derived(
-		insights.projections.length
-			? insights.projections.reduce((m, p) => (p.date > m ? p.date : m), insights.projections[0].date)
-			: addDays(insights.asOf, 90)
-	);
 	let tomorrow = $derived(addDays(insights.asOf, 1));
+
+	// What-if deficit explorer — prefill with the scenario being shown (defaults
+	// to the current real deficit server-side).
+	let whatIfInput = $state<number | ''>(energy.whatIf?.deficitKcal ?? energy.currentDeficitKcal ?? 500);
+	function applyWhatIf() {
+		if (whatIfInput === '' || !Number.isFinite(Number(whatIfInput))) return;
+		const p = new URLSearchParams();
+		p.set('window', String(data.windowDays));
+		if (data.target) p.set('target', data.target);
+		p.set('deficit', String(Math.round(Number(whatIfInput))));
+		goto(`/trends?${p}`);
+	}
 
 	// Goal form state — '' means cleared (→ null on save). Weight in lb; stored kg.
 	let goalWeightLb = $state<number | ''>(
@@ -134,17 +140,11 @@
 		</a>
 	</header>
 
-	<!-- Controls: lookback window + chart mode -->
-	<div class="mb-3 flex flex-wrap items-center justify-between gap-2">
-		<div class="seg" role="group" aria-label="Lookback window">
-			{#each WINDOWS as w (w.days)}
-				<button class="seg-btn" class:seg-on={data.windowDays === w.days} onclick={() => setWindow(w.days)}>{w.label}</button>
-			{/each}
-		</div>
-		<div class="seg" role="group" aria-label="Chart mode">
-			<button class="seg-btn" class:seg-on={chartMode === 'relative'} onclick={() => (chartMode = 'relative')}>Relative</button>
-			<button class="seg-btn" class:seg-on={chartMode === 'absolute'} onclick={() => (chartMode = 'absolute')}>Absolute</button>
-		</div>
+	<!-- Lookback window (drives chart range + trend/projection calc) -->
+	<div class="seg mb-3 flex w-full" role="group" aria-label="Lookback window">
+		{#each WINDOWS as w (w.days)}
+			<button class="seg-btn flex-1" class:seg-on={data.windowDays === w.days} onclick={() => setWindow(w.days)}>{w.label}</button>
+		{/each}
 	</div>
 
 	{#if series.length === 0}
@@ -154,10 +154,8 @@
 		</div>
 	{:else}
 		<section class="card p-4">
-			<WeightChart {series} weight={insights.weight} leanMass={insights.leanMass} bodyFat={insights.bodyFat} today={insights.asOf} horizonEnd={lastProjectionDate} mode={chartMode} />
-			{#if chartMode === 'relative'}
-				<p class="mt-1 text-center text-[11px]" style="color: var(--color-text-subtle);">% change since {fmtDate(series[0].date)} — compare how fast each line moves.</p>
-			{/if}
+			<WeightChart {series} weight={insights.weight} leanMass={insights.leanMass} bodyFat={insights.bodyFat} today={insights.asOf} />
+			<p class="mt-1 text-center text-[11px]" style="color: var(--color-text-subtle);">% change since {fmtDate(series[0].date)} — dashed = trend. Tap or hover for values.</p>
 		</section>
 
 		<!-- Current trend (kept) -->
@@ -189,7 +187,7 @@
 			<h2 class="mb-3 text-xs font-semibold tracking-widest uppercase" style="color: var(--color-text-subtle);">Projections</h2>
 			<div class="seg mb-3 flex w-full" role="group" aria-label="Projection method">
 				{#each energy.methods as m (m.method)}
-					<button class="seg-btn flex-1" class:seg-on={selectedMethod?.method === m.method} onclick={() => (method = m.method)}>{m.label}</button>
+					<button class="seg-btn flex-1" class:seg-on={selectedMethod?.method === m.method} onclick={() => (method = m.method)}>{methodLabel[m.method] ?? m.label}</button>
 				{/each}
 			</div>
 
@@ -221,6 +219,59 @@
 				<span class="text-xs font-medium" style="color: var(--color-text-subtle);">Project to a specific date</span>
 				<input type="date" min={tomorrow} value={data.target ?? ''} onchange={onTargetChange} class="card-sm w-full px-3 py-2 text-sm text-white" style="color-scheme: dark; background: var(--color-bg-elevated);" />
 			</label>
+		</section>
+
+		<!-- What-if deficit (NEW) -->
+		<section class="card mt-3 p-5">
+			<h2 class="mb-1 text-xs font-semibold tracking-widest uppercase" style="color: var(--color-text-subtle);">What if my deficit were…</h2>
+			<p class="mb-3 text-xs leading-relaxed" style="color: var(--color-text-subtle);">
+				{#if energy.currentDeficitKcal != null}
+					You're averaging a <b class="text-white">{energy.currentDeficitKcal >= 0 ? '−' : '+'}{Math.abs(energy.currentDeficitKcal).toLocaleString()}</b>
+					kcal/day {energy.currentDeficitKcal >= 0 ? 'deficit' : 'surplus'}. Try a different one:
+				{:else}
+					Log more days of food so we can calibrate your maintenance first.
+				{/if}
+			</p>
+			<div class="flex items-end gap-2">
+				<label class="flex flex-1 flex-col gap-1">
+					<span class="text-xs font-medium" style="color: var(--color-text-subtle);">Daily deficit (kcal)</span>
+					<input
+						type="number"
+						min="-2000"
+						max="3000"
+						step="50"
+						bind:value={whatIfInput}
+						onchange={applyWhatIf}
+						class="rounded-lg border bg-transparent px-3 py-2 text-white outline-none focus:border-orange-400"
+						style="border-color: var(--color-border);"
+					/>
+				</label>
+				<button onclick={applyWhatIf} class="rounded-lg px-4 py-2 text-sm font-semibold text-black" style="background: #fb923c;">Project</button>
+			</div>
+
+			{#if energy.whatIf}
+				<div class="trend-row mt-4"><span>Projected loss</span><b>{rateLb(energy.whatIf.ratePerWeekKg)}</b></div>
+				<div class="trend-row"><span>Means eating</span><b>{energy.whatIf.plannedIntakeKcal.toLocaleString()} kcal/day</b></div>
+				{#if insights.goal.weight}
+					<p class="mt-3 text-sm" style="color: var(--color-text-muted);">
+						{#if energy.whatIf.goalWeightEtaDate}
+							Reach <b class="text-white">{fmtLb(insights.goal.weight.goal)} lb</b> by
+							<b class="text-white">{fmtDate(energy.whatIf.goalWeightEtaDate)}</b> (~{energy.whatIf.goalWeightEtaDays} days).
+						{:else}
+							Won't reach your {fmtLb(insights.goal.weight.goal)} lb goal at this deficit.
+						{/if}
+					</p>
+				{/if}
+				{#if insights.goal.bodyFat && energy.whatIf.goalBodyFatEtaDate}
+					<p class="mt-1 text-sm" style="color: var(--color-text-muted);">
+						Hit <b class="text-white">{fmt(insights.goal.bodyFat.goal)}% body fat</b> by
+						<b class="text-white">{fmtDate(energy.whatIf.goalBodyFatEtaDate)}</b> (~{energy.whatIf.goalBodyFatEtaDays} days).
+					</p>
+				{/if}
+				{#if !insights.goal.weight && !insights.goal.bodyFat}
+					<p class="mt-3 text-xs" style="color: var(--color-text-subtle);">Set a goal below to see time-to-goal at this deficit.</p>
+				{/if}
+			{/if}
 		</section>
 	{/if}
 

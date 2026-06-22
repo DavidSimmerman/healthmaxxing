@@ -18,6 +18,7 @@ private struct TodayResponse: Decodable {
     }
     let entries: [Entry]
     let targets: Targets?
+    let burnedKcal: Double?
 }
 
 // Mirrors the app's fallback when no targets row is set.
@@ -26,7 +27,7 @@ private let defaultProteinTarget = 180.0
 
 private func fetchEntry() async -> MacrosEntry {
     guard let token = SyncConfig.apiToken else {
-        return MacrosEntry(date: Date(), calLeft: 0, proLeft: 0, state: .needsSetup)
+        return MacrosEntry(date: Date(), calLeft: 0, proLeft: 0, deficit: nil, state: .needsSetup)
     }
     var req = URLRequest(url: SyncConfig.serverURL.appending(path: "/api/today"))
     req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -35,20 +36,24 @@ private func fetchEntry() async -> MacrosEntry {
     do {
         let (data, resp) = try await URLSession.shared.data(for: req)
         guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            return MacrosEntry(date: Date(), calLeft: 0, proLeft: 0, state: .failed)
+            return MacrosEntry(date: Date(), calLeft: 0, proLeft: 0, deficit: nil, state: .failed)
         }
         let today = try JSONDecoder().decode(TodayResponse.self, from: data)
         let calTarget = today.targets?.calorieTarget ?? defaultCalorieTarget
         let proTarget = today.targets?.proteinTargetG ?? defaultProteinTarget
         let calSum = today.entries.reduce(0) { $0 + $1.calories }
         let proSum = today.entries.reduce(0) { $0 + $1.proteinG }
+        // If under goal, assume they'll eat up to the goal; if over, use actual intake.
+        let intakeForDeficit = max(calSum, calTarget)
+        let deficit: Int? = today.burnedKcal.map { Int(($0 - intakeForDeficit).rounded()) }
         return MacrosEntry(
             date: Date(),
             calLeft: Int((calTarget - calSum).rounded()),
             proLeft: Int((proTarget - proSum).rounded()),
+            deficit: deficit,
             state: .ok)
     } catch {
-        return MacrosEntry(date: Date(), calLeft: 0, proLeft: 0, state: .failed)
+        return MacrosEntry(date: Date(), calLeft: 0, proLeft: 0, deficit: nil, state: .failed)
     }
 }
 
@@ -59,12 +64,13 @@ struct MacrosEntry: TimelineEntry {
     let date: Date
     let calLeft: Int
     let proLeft: Int
+    let deficit: Int?
     let state: State
 }
 
 struct Provider: TimelineProvider {
     func placeholder(in context: Context) -> MacrosEntry {
-        MacrosEntry(date: Date(), calLeft: 1450, proLeft: 92, state: .ok)
+        MacrosEntry(date: Date(), calLeft: 1450, proLeft: 92, deficit: 540, state: .ok)
     }
 
     func getSnapshot(in context: Context, completion: @escaping (MacrosEntry) -> Void) {
@@ -92,6 +98,7 @@ struct MacrosWidgetEntryView: View {
     private let calorie = Color(hex: 0xFB923C)
     private let protein = Color(hex: 0xFDA4AF)
     private let over = Color(hex: 0xFB7185)
+    private let deficitColor = Color(hex: 0x4ADE80)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -109,8 +116,11 @@ struct MacrosWidgetEntryView: View {
                     .font(.system(size: 13))
                     .foregroundStyle(over)
             case .ok:
-                metric(value: entry.calLeft, unit: "kcal", color: calorie, size: 30)
-                metric(value: entry.proLeft, unit: "protein", color: protein, size: 22)
+                metric(value: entry.calLeft, unit: "kcal", color: calorie, size: 28)
+                metric(value: entry.proLeft, unit: "protein", color: protein, size: 20)
+                if let deficit = entry.deficit {
+                    deficitLine(deficit)
+                }
             }
 
             Spacer(minLength: 0)
@@ -128,6 +138,20 @@ struct MacrosWidgetEntryView: View {
                 .font(.system(size: size, weight: .bold))
                 .foregroundStyle(isOver ? over : color)
             Text(isOver ? "\(unit) over" : "\(unit) left")
+                .font(.system(size: 11))
+                .foregroundStyle(subtle)
+        }
+    }
+
+    // Today's energy burn vs. intake. Positive = deficit (cutting), negative = surplus.
+    @ViewBuilder
+    private func deficitLine(_ deficit: Int) -> some View {
+        let isSurplus = deficit < 0
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Text(isSurplus ? "▲ \(-deficit)" : "▼ \(deficit)")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(isSurplus ? over : deficitColor)
+            Text(isSurplus ? "surplus" : "deficit")
                 .font(.system(size: 11))
                 .foregroundStyle(subtle)
         }
