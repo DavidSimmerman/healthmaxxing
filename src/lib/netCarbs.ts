@@ -135,25 +135,37 @@ export function bolusableCarbsPerServing(
 	return { bolusableCarbsG: r.bolusableCarbsG, lowConfidence: r.lowConfidence };
 }
 
-// Bolusable carbs for an ALREADY-LOGGED entry. The entry's total carbs are
-// snapshotted at log time (daily_log caches macros so editing a food never rewrites
-// history), so we derive from that snapshot total minus the food's CURRENT
-// per-serving fiber/sugar-alcohol scaled to the portion. This guarantees
-// bolusable ≤ total and stays coherent with the "total carbs" the entry displays.
-// (For recipes under the nonlinear half_over_5 mode this is a flat approximation of
-// the ingredient-level per-serving figure; identical under the default 'full' mode.)
+// Bolusable carbs for an ALREADY-LOGGED entry. `totalCarbsG` is the entry's
+// snapshot total carbs (daily_log caches macros so editing a food never rewrites
+// history); `food` carries the food's CURRENT components (read live, like every
+// other nutrient). Recipes use the same ingredient-level per-serving derivation as
+// the pre-log card (correct under the nonlinear half_over_5 rule, and identical to
+// what the meal-review preview showed) scaled by servings; simple foods derive from
+// the snapshot total minus per-serving fiber/sugar-alcohol scaled to the portion.
+// Either way the result is capped at the snapshot total, so bolusable ≤ total and it
+// stays coherent with the displayed "total carbs".
 export function bolusableForLoggedEntry(
 	totalCarbsG: number,
-	perServingNutrients: Partial<Nutrients> | null | undefined,
+	food: FoodLike,
 	servings: number,
 	opts: NetCarbOpts
 ): { bolusableCarbsG: number; lowConfidence: boolean } {
 	const s = typeof servings === 'number' && servings > 0 ? servings : 1;
-	const fiberG = perServingNutrients?.fiberG;
-	const sugarAlcoholG = perServingNutrients?.sugarAlcoholG;
+	const cap = Math.max(0, num(totalCarbsG));
+
+	if (food.ingredients && food.ingredients.length > 0 && (food.makesServings ?? 0) > 0) {
+		const per = bolusableCarbsPerServing(food, opts);
+		return {
+			bolusableCarbsG: Math.min(per.bolusableCarbsG * s, cap),
+			lowConfidence: per.lowConfidence
+		};
+	}
+
+	const fiberG = food.nutrients?.fiberG;
+	const sugarAlcoholG = food.nutrients?.sugarAlcoholG;
 	const r = netCarbs(
 		{
-			carbsG: totalCarbsG,
+			carbsG: cap,
 			fiberG: fiberG == null ? fiberG : fiberG * s,
 			sugarAlcoholG: sugarAlcoholG == null ? sugarAlcoholG : sugarAlcoholG * s
 		},

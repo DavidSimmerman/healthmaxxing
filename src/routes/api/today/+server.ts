@@ -22,7 +22,9 @@ export async function GET({ request }) {
 			carbsG: dailyLog.carbsG,
 			fatG: dailyLog.fatG,
 			foodName: foods.name,
-			foodNutrients: foods.nutrients
+			foodNutrients: foods.nutrients,
+			foodIngredients: foods.ingredients,
+			foodMakesServings: foods.makesServings
 		})
 		.from(dailyLog)
 		.innerJoin(foods, eq(dailyLog.foodId, foods.id))
@@ -30,8 +32,13 @@ export async function GET({ request }) {
 		.orderBy(asc(dailyLog.loggedAt));
 
 	const fiberMode = await getFiberMode();
-	const entries = rawEntries.map(({ foodNutrients, ...e }) => {
-		const b = bolusableForLoggedEntry(e.carbsG, foodNutrients, e.servings ?? 1, { fiberMode });
+	const entries = rawEntries.map(({ foodNutrients, foodIngredients, foodMakesServings, ...e }) => {
+		const b = bolusableForLoggedEntry(
+			e.carbsG,
+			{ nutrients: foodNutrients, ingredients: foodIngredients, makesServings: foodMakesServings },
+			e.servings ?? 1,
+			{ fiberMode }
+		);
 		return { ...e, bolusableCarbsG: b.bolusableCarbsG, bolusableLowConfidence: b.lowConfidence };
 	});
 

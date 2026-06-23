@@ -45,7 +45,18 @@ Do NOT discard `stash@{0}`. It touches schema.ts, mcp/+server.ts, drizzle/0012*,
       also recorded. Impact is tiny (a ~0-carb dessert; the per-ingredient max(0,…) clamp makes
       bolusable ≈ 0, never negative), but David should eyeball that recipe's ingredients. The
       other two Creami recipes (Vanilla 4.5, Butterscotch 9.0) are fine.
-- [ ] Verify (tests green, Playwright flow, codex review --uncommitted)
+- [x] Verify: unit checks GREEN (`npx tsx src/lib/netCarbs.check.ts`), `pnpm check` 0 errors,
+      Playwright drove the full multi-log flow + screenshots (/tmp/hm-shots), live API math
+      confirmed in both fiber modes.
+- [x] Adversarial review: **codex was QUOTA-BLOCKED** tonight (OpenAI usage limit, resets ~7:17am
+      — re-run `codex review --base feat/mcp-back-correct` later). Substituted an independent
+      review subagent that ran the checks + svelte-check and found ONE substantive issue:
+      recipe + half_over_5 made the pre-log preview (ingredient-level) and the logged history
+      (flat) diverge, in the less-safe direction. **FIXED**: `bolusableForLoggedEntry` is now
+      recipe-aware (ingredient-level × servings, capped at snapshot total) — preview and history
+      now agree (verified live: both read 33 under half_over_5 for the test burrito). Other note:
+      a network-throw double-log window in /api/log is PRE-EXISTING (same as the old single-item
+      path), not a regression; safe fix would be a client idempotency token (out of scope).
 - [ ] Final commit + wake-up message
 
 ## Decisions (autonomous)

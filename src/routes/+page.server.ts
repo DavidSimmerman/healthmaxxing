@@ -28,7 +28,9 @@ export async function load() {
 			foodProteinG: foods.proteinG,
 			foodCarbsG: foods.carbsG,
 			foodFatG: foods.fatG,
-			foodNutrients: foods.nutrients
+			foodNutrients: foods.nutrients,
+			foodIngredients: foods.ingredients,
+			foodMakesServings: foods.makesServings
 		})
 		.from(dailyLog)
 		.innerJoin(foods, eq(dailyLog.foodId, foods.id))
@@ -36,7 +38,16 @@ export async function load() {
 		.orderBy(asc(dailyLog.loggedAt));
 
 	const todayEntries = rawEntries.map((e) => {
-		const b = bolusableForLoggedEntry(e.carbsG, e.foodNutrients, e.servings ?? 1, { fiberMode });
+		const b = bolusableForLoggedEntry(
+			e.carbsG,
+			{
+				nutrients: e.foodNutrients,
+				ingredients: e.foodIngredients,
+				makesServings: e.foodMakesServings
+			},
+			e.servings ?? 1,
+			{ fiberMode }
+		);
 		return { ...e, bolusableCarbsG: b.bolusableCarbsG, bolusableLowConfidence: b.lowConfidence };
 	});
 

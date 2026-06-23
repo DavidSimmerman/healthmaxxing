@@ -146,24 +146,44 @@ close(fiberAdjustment(5, 'full'), 5);
 	close(r.bolusableCarbsG, 4);
 }
 
-// Logged-entry helper: scales per-serving fiber by servings, derives from snapshot total.
+// Logged-entry helper (simple food): scales per-serving fiber by servings, derives
+// from snapshot total. 2nd arg is the food object (nutrients live on food.nutrients).
 {
 	// 2 servings of the tortilla: total carbs 64 (snapshot), fiber 28/serving → 56 subtracted.
-	const r = bolusableForLoggedEntry(64, { fiberG: 28 }, 2, { fiberMode: 'full' });
+	const r = bolusableForLoggedEntry(64, { nutrients: { fiberG: 28 } }, 2, { fiberMode: 'full' });
 	close(r.bolusableCarbsG, 8);
 	assert.equal(r.lowConfidence, false);
 }
 {
 	// Missing fiber on a carby entry → net == total, lowConfidence.
-	const r = bolusableForLoggedEntry(40, null, 1, { fiberMode: 'full' });
+	const r = bolusableForLoggedEntry(40, { nutrients: null }, 1, { fiberMode: 'full' });
 	close(r.bolusableCarbsG, 40);
 	assert.equal(r.lowConfidence, true);
 }
 {
 	// Never exceeds the snapshot total (fiber can't push it up).
-	const r = bolusableForLoggedEntry(10, { fiberG: 0 }, 1, { fiberMode: 'full' });
+	const r = bolusableForLoggedEntry(10, { nutrients: { fiberG: 0 } }, 1, { fiberMode: 'full' });
 	close(r.bolusableCarbsG, 10);
 	assert.equal(r.lowConfidence, false);
+}
+
+// Logged-entry helper (recipe): uses ingredient-level rollup × servings — matches the
+// pre-log card exactly, so the meal-review preview and the logged history agree even
+// under half_over_5. Per-serving net (full) = (32+16)/2 = 24.
+{
+	const recipeFood = {
+		carbsG: 40,
+		makesServings: 2,
+		ingredients: [
+			{ carbsG: 60, nutrients: { fiberG: 28 } },
+			{ carbsG: 20, nutrients: { fiberG: 4 } }
+		]
+	};
+	const r = bolusableForLoggedEntry(80, recipeFood, 2, { fiberMode: 'full' });
+	close(r.bolusableCarbsG, 48); // 24/serving × 2 servings
+	// Cap at the snapshot total if the food was edited UP after logging.
+	const capped = bolusableForLoggedEntry(10, recipeFood, 2, { fiberMode: 'full' });
+	close(capped.bolusableCarbsG, 10);
 }
 
 console.log('netCarbs.check.ts OK');

@@ -53,7 +53,7 @@ export async function POST({ request }) {
 		})
 		.returning();
 
-	const b = bolusableForLoggedEntry(entry.carbsG, food.nutrients, servings, {
+	const b = bolusableForLoggedEntry(entry.carbsG, food, servings, {
 		fiberMode: await getFiberMode()
 	});
 	return json({

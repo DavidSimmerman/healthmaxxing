@@ -26,9 +26,7 @@ export async function POST({ request }) {
 		const fiberMode = await getFiberMode();
 		const perServing = bolusableCarbsPerServing(food, { fiberMode });
 		const entryBolus = logEntry
-			? bolusableForLoggedEntry(logEntry.carbsG, food.nutrients, logEntry.servings ?? 1, {
-					fiberMode
-				})
+			? bolusableForLoggedEntry(logEntry.carbsG, food, logEntry.servings ?? 1, { fiberMode })
 			: null;
 		return json({
 			food: {

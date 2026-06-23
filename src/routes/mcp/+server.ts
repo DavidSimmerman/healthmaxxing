@@ -292,7 +292,7 @@ async function callLogFood(id: Id, args: Record<string, unknown>) {
 		const day = logEntry ? todayLabel(logEntry.loggedAt) : todayLabel();
 		const dayLabel = day === todayLabel() ? 'today' : day;
 		const entryBolus = logEntry
-			? bolusableForLoggedEntry(logEntry.carbsG, food.nutrients, servings, { fiberMode })
+			? bolusableForLoggedEntry(logEntry.carbsG, food, servings, { fiberMode })
 			: null;
 		const perServingBolus = bolusableCarbsPerServing(food, { fiberMode });
 		const carbsBit = (total: number, bolus: number, lowConf: boolean) =>

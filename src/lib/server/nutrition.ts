@@ -64,7 +64,8 @@ export async function nutritionReport(from: string, to: string): Promise<Nutriti
 				carbsG: dailyLog.carbsG,
 				fatG: dailyLog.fatG,
 				nutrients: foods.nutrients,
-				ingredients: foods.ingredients
+				ingredients: foods.ingredients,
+				makesServings: foods.makesServings
 			})
 			.from(dailyLog)
 			.innerJoin(foods, eq(dailyLog.foodId, foods.id))
@@ -93,9 +94,12 @@ export async function nutritionReport(from: string, to: string): Promise<Nutriti
 		calories += e.calories ?? 0;
 		proteinG += e.proteinG ?? 0;
 		carbsG += e.carbsG ?? 0;
-		bolusableCarbsG += bolusableForLoggedEntry(e.carbsG ?? 0, e.nutrients, e.servings ?? 1, {
-			fiberMode
-		}).bolusableCarbsG;
+		bolusableCarbsG += bolusableForLoggedEntry(
+			e.carbsG ?? 0,
+			{ nutrients: e.nutrients, ingredients: e.ingredients, makesServings: e.makesServings },
+			e.servings ?? 1,
+			{ fiberMode }
+		).bolusableCarbsG;
 		fatG += e.fatG ?? 0;
 		loggedDates.add(e.date);
 		// foods.nutrients is per-serving — scale by the entry's servings.
@@ -184,14 +188,21 @@ export async function logEntries(from: string, to: string): Promise<LoggedEntry[
 			proteinG: dailyLog.proteinG,
 			carbsG: dailyLog.carbsG,
 			fatG: dailyLog.fatG,
-			nutrients: foods.nutrients
+			nutrients: foods.nutrients,
+			ingredients: foods.ingredients,
+			makesServings: foods.makesServings
 		})
 		.from(dailyLog)
 		.innerJoin(foods, eq(dailyLog.foodId, foods.id))
 		.where(sql`${logDate} between ${from}::date and ${to}::date`)
 		.orderBy(logDate);
 	return rows.map((r) => {
-		const b = bolusableForLoggedEntry(r.carbsG ?? 0, r.nutrients, r.servings ?? 1, { fiberMode });
+		const b = bolusableForLoggedEntry(
+			r.carbsG ?? 0,
+			{ nutrients: r.nutrients, ingredients: r.ingredients, makesServings: r.makesServings },
+			r.servings ?? 1,
+			{ fiberMode }
+		);
 		return {
 			date: r.date,
 			logId: r.logId,
