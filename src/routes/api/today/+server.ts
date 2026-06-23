@@ -6,11 +6,13 @@ import { requireApiToken } from '$lib/server/auth';
 import { loggedToday, todayLabel } from '$lib/server/day';
 import { deficitDays } from '$lib/server/deficit';
 import { fillBmrGaps } from '$lib/server/projections';
+import { bolusableForLoggedEntry } from '$lib/netCarbs';
+import { getFiberMode } from '$lib/server/prefs';
 
 export async function GET({ request }) {
 	requireApiToken(request);
 
-	const entries = await db
+	const rawEntries = await db
 		.select({
 			id: dailyLog.id,
 			loggedAt: dailyLog.loggedAt,
@@ -19,12 +21,26 @@ export async function GET({ request }) {
 			proteinG: dailyLog.proteinG,
 			carbsG: dailyLog.carbsG,
 			fatG: dailyLog.fatG,
-			foodName: foods.name
+			foodName: foods.name,
+			foodNutrients: foods.nutrients,
+			foodIngredients: foods.ingredients,
+			foodMakesServings: foods.makesServings
 		})
 		.from(dailyLog)
 		.innerJoin(foods, eq(dailyLog.foodId, foods.id))
 		.where(loggedToday())
 		.orderBy(asc(dailyLog.loggedAt));
+
+	const fiberMode = await getFiberMode();
+	const entries = rawEntries.map(({ foodNutrients, foodIngredients, foodMakesServings, ...e }) => {
+		const b = bolusableForLoggedEntry(
+			e.carbsG,
+			{ nutrients: foodNutrients, ingredients: foodIngredients, makesServings: foodMakesServings },
+			e.servings ?? 1,
+			{ fiberMode }
+		);
+		return { ...e, bolusableCarbsG: b.bolusableCarbsG, bolusableLowConfidence: b.lowConfidence };
+	});
 
 	const [s] = await db.select().from(settings).where(eq(settings.id, 1));
 
@@ -36,8 +52,7 @@ export async function GET({ request }) {
 	// intake. Computed here so the widget and the app's drift check agree.
 	const calSum = entries.reduce((sum, e) => sum + e.calories, 0);
 	const calTarget = s?.calorieTarget ?? 2100;
-	const deficit =
-		burnedKcal != null ? Math.round(burnedKcal - Math.max(calSum, calTarget)) : null;
+	const deficit = burnedKcal != null ? Math.round(burnedKcal - Math.max(calSum, calTarget)) : null;
 
 	return json({
 		date: todayLabel(),

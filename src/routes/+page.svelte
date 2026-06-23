@@ -10,6 +10,11 @@
 	let { data } = $props();
 
 	let totals = $derived(sumMacros(data.todayEntries));
+	// Bolusable (net glycemic) carbs — the carb-counting figure for insulin dosing.
+	let bolusableCarbs = $derived(
+		data.todayEntries.reduce((s, e) => s + (e.bolusableCarbsG ?? 0), 0)
+	);
+	let bolusableLowConf = $derived(data.todayEntries.some((e) => e.bolusableLowConfidence));
 	let goalPct = $derived(pct(totals.calories, data.settings.calorieTarget));
 	let captureOpen = $state(false);
 	let editingEntry = $state<(typeof data.todayEntries)[number] | null>(null);
@@ -161,6 +166,27 @@
 			<MacroBar label="Carbs" value={totals.carbsG} color="var(--color-carbs)" />
 			<MacroBar label="Fat" value={totals.fatG} color="var(--color-fat)" />
 		</div>
+		<!-- Bolusable (net glycemic) carbs for the day — total stays visible above. -->
+		<div
+			class="mt-3 flex items-center justify-between rounded-xl px-4 py-2.5"
+			style="background: rgba(252,211,77,0.08); border: 1px solid rgba(252,211,77,0.18);"
+		>
+			<span
+				class="text-xs font-semibold tracking-wide uppercase"
+				style="color: var(--color-carbs);"
+			>
+				Bolusable carbs
+				{#if bolusableLowConf}<span style="color: var(--color-text-subtle);">
+						· ⚠︎ verify fiber</span
+					>{/if}
+			</span>
+			<span class="text-sm font-bold" style="color: var(--color-carbs);">
+				{Math.round(bolusableCarbs)}g
+				<span class="font-normal" style="color: var(--color-text-subtle);">
+					of {Math.round(totals.carbsG)}g</span
+				>
+			</span>
+		</div>
 	</section>
 
 	{#if data.quickAddItems.length > 0}
@@ -226,6 +252,10 @@
 						<div class="font-semibold text-white">{Math.round(e.calories)}</div>
 						<div class="text-xs" style="color: var(--color-text-subtle);">
 							{Math.round(e.proteinG)}p · {Math.round(e.carbsG)}c
+						</div>
+						<div class="text-xs font-medium" style="color: var(--color-carbs);">
+							{Math.round(e.bolusableCarbsG)}g bolus{#if e.bolusableLowConfidence}
+								⚠︎{/if}
 						</div>
 					</div>
 				</button>

@@ -34,9 +34,7 @@
 			bmi: 'BMI'
 		};
 		if (map[name]) return map[name];
-		return name
-			.replace(/_/g, ' ')
-			.replace(/\b\w/g, (c) => c.toUpperCase());
+		return name.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 	}
 
 	function metricUnit(name: string): string {
@@ -59,11 +57,13 @@
 				calories: a.calories + e.calories,
 				proteinG: a.proteinG + e.proteinG,
 				carbsG: a.carbsG + e.carbsG,
+				bolusableCarbsG: a.bolusableCarbsG + (e.bolusableCarbsG ?? 0),
 				fatG: a.fatG + e.fatG
 			}),
-			{ calories: 0, proteinG: 0, carbsG: 0, fatG: 0 }
+			{ calories: 0, proteinG: 0, carbsG: 0, bolusableCarbsG: 0, fatG: 0 }
 		)
 	);
+	const dayLowConf = $derived(data.entries.some((e) => e.bolusableLowConfidence));
 
 	const water = $derived(data.metrics.find((m) => m.metric === 'water_l') ?? null);
 	const otherMetrics = $derived(data.metrics.filter((m) => m.metric !== 'water_l'));
@@ -163,23 +163,30 @@
 			Energy
 		</p>
 		{#if day}
-			<div class="ledger-row"><span>Intake</span><b>{Math.round(day.intakeKcal).toLocaleString()}</b></div>
-			<div class="ledger-row"><span>Resting</span><b>{day.bmrKcal?.toLocaleString() ?? '—'}</b></div>
 			<div class="ledger-row">
-				<span>Active</span><b>{day.activeKcal != null ? Math.round(day.activeKcal).toLocaleString() : '—'}</b>
+				<span>Intake</span><b>{Math.round(day.intakeKcal).toLocaleString()}</b>
 			</div>
-			<div class="ledger-row"><span>Digestion</span><b>{Math.round(day.tefKcal).toLocaleString()}</b></div>
-			<div class="ledger-row" style="border-top: 1px solid var(--color-border); margin-top: 4px; padding-top: 7px;">
+			<div class="ledger-row">
+				<span>Resting</span><b>{day.bmrKcal?.toLocaleString() ?? '—'}</b>
+			</div>
+			<div class="ledger-row">
+				<span>Active</span><b
+					>{day.activeKcal != null ? Math.round(day.activeKcal).toLocaleString() : '—'}</b
+				>
+			</div>
+			<div class="ledger-row">
+				<span>Digestion</span><b>{Math.round(day.tefKcal).toLocaleString()}</b>
+			</div>
+			<div
+				class="ledger-row"
+				style="border-top: 1px solid var(--color-border); margin-top: 4px; padding-top: 7px;"
+			>
 				<span>Total burn</span><b>{day.burnedKcal?.toLocaleString() ?? '—'}</b>
 			</div>
 			<div class="ledger-row">
 				<span class="font-medium" style="color: var(--color-text);">Deficit</span>
 				{#if day.deficitKcal !== null}
-					<b
-						style={day.deficitKcal >= 0
-							? 'color: #4ade80;'
-							: 'color: #f87171;'}
-					>
+					<b style={day.deficitKcal >= 0 ? 'color: #4ade80;' : 'color: #f87171;'}>
 						{day.deficitKcal >= 0 ? '−' : '+'}{Math.abs(day.deficitKcal).toLocaleString()}
 					</b>
 				{:else}
@@ -228,11 +235,17 @@
 							</p>
 						</div>
 						<div class="shrink-0 text-right">
-							<p class="text-sm font-semibold text-white">{Math.round(e.calories).toLocaleString()}</p>
+							<p class="text-sm font-semibold text-white">
+								{Math.round(e.calories).toLocaleString()}
+							</p>
 							<p class="text-[11px]" style="color: var(--color-text-subtle);">
 								<span style="color: var(--color-protein);">{Math.round(e.proteinG)}P</span>
 								<span style="color: var(--color-carbs);">{Math.round(e.carbsG)}C</span>
 								<span style="color: var(--color-fat);">{Math.round(e.fatG)}F</span>
+							</p>
+							<p class="text-[11px] font-medium" style="color: var(--color-carbs);">
+								{Math.round(e.bolusableCarbsG ?? 0)}g bolusable{#if e.bolusableLowConfidence}
+									⚠︎{/if}
 							</p>
 						</div>
 					</div>
@@ -248,6 +261,22 @@
 					<span style="color: var(--color-protein);">{Math.round(entryTotals.proteinG)}P</span>
 					<span style="color: var(--color-carbs);">{Math.round(entryTotals.carbsG)}C</span>
 					<span style="color: var(--color-fat);">{Math.round(entryTotals.fatG)}F</span>
+				</span>
+			</div>
+			<div
+				class="mt-2 flex items-center justify-between text-xs font-semibold"
+				style="color: var(--color-carbs);"
+			>
+				<span
+					>Bolusable carbs{#if dayLowConf}<span style="color: var(--color-text-subtle);">
+							· ⚠︎ verify fiber</span
+						>{/if}</span
+				>
+				<span>
+					{Math.round(entryTotals.bolusableCarbsG)}g
+					<span class="font-normal" style="color: var(--color-text-subtle);">
+						of {Math.round(entryTotals.carbsG)}g total</span
+					>
 				</span>
 			</div>
 		{/if}
@@ -267,7 +296,9 @@
 				<b>{kgToLb(data.weighIn.weightKg).toFixed(1)} lb</b>
 			</div>
 			{#if data.weighIn.bodyFatPct != null}
-				<div class="ledger-row"><span>Body fat</span><b>{data.weighIn.bodyFatPct.toFixed(1)}%</b></div>
+				<div class="ledger-row">
+					<span>Body fat</span><b>{data.weighIn.bodyFatPct.toFixed(1)}%</b>
+				</div>
 			{/if}
 			{#if data.weighIn.leanMassKg != null}
 				<div class="ledger-row">
@@ -275,8 +306,7 @@
 				</div>
 			{/if}
 			<p class="mt-2 text-xs" style="color: var(--color-text-subtle);">
-				Latest weigh-in on/before this day
-				({fmtDate(data.weighIn.measuredDate)})
+				Latest weigh-in on/before this day ({fmtDate(data.weighIn.measuredDate)})
 			</p>
 		{:else}
 			<p class="text-sm" style="color: var(--color-text-subtle);">

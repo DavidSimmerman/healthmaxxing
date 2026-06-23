@@ -16,6 +16,10 @@
 	);
 	let birthDate = $state(data.settings.birthDate ?? '');
 	let sex = $state(data.settings.sex ?? '');
+	// Bolusable-carb fiber rule (clinical calibration).
+	let fiberMode = $state<'full' | 'half_over_5'>(
+		data.settings.fiberMode === 'half_over_5' ? 'half_over_5' : 'full'
+	);
 
 	// A cleared number input binds as '' / null / undefined depending on path —
 	// treat all as blank so clearing both fields saves null, not 0.
@@ -38,7 +42,8 @@
 			proteinTargetG !== data.settings.proteinTargetG ||
 			heightCm !== (data.settings.heightCm ?? null) ||
 			birthDate !== (data.settings.birthDate ?? '') ||
-			sex !== (data.settings.sex ?? '')
+			sex !== (data.settings.sex ?? '') ||
+			fiberMode !== (data.settings.fiberMode ?? 'full')
 	);
 
 	async function saveTargets(e: SubmitEvent) {
@@ -54,7 +59,8 @@
 					proteinTargetG: Number(proteinTargetG),
 					heightCm,
 					birthDate: birthDate || null,
-					sex: sex || null
+					sex: sex || null,
+					fiberMode
 				})
 			});
 			if (!res.ok) {
@@ -183,6 +189,44 @@
 				/>
 			</label>
 		</div>
+
+		<h2 class="mt-6 mb-2 text-sm font-semibold tracking-wide text-white uppercase">
+			Carb counting
+			<span class="ml-1 text-xs font-normal normal-case" style="color: var(--color-text-subtle);">
+				— how bolusable carbs subtract fiber
+			</span>
+		</h2>
+		<div class="flex gap-1 rounded-full bg-white/5 p-1">
+			<button
+				type="button"
+				onclick={() => (fiberMode = 'full')}
+				class="flex-1 rounded-full px-3 py-2 text-sm font-semibold transition"
+				class:accent-gradient={fiberMode === 'full'}
+				class:text-white={fiberMode === 'full'}
+				style={fiberMode === 'full' ? '' : 'color: #e5e5e7;'}
+			>
+				Subtract all fiber
+			</button>
+			<button
+				type="button"
+				onclick={() => (fiberMode = 'half_over_5')}
+				class="flex-1 rounded-full px-3 py-2 text-sm font-semibold transition"
+				class:accent-gradient={fiberMode === 'half_over_5'}
+				class:text-white={fiberMode === 'half_over_5'}
+				style={fiberMode === 'half_over_5' ? '' : 'color: #e5e5e7;'}
+			>
+				Half over 5g
+			</button>
+		</div>
+		<p class="mt-2 text-xs leading-relaxed" style="color: var(--color-text-subtle);">
+			Bolusable (net glycemic) carbs = total carbs − this fiber adjustment − sugar-alcohol
+			adjustment. <strong>Subtract all fiber</strong> removes the full fiber gram count;
+			<strong>Half over 5g</strong> only subtracts half, and only when fiber exceeds 5g (ADA-style).
+			Sugar alcohols are subtracted at a conservative 0.5× unless the polyol is known. This is a
+			<strong>clinical calibration that feeds insulin dosing</strong> — review it with your care team
+			and validate against CGM traces; it is not medical advice. Changing it recomputes every past day.
+			Total carbs always stay visible alongside the bolusable figure.
+		</p>
 
 		<h2 class="mt-6 mb-4 text-sm font-semibold tracking-wide text-white uppercase">
 			Profile

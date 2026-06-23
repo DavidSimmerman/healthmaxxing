@@ -3,6 +3,8 @@ import { db } from '$lib/server/db';
 import { foods, dailyLog } from '$lib/server/db/schema';
 import { eq } from 'drizzle-orm';
 import { toServings, type Unit } from '$lib/units';
+import { bolusableForLoggedEntry } from '$lib/netCarbs';
+import { getFiberMode } from '$lib/server/prefs';
 
 export async function POST({ request }) {
 	const body = await request.json();
@@ -15,7 +17,12 @@ export async function POST({ request }) {
 	// Gram/volume units need a serving weight to convert; without one, toServings
 	// would treat the amount as servings (188g → 188 servings). A food can lose its
 	// serving weight after a barcode source sync, so reject rather than misread it.
-	if (amount != null && unit && unit !== 'serving' && !(food.servingGrams && food.servingGrams > 0)) {
+	if (
+		amount != null &&
+		unit &&
+		unit !== 'serving' &&
+		!(food.servingGrams && food.servingGrams > 0)
+	) {
 		throw error(400, `Cannot log "${food.name}" by ${unit}: it has no serving weight.`);
 	}
 
@@ -45,5 +52,14 @@ export async function POST({ request }) {
 			fatG: food.fatG * servings
 		})
 		.returning();
-	return json({ entry });
+
+	const b = bolusableForLoggedEntry(entry.carbsG, food, servings, {
+		fiberMode: await getFiberMode()
+	});
+	return json({
+		entry,
+		foodName: food.name,
+		bolusableCarbsG: b.bolusableCarbsG,
+		bolusableLowConfidence: b.lowConfidence
+	});
 }

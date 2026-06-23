@@ -140,7 +140,14 @@ export const settings = pgTable('settings', {
 	// Body-composition goals — drive the "time to goal" projection. Either, both,
 	// or neither may be set.
 	goalWeightKg: real('goal_weight_kg'),
-	goalBodyFatPct: real('goal_body_fat_pct') // 0–100
+	goalBodyFatPct: real('goal_body_fat_pct'), // 0–100
+
+	// Bolusable (net glycemic) carb derivation. CLINICAL CALIBRATION — review with a
+	// care team and validate against CGM traces; this is not medical fact. 'full' =
+	// subtract all fiber (David's standing rule); 'half_over_5' = subtract half of
+	// fiber, only when > 5g (ADA-style). Changing it recomputes the whole history,
+	// because bolusable carbs are derived live, never stored.
+	fiberMode: text('fiber_mode').notNull().default('full') // 'full' | 'half_over_5'
 });
 
 // ── HealthKit sync (pushed by the iOS wrapper app) ──────────────────────────

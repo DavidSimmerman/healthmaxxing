@@ -2,6 +2,8 @@ import { json } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { foods, dailyLog } from '$lib/server/db/schema';
 import { eq, sql, desc, isNull } from 'drizzle-orm';
+import { bolusableCarbsPerServing } from '$lib/netCarbs';
+import { getFiberMode } from '$lib/server/prefs';
 
 // GET /api/foods/history
 // Every food in the catalog the capture sheet can offer — including ones that were
@@ -21,6 +23,7 @@ export async function GET() {
 			proteinG: foods.proteinG,
 			carbsG: foods.carbsG,
 			fatG: foods.fatG,
+			nutrients: foods.nutrients,
 			categories: foods.categories,
 			ingredients: foods.ingredients,
 			makesServings: foods.makesServings,
@@ -36,5 +39,12 @@ export async function GET() {
 		// Sort by most recent activity — last logged, or when prepped/edited if never logged.
 		.orderBy(desc(sql`coalesce(max(${dailyLog.loggedAt}), ${foods.updatedAt})`));
 
-	return json({ foods: rows });
+	// Decorate each food with derived per-serving bolusable (net glycemic) carbs.
+	const fiberMode = await getFiberMode();
+	const withBolusable = rows.map((r) => {
+		const b = bolusableCarbsPerServing(r, { fiberMode });
+		return { ...r, bolusableCarbsG: b.bolusableCarbsG, bolusableLowConfidence: b.lowConfidence };
+	});
+
+	return json({ foods: withBolusable });
 }

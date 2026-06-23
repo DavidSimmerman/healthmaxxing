@@ -1,6 +1,8 @@
 import { json, error } from '@sveltejs/kit';
 import { requireApiToken } from '$lib/server/auth';
 import { createAndLogFood, FoodInputError } from '$lib/server/foods';
+import { bolusableCarbsPerServing, bolusableForLoggedEntry } from '$lib/netCarbs';
+import { getFiberMode } from '$lib/server/prefs';
 
 // POST /api/foods
 // One-shot create-or-upsert a Food from an external resolver (Claude Code session).
@@ -21,7 +23,26 @@ export async function POST({ request }) {
 	const body = await request.json();
 	try {
 		const { food, logEntry } = await createAndLogFood(body);
-		return json({ food, logEntry });
+		const fiberMode = await getFiberMode();
+		const perServing = bolusableCarbsPerServing(food, { fiberMode });
+		const entryBolus = logEntry
+			? bolusableForLoggedEntry(logEntry.carbsG, food, logEntry.servings ?? 1, { fiberMode })
+			: null;
+		return json({
+			food: {
+				...food,
+				bolusableCarbsG: perServing.bolusableCarbsG,
+				bolusableLowConfidence: perServing.lowConfidence
+			},
+			logEntry:
+				logEntry && entryBolus
+					? {
+							...logEntry,
+							bolusableCarbsG: entryBolus.bolusableCarbsG,
+							bolusableLowConfidence: entryBolus.lowConfidence
+						}
+					: logEntry
+		});
 	} catch (e) {
 		if (e instanceof FoodInputError) throw error(400, e.message);
 		throw e;
