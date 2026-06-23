@@ -45,11 +45,17 @@ final class HealthSync {
     private let bpm = HKUnit.count().unitDivided(by: .minute())
 
     private var readTypes: Set<HKObjectType> {
-        [
+        var types: Set<HKObjectType> = [
             activeEnergy, basalEnergy, steps, exerciseTime, bodyMass, bodyFat, leanMass,
             water, heartRate, restingHeartRate, hrv, spo2, respiratoryRate, vo2Max, bmi,
             HKObjectType.workoutType(),
         ]
+        // The extended daily metrics (vitals, mobility, respiratory, environment,
+        // category events) are spec-driven — auth reads straight off the specs so
+        // there's one source of truth for "what we collect".
+        for s in quantitySpecs() { types.insert(s.type) }
+        for s in categorySpecs() { types.insert(s.type) }
+        return types
     }
 
     /// How many trailing days of activity to (re)push each sync. Generous so a
@@ -451,7 +457,208 @@ final class HealthSync {
         add(try await respByDay, as: "resp_rate")
         add(try await vo2ByDay, as: "vo2max")
         add(try await bmiByDay, as: "bmi")
+
+        // Extended panel — everything else the user wants tracked. Spec-driven, so
+        // a new metric is one line in quantitySpecs()/categorySpecs().
+        metrics += try await collectExtendedQuantityMetrics(from: start, to: end)
+        metrics += try await collectCategoryMetrics(from: start, to: end)
         return metrics
+    }
+
+    // MARK: - Extended daily metrics (bulk)
+
+    private enum Agg { case sum, avg, max }
+    private struct QSpec {
+        let type: HKQuantityType
+        let unit: HKUnit
+        let agg: Agg
+        let name: String
+        var scale: Double = 1
+    }
+
+    /// Daily quantity metrics beyond the core vitals. `name` must match the server
+    /// catalog (mcp get_health_metrics) and the ingest regex `^[a-z][a-z0-9_]{0,39}$`.
+    /// Percent types are scaled ×100 to store 0–100 (like spo2_pct).
+    private func quantitySpecs() -> [QSpec] {
+        let mps = HKUnit.meter().unitDivided(by: .second())
+        let km = HKUnit.meterUnit(with: .kilo)
+        let cm = HKUnit.meterUnit(with: .centi)
+        let lpm = HKUnit.liter().unitDivided(by: .minute())
+        let db = HKUnit.decibelAWeightedSoundPressureLevel()
+        let effort = HKUnit.kilocalorie().unitDivided(
+            by: HKUnit.gramUnit(with: .kilo).unitMultiplied(by: .hour())) // kcal/(kg·hr)
+
+        var specs: [QSpec] = [
+            // ── Activity ──
+            QSpec(type: HKQuantityType(.flightsClimbed), unit: .count(), agg: .sum, name: "flights_climbed"),
+            QSpec(type: HKQuantityType(.appleStandTime), unit: .minute(), agg: .sum, name: "stand_min"),
+            QSpec(type: HKQuantityType(.appleMoveTime), unit: .minute(), agg: .sum, name: "move_min"),
+            QSpec(type: HKQuantityType(.timeInDaylight), unit: .minute(), agg: .sum, name: "daylight_min"),
+            QSpec(type: HKQuantityType(.distanceWalkingRunning), unit: km, agg: .sum, name: "dist_walk_run_km"),
+            QSpec(type: HKQuantityType(.distanceCycling), unit: km, agg: .sum, name: "dist_cycle_km"),
+            QSpec(type: HKQuantityType(.distanceSwimming), unit: km, agg: .sum, name: "dist_swim_km"),
+            QSpec(type: HKQuantityType(.distanceWheelchair), unit: km, agg: .sum, name: "dist_wheelchair_km"),
+            QSpec(type: HKQuantityType(.distanceDownhillSnowSports), unit: km, agg: .sum, name: "dist_snow_km"),
+            QSpec(type: HKQuantityType(.pushCount), unit: .count(), agg: .sum, name: "push_count"),
+            QSpec(type: HKQuantityType(.swimmingStrokeCount), unit: .count(), agg: .sum, name: "swim_strokes"),
+            // ── Vitals ──
+            QSpec(type: HKQuantityType(.walkingHeartRateAverage), unit: bpm, agg: .avg, name: "walking_hr_avg"),
+            QSpec(type: HKQuantityType(.heartRateRecoveryOneMinute), unit: bpm, agg: .avg, name: "hr_recovery"),
+            QSpec(type: HKQuantityType(.bloodPressureSystolic), unit: .millimeterOfMercury(), agg: .avg, name: "bp_systolic"),
+            QSpec(type: HKQuantityType(.bloodPressureDiastolic), unit: .millimeterOfMercury(), agg: .avg, name: "bp_diastolic"),
+            QSpec(type: HKQuantityType(.bodyTemperature), unit: .degreeCelsius(), agg: .avg, name: "body_temp_c"),
+            QSpec(type: HKQuantityType(.basalBodyTemperature), unit: .degreeCelsius(), agg: .avg, name: "basal_body_temp_c"),
+            QSpec(type: HKQuantityType(.appleSleepingWristTemperature), unit: .degreeCelsius(), agg: .avg, name: "wrist_temp_c"),
+            QSpec(type: HKQuantityType(.bloodGlucose), unit: HKUnit(from: "mg/dL"), agg: .avg, name: "blood_glucose_mgdl"),
+            QSpec(type: HKQuantityType(.insulinDelivery), unit: .internationalUnit(), agg: .sum, name: "insulin_iu"),
+            QSpec(type: HKQuantityType(.bloodAlcoholContent), unit: .percent(), agg: .avg, name: "blood_alcohol_pct", scale: 100),
+            QSpec(type: HKQuantityType(.atrialFibrillationBurden), unit: .percent(), agg: .avg, name: "afib_burden_pct", scale: 100),
+            QSpec(type: HKQuantityType(.peripheralPerfusionIndex), unit: .percent(), agg: .avg, name: "perfusion_index_pct", scale: 100),
+            QSpec(type: HKQuantityType(.electrodermalActivity), unit: .siemenUnit(with: .micro), agg: .avg, name: "electrodermal_us"),
+            QSpec(type: HKQuantityType(.height), unit: cm, agg: .avg, name: "height_cm"),
+            // ── Mobility / gait ──
+            QSpec(type: HKQuantityType(.walkingSpeed), unit: mps, agg: .avg, name: "walking_speed_mps"),
+            QSpec(type: HKQuantityType(.walkingStepLength), unit: .meter(), agg: .avg, name: "step_length_m"),
+            QSpec(type: HKQuantityType(.walkingAsymmetryPercentage), unit: .percent(), agg: .avg, name: "walking_asymmetry_pct", scale: 100),
+            QSpec(type: HKQuantityType(.walkingDoubleSupportPercentage), unit: .percent(), agg: .avg, name: "double_support_pct", scale: 100),
+            QSpec(type: HKQuantityType(.appleWalkingSteadiness), unit: .percent(), agg: .avg, name: "walking_steadiness_pct", scale: 100),
+            QSpec(type: HKQuantityType(.sixMinuteWalkTestDistance), unit: .meter(), agg: .avg, name: "six_min_walk_m"),
+            QSpec(type: HKQuantityType(.stairAscentSpeed), unit: mps, agg: .avg, name: "stair_ascent_mps"),
+            QSpec(type: HKQuantityType(.stairDescentSpeed), unit: mps, agg: .avg, name: "stair_descent_mps"),
+            QSpec(type: HKQuantityType(.numberOfTimesFallen), unit: .count(), agg: .sum, name: "falls"),
+            QSpec(type: HKQuantityType(.runningSpeed), unit: mps, agg: .avg, name: "running_speed_mps"),
+            QSpec(type: HKQuantityType(.runningPower), unit: .watt(), agg: .avg, name: "running_power_w"),
+            QSpec(type: HKQuantityType(.runningStrideLength), unit: .meter(), agg: .avg, name: "running_stride_m"),
+            QSpec(type: HKQuantityType(.runningVerticalOscillation), unit: cm, agg: .avg, name: "running_vert_osc_cm"),
+            QSpec(type: HKQuantityType(.runningGroundContactTime), unit: .secondUnit(with: .milli), agg: .avg, name: "running_gct_ms"),
+            // ── Respiratory / hearing / environment ──
+            QSpec(type: HKQuantityType(.forcedVitalCapacity), unit: .liter(), agg: .avg, name: "fvc_l"),
+            QSpec(type: HKQuantityType(.forcedExpiratoryVolume1), unit: .liter(), agg: .avg, name: "fev1_l"),
+            QSpec(type: HKQuantityType(.peakExpiratoryFlowRate), unit: lpm, agg: .avg, name: "peak_flow_lpm"),
+            QSpec(type: HKQuantityType(.inhalerUsage), unit: .count(), agg: .sum, name: "inhaler_uses"),
+            QSpec(type: HKQuantityType(.environmentalAudioExposure), unit: db, agg: .avg, name: "env_audio_db"),
+            QSpec(type: HKQuantityType(.headphoneAudioExposure), unit: db, agg: .avg, name: "headphone_audio_db"),
+            QSpec(type: HKQuantityType(.uvExposure), unit: .count(), agg: .max, name: "uv_index"),
+            QSpec(type: HKQuantityType(.underwaterDepth), unit: .meter(), agg: .max, name: "underwater_depth_m"),
+            QSpec(type: HKQuantityType(.waterTemperature), unit: .degreeCelsius(), agg: .avg, name: "water_temp_c"),
+            QSpec(type: HKQuantityType(.physicalEffort), unit: effort, agg: .avg, name: "physical_effort"),
+        ]
+
+        // iOS 18-only types. Requires the iOS 18 SDK (Xcode 16+) to compile; if you
+        // build on older Xcode, delete this block — the rest is iOS 17-safe.
+        if #available(iOS 18.0, *) {
+            specs += [
+                QSpec(type: HKQuantityType(.distanceCrossCountrySkiing), unit: km, agg: .sum, name: "dist_xc_ski_km"),
+                QSpec(type: HKQuantityType(.distancePaddleSports), unit: km, agg: .sum, name: "dist_paddle_km"),
+                QSpec(type: HKQuantityType(.distanceRowing), unit: km, agg: .sum, name: "dist_row_km"),
+                // ponytail: sound reduction is in dB; verify the unit on first real sample.
+                QSpec(type: HKQuantityType(.environmentalSoundReduction), unit: db, agg: .avg, name: "sound_reduction_db"),
+            ]
+        }
+        return specs
+    }
+
+    /// Run each quantity spec over the window and flatten to (date, metric, value)
+    /// rows. ponytail: sequential — ~50 quick stats queries per sync is fine for a
+    /// background refresh; parallelize with a task group if sync latency matters.
+    private func collectExtendedQuantityMetrics(from start: Date, to end: Date) async throws
+        -> [[String: Any]]
+    {
+        var rows: [[String: Any]] = []
+        for spec in quantitySpecs() {
+            do {
+                let byDay: [String: Double]
+                switch spec.agg {
+                case .sum: byDay = try await sumsByDay(spec.type, unit: spec.unit, from: start, to: end)
+                case .avg: byDay = try await discreteByDay(spec.type, unit: spec.unit, .discreteAverage, from: start, to: end)
+                case .max: byDay = try await discreteByDay(spec.type, unit: spec.unit, .discreteMax, from: start, to: end)
+                }
+                for (date, value) in byDay {
+                    rows.append(["date": date, "metric": spec.name, "value": value * spec.scale])
+                }
+            } catch {
+                // Isolate per metric: a type whose aggregation style rejects this
+                // option (e.g. audio exposure) or any single-query error must not
+                // sink the whole sync. Skip it; the rest still upload.
+                continue
+            }
+        }
+        return rows
+    }
+
+    // ── Category events ──
+    private enum CatAgg { case count, stoodHours, durationMin }
+    private struct CSpec {
+        let type: HKCategoryType
+        let name: String
+        let agg: CatAgg
+    }
+
+    /// Category-type events, aggregated to one number per day: a count of samples,
+    /// the count of "stood" stand-hours, or summed duration in minutes.
+    private func categorySpecs() -> [CSpec] {
+        var specs: [CSpec] = [
+            CSpec(type: HKCategoryType(.mindfulSession), name: "mindful_min", agg: .durationMin),
+            CSpec(type: HKCategoryType(.appleStandHour), name: "stand_hours", agg: .stoodHours),
+            CSpec(type: HKCategoryType(.lowHeartRateEvent), name: "low_hr_events", agg: .count),
+            CSpec(type: HKCategoryType(.highHeartRateEvent), name: "high_hr_events", agg: .count),
+            CSpec(type: HKCategoryType(.irregularHeartRhythmEvent), name: "irregular_rhythm_events", agg: .count),
+            CSpec(type: HKCategoryType(.lowCardioFitnessEvent), name: "low_cardio_events", agg: .count),
+            CSpec(type: HKCategoryType(.environmentalAudioExposureEvent), name: "env_audio_events", agg: .count),
+            CSpec(type: HKCategoryType(.headphoneAudioExposureEvent), name: "headphone_audio_events", agg: .count),
+            CSpec(type: HKCategoryType(.appleWalkingSteadinessEvent), name: "walking_steadiness_events", agg: .count),
+            CSpec(type: HKCategoryType(.handwashingEvent), name: "handwashing_events", agg: .count),
+            CSpec(type: HKCategoryType(.toothbrushingEvent), name: "toothbrushing_events", agg: .count),
+        ]
+        // No sleep_apnea_events: there's no such HKCategoryTypeIdentifier (the iOS 18
+        // apnea signal is a quantity/notification), and sleep comes from Google Health.
+        return specs
+    }
+
+    private func collectCategoryMetrics(from start: Date, to end: Date) async throws -> [[String: Any]] {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.calendar = calendar
+
+        var rows: [[String: Any]] = []
+        for spec in categorySpecs() {
+            let samples: [HKCategorySample]
+            do {
+                samples = try await categorySamples(spec.type, from: start, to: end)
+            } catch {
+                continue // isolate per metric — one failed query must not sink the sync
+            }
+            var byDay: [String: Double] = [:]
+            for s in samples {
+                let key = f.string(from: s.startDate)
+                switch spec.agg {
+                case .count:
+                    byDay[key, default: 0] += 1
+                case .stoodHours:
+                    if s.value == HKCategoryValueAppleStandHour.stood.rawValue { byDay[key, default: 0] += 1 }
+                case .durationMin:
+                    byDay[key, default: 0] += s.endDate.timeIntervalSince(s.startDate) / 60
+                }
+            }
+            for (date, v) in byDay { rows.append(["date": date, "metric": spec.name, "value": v]) }
+        }
+        return rows
+    }
+
+    private func categorySamples(
+        _ type: HKCategoryType, from start: Date, to end: Date
+    ) async throws -> [HKCategorySample] {
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end)
+        return try await withCheckedThrowingContinuation { cont in
+            let query = HKSampleQuery(
+                sampleType: type, predicate: predicate, limit: HKObjectQueryNoLimit,
+                sortDescriptors: nil
+            ) { _, samples, error in
+                if let error { return cont.resume(throwing: error) }
+                cont.resume(returning: (samples as? [HKCategorySample]) ?? [])
+            }
+            store.execute(query)
+        }
     }
 
     /// Like sumsByDay but for discrete types (heart rate, HRV, SpO2…): one

@@ -1,8 +1,8 @@
 // MCP server for the health dashboard. The write tools (log_food, prep_food)
 // let Claude.ai resolve and log foods; the read tools (get_energy_ledger,
-// get_body_trends, get_nutrition) let Claude review the user's nutrition & health
-// data and suggest improvements. More signals (blood sugar, insulin, sleep) will
-// be added later, so tools should degrade gracefully when a metric has no data.
+// get_body_trends, get_nutrition, get_health_metrics) let Claude review the
+// user's nutrition & health data and suggest improvements. Sleep is sourced
+// elsewhere (Google Health); tools degrade gracefully when a metric has no data.
 import { json } from '@sveltejs/kit';
 import { validateAccessToken } from '$lib/server/oauth';
 import { keycloakEnabled, validateMcpToken } from '$lib/server/keycloak';
@@ -27,6 +27,8 @@ import { sanitizeNutrients } from '$lib/nutrients';
 import { searchFdc, lookupFdcByUpc } from '$lib/server/fdc';
 import { bolusableCarbsPerServing, bolusableForLoggedEntry } from '$lib/netCarbs';
 import { getFiberMode } from '$lib/server/prefs';
+import { periodRange } from '$lib/period';
+import { healthReview } from '$lib/server/healthMetrics';
 
 const PROTOCOL_VERSION = '2025-03-26';
 
@@ -603,6 +605,88 @@ const CORRECT_LOG_ENTRY_TOOL = {
 	}
 };
 
+// Catalog of the daily_metrics keys the iOS app syncs, so Claude can interpret
+// the opaque keys + units. Keep in sync with HealthSync.swift's metric names.
+const HEALTH_METRIC_CATALOG =
+	'CORE (Apple, daily) — water_l (L), resting_hr, hr_avg, hr_min, hr_max (bpm), hrv_ms (ms), ' +
+	'spo2_pct (%), resp_rate (breaths/min), vo2max (ml/kg·min), bmi. ' +
+	'ACTIVITY — flights_climbed (count), stand_min, move_min, daylight_min (min/day), ' +
+	'dist_walk_run_km, dist_cycle_km, dist_swim_km, dist_wheelchair_km, dist_snow_km, ' +
+	'dist_xc_ski_km, dist_paddle_km, dist_row_km (km/day), push_count, swim_strokes (count/day), ' +
+	'physical_effort (kcal/kg·hr). ' +
+	'VITALS — walking_hr_avg, hr_recovery (bpm), bp_systolic, bp_diastolic (mmHg), ' +
+	'body_temp_c, basal_body_temp_c, wrist_temp_c (°C), blood_glucose_mgdl (mg/dL), ' +
+	'insulin_iu (IU/day), blood_alcohol_pct, afib_burden_pct, perfusion_index_pct (%), ' +
+	'electrodermal_us (µS), height_cm (cm). ' +
+	'MOBILITY — walking_speed_mps, stair_ascent_mps, stair_descent_mps, running_speed_mps (m/s), ' +
+	'step_length_m, six_min_walk_m, running_stride_m (m), walking_asymmetry_pct, double_support_pct, ' +
+	'walking_steadiness_pct (%), running_power_w (W), running_vert_osc_cm (cm), running_gct_ms (ms), ' +
+	'falls (count/day). ' +
+	'RESPIRATORY/HEARING/ENV — fvc_l, fev1_l (L), peak_flow_lpm (L/min), inhaler_uses (count/day), ' +
+	'env_audio_db, headphone_audio_db, sound_reduction_db (dB), uv_index (index, daily max), ' +
+	'underwater_depth_m (m, daily max), water_temp_c (°C). ' +
+	'EVENTS (daily counts) — mindful_min (min/day), stand_hours, low_hr_events, high_hr_events, ' +
+	'irregular_rhythm_events, low_cardio_events, env_audio_events, headphone_audio_events, ' +
+	'walking_steadiness_events, handwashing_events, toothbrushing_events. ' +
+	'SLEEP (Fitbit via Google Health API, nightly) — sleep_min, time_in_bed_min, sleep_deep_min, sleep_light_min, ' +
+	'sleep_rem_min, sleep_awake_min (min), sleep_efficiency_pct (%), sleep_resting_hr (bpm), ' +
+	'sleep_hrv_ms (ms), sleep_spo2_pct (%), sleep_resp_rate (breaths/min), ' +
+	'sleep_skin_temp_dev_c (°C vs the user’s baseline). These come from a Fitbit worn only at ' +
+	'night and are deliberately separate from the Apple daytime metrics above — e.g. sleep_resting_hr ' +
+	'is overnight HR and does NOT replace hr_avg/resting_hr. ' +
+	'Metrics are absent on days/devices that recorded nothing — a missing key means no data, not zero.';
+
+const GET_HEALTH_METRICS_TOOL = {
+	name: 'get_health_metrics',
+	description:
+		'Read-only. Dumps the daily HealthKit vitals/activity panel — heart rate, HRV, SpO2, ' +
+		'respiratory rate, VO2max, blood pressure, glucose, temperatures, sleep-apnea/AFib/cardio ' +
+		'events, mobility & gait, audio exposure, distances, mindful minutes, and more — for one ' +
+		'day, week, or month so you can review it and give feedback. Returns one object per day ' +
+		'with the activity aggregates (activeKcal/basalKcal/steps/exerciseMin), a `metrics` map of ' +
+		'all synced daily metrics, and that day’s workouts. Pick `period` to set the window length ' +
+		'(day=1, week=7, month=30 trailing days ending at `date`). For FOOD/CALORIE INTAKE use ' +
+		'get_nutrition, for the deficit ledger use get_energy_ledger, and for weight/body-fat/lean ' +
+		'trends use get_body_trends — this tool is the vitals/activity side. ' +
+		`Metric keys & units: ${HEALTH_METRIC_CATALOG}`,
+	inputSchema: {
+		type: 'object',
+		properties: {
+			period: {
+				type: 'string',
+				enum: ['day', 'week', 'month'],
+				description: 'Window length ending at `date`: day=1, week=7, month=30 days (default week)'
+			},
+			date: {
+				type: 'string',
+				description: 'End of the window, YYYY-MM-DD (default today)'
+			}
+		}
+	}
+};
+
+async function callGetHealthMetrics(id: Id, args: Record<string, unknown>) {
+	try {
+		const period = typeof args.period === 'string' ? args.period : 'week';
+		const anchor = typeof args.date === 'string' ? args.date : todayLabel();
+		const { from, to } = periodRange(period, anchor);
+		const days = await healthReview(from, to);
+		const metricKeys = new Set<string>();
+		for (const d of days) for (const k of Object.keys(d.metrics)) metricKeys.add(k);
+		const line = days.length
+			? `Health metrics ${from} → ${to}: ${days.length} day${days.length === 1 ? '' : 's'} with data, ` +
+				`${metricKeys.size} distinct metric${metricKeys.size === 1 ? '' : 's'}.`
+			: `Health metrics ${from} → ${to}: no data synced in this range.`;
+		return toolResult(id, `${line}\n${JSON.stringify({ period, from, to, days }, null, 2)}`);
+	} catch (e) {
+		if (e instanceof Error && e.message === 'invalid date') {
+			return toolResult(id, 'Invalid `date` — use YYYY-MM-DD.', true);
+		}
+		console.error('get_health_metrics failed:', e);
+		return toolResult(id, 'Could not load health metrics: an internal error occurred.', true);
+	}
+}
+
 async function callGetEnergyLedger(id: Id, args: Record<string, unknown>) {
 	try {
 		const to = typeof args.to === 'string' ? args.to : todayLabel();
@@ -809,6 +893,7 @@ export async function POST({ request, url }) {
 					GET_ENERGY_LEDGER_TOOL,
 					GET_BODY_TRENDS_TOOL,
 					GET_NUTRITION_TOOL,
+					GET_HEALTH_METRICS_TOOL,
 					GET_DAY_LOG_TOOL,
 					CORRECT_FOOD_NUTRIENTS_TOOL,
 					CORRECT_LOG_ENTRY_TOOL
@@ -825,6 +910,7 @@ export async function POST({ request, url }) {
 			if (name === 'get_energy_ledger') return callGetEnergyLedger(id, args);
 			if (name === 'get_body_trends') return callGetBodyTrends(id, args);
 			if (name === 'get_nutrition') return callGetNutrition(id, args);
+			if (name === 'get_health_metrics') return callGetHealthMetrics(id, args);
 			if (name === 'get_day_log') return callGetDayLog(id, args);
 			if (name === 'correct_food_nutrients') return callCorrectFoodNutrients(id, args);
 			if (name === 'correct_log_entry') return callCorrectLogEntry(id, args);

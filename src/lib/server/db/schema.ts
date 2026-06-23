@@ -218,6 +218,18 @@ export const dailyMetrics = pgTable(
 	(t) => [primaryKey({ columns: [t.date, t.metric] })]
 );
 
+// ── Fitbit (Google) OAuth — server-side nightly sync ────────────────────────
+// Single-row store for the Fitbit refresh token. Fitbit ROTATES the refresh token
+// on every refresh, so it must be persisted writably (env won't do). Never
+// returned to any client — the owner authorizes once via
+// /api/integrations/fitbit/authorize, and the daily sync refreshes from here.
+export const fitbitAuth = pgTable('fitbit_auth', {
+	id: integer('id').primaryKey().default(1),
+	refreshToken: text('refresh_token').notNull(),
+	scope: text('scope'),
+	updatedAt: timestamp('updated_at').notNull().defaultNow()
+});
+
 // ── OAuth 2.1 (for the MCP connector Claude.ai adds) ────────────────────────
 // We are our own authorization server. Claude.ai registers dynamically, runs
 // auth-code + PKCE against /authorize + /token, and presents the resulting
