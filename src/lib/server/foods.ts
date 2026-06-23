@@ -7,6 +7,8 @@ import type { Nutrients } from '$lib/nutrients';
 import { toServings, UNITS, type Unit } from '$lib/units';
 import { lookupBarcodeRich, type MacroBundle } from '$lib/server/openFoodFacts';
 import { APP_TZ } from './day';
+import { bolusableCarbsPerServing } from '$lib/netCarbs';
+import { getFiberMode } from '$lib/server/prefs';
 
 export class FoodInputError extends Error {}
 
@@ -449,16 +451,21 @@ export type FoodSearchResult = Pick<
 	| 'makesServings'
 	| 'totalGrams'
 	| 'updatedAt'
->;
+> & {
+	// Derived per-serving bolusable (net glycemic) carbs; carbsG stays the total.
+	bolusableCarbsG: number;
+	bolusableLowConfidence: boolean;
+};
 
 // Non-archived catalog rows, newest-touched first, optionally filtered by name.
-// Returns ingredients so Claude can tweak a single one and resubmit via prep_food.
+// Returns ingredients so Claude can tweak a single one and resubmit via prep_food,
+// plus the derived per-serving bolusable carbs alongside the total.
 export async function searchFoods(query?: string, limit = 25): Promise<FoodSearchResult[]> {
 	const q = query?.trim();
 	const where = q
 		? and(isNull(foods.archivedAt), ilike(foods.name, `%${q}%`))
 		: isNull(foods.archivedAt);
-	return db
+	const rows = await db
 		.select({
 			id: foods.id,
 			name: foods.name,
@@ -470,6 +477,7 @@ export async function searchFoods(query?: string, limit = 25): Promise<FoodSearc
 			proteinG: foods.proteinG,
 			carbsG: foods.carbsG,
 			fatG: foods.fatG,
+			nutrients: foods.nutrients,
 			ingredients: foods.ingredients,
 			makesServings: foods.makesServings,
 			totalGrams: foods.totalGrams,
@@ -479,6 +487,13 @@ export async function searchFoods(query?: string, limit = 25): Promise<FoodSearc
 		.where(where)
 		.orderBy(desc(foods.updatedAt))
 		.limit(Math.min(Math.max(limit, 1), 100));
+
+	const fiberMode = await getFiberMode();
+	// nutrients is only needed to derive bolusable carbs — compute, then drop it.
+	return rows.map(({ nutrients, ...r }) => {
+		const b = bolusableCarbsPerServing({ ...r, nutrients }, { fiberMode });
+		return { ...r, bolusableCarbsG: b.bolusableCarbsG, bolusableLowConfidence: b.lowConfidence };
+	});
 }
 
 // ── Read-only barcode resolution for the MCP `lookup_barcode` tool ─────────────

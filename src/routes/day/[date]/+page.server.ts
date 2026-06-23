@@ -6,6 +6,8 @@ import { deficitDays } from '$lib/server/deficit';
 import { fillBmrGaps } from '$lib/server/projections';
 import { APP_TZ, todayLabel } from '$lib/server/day';
 import { addDays } from '$lib/energy';
+import { bolusableForLoggedEntry } from '$lib/netCarbs';
+import { getFiberMode } from '$lib/server/prefs';
 
 export async function load({ params }) {
 	const { date } = params;
@@ -35,7 +37,8 @@ export async function load({ params }) {
 				calories: dailyLog.calories,
 				proteinG: dailyLog.proteinG,
 				carbsG: dailyLog.carbsG,
-				fatG: dailyLog.fatG
+				fatG: dailyLog.fatG,
+				foodNutrients: foods.nutrients
 			})
 			.from(dailyLog)
 			.innerJoin(foods, eq(dailyLog.foodId, foods.id))
@@ -76,10 +79,16 @@ export async function load({ params }) {
 			.where(eq(dailyMetrics.date, date))
 	]);
 
+	const fiberMode = await getFiberMode();
+	const entriesWithBolusable = entries.map((e) => {
+		const b = bolusableForLoggedEntry(e.carbsG, e.foodNutrients, e.servings ?? 1, { fiberMode });
+		return { ...e, bolusableCarbsG: b.bolusableCarbsG, bolusableLowConfidence: b.lowConfidence };
+	});
+
 	return {
 		date,
 		day,
-		entries,
+		entries: entriesWithBolusable,
 		weighIn: weighIn ?? null,
 		workouts: workoutRows,
 		metrics,

@@ -24,6 +24,8 @@ import { todayLabel } from '$lib/server/day';
 import { addDays } from '$lib/energy';
 import { nutritionReport, logEntries } from '$lib/server/nutrition';
 import { sanitizeNutrients } from '$lib/nutrients';
+import { bolusableCarbsPerServing, bolusableForLoggedEntry } from '$lib/netCarbs';
+import { getFiberMode } from '$lib/server/prefs';
 
 const PROTOCOL_VERSION = '2025-03-26';
 
@@ -284,21 +286,34 @@ async function callLogFood(id: Id, args: Record<string, unknown>) {
 		const input = { ...args, logToday } as unknown as CreateAndLogInput;
 		const { food, logEntry } = await createAndLogFood(input);
 		const servings = logEntry?.servings ?? 1;
+		const fiberMode = await getFiberMode();
 		// Reflect the actual day written — "today" or the backfilled date — so a
 		// correction workflow can confirm the entry landed where intended.
 		const day = logEntry ? todayLabel(logEntry.loggedAt) : todayLabel();
 		const dayLabel = day === todayLabel() ? 'today' : day;
+		const entryBolus = logEntry
+			? bolusableForLoggedEntry(logEntry.carbsG, food.nutrients, servings, { fiberMode })
+			: null;
+		const perServingBolus = bolusableCarbsPerServing(food, { fiberMode });
+		const carbsBit = (total: number, bolus: number, lowConf: boolean) =>
+			`${round1(total)}g carbs (${round1(bolus)}g bolusable${lowConf ? ', fiber unknown — verify from label' : ''})`;
 		const lines = [
 			`Saved "${food.name}"${food.brand ? ` (${food.brand})` : ''}.`,
 			logEntry
 				? `Logged to ${dayLabel}${servings !== 1 ? ` ×${servings}` : ''}: ${Math.round(
 						logEntry.calories
-					)} kcal, ${round1(logEntry.proteinG)}g protein, ${round1(logEntry.carbsG)}g carbs, ${round1(
-						logEntry.fatG
-					)}g fat.`
+					)} kcal, ${round1(logEntry.proteinG)}g protein, ${carbsBit(
+						logEntry.carbsG,
+						entryBolus!.bolusableCarbsG,
+						entryBolus!.lowConfidence
+					)}, ${round1(logEntry.fatG)}g fat.`
 				: `Cataloged only (not added to today): ${Math.round(food.calories)} kcal, ${round1(
 						food.proteinG
-					)}g protein per serving.`
+					)}g protein, ${carbsBit(
+						food.carbsG,
+						perServingBolus.bolusableCarbsG,
+						perServingBolus.lowConfidence
+					)} per serving.`
 		];
 		return toolResult(id, lines.join(' '));
 	} catch (e) {
@@ -318,6 +333,7 @@ async function callPrepFood(id: Id, args: Record<string, unknown>) {
 		const food = await prepFood(input);
 		const isRecipe = Array.isArray(food.ingredients) && food.ingredients.length > 0;
 		const verb = args.id ? 'Updated' : 'Saved';
+			const bolus = bolusableCarbsPerServing(food, { fiberMode: await getFiberMode() });
 		const recipeBit = isRecipe
 			? ` Recipe of ${food.ingredients!.length} ingredient${
 					food.ingredients!.length === 1 ? '' : 's'
@@ -330,7 +346,9 @@ async function callPrepFood(id: Id, args: Record<string, unknown>) {
 			`${verb} "${food.name}"${food.brand ? ` (${food.brand})` : ''} — not logged to today.${recipeBit} ` +
 				`Per serving: ${Math.round(food.calories)} kcal, ${round1(food.proteinG)}g protein, ${round1(
 					food.carbsG
-				)}g carbs, ${round1(food.fatG)}g fat. It’s now searchable in the app to log when eaten.`
+				)}g carbs (${round1(bolus.bolusableCarbsG)}g bolusable${
+						bolus.lowConfidence ? ', fiber unknown — verify from label' : ''
+					}), ${round1(food.fatG)}g fat. It’s now searchable in the app to log when eaten.`
 		);
 	} catch (e) {
 		if (e instanceof FoodInputError) return toolResult(id, `Could not prep: ${e.message}`, true);

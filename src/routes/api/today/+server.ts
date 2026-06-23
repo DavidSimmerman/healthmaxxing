@@ -6,11 +6,13 @@ import { requireApiToken } from '$lib/server/auth';
 import { loggedToday, todayLabel } from '$lib/server/day';
 import { deficitDays } from '$lib/server/deficit';
 import { fillBmrGaps } from '$lib/server/projections';
+import { bolusableForLoggedEntry } from '$lib/netCarbs';
+import { getFiberMode } from '$lib/server/prefs';
 
 export async function GET({ request }) {
 	requireApiToken(request);
 
-	const entries = await db
+	const rawEntries = await db
 		.select({
 			id: dailyLog.id,
 			loggedAt: dailyLog.loggedAt,
@@ -19,12 +21,19 @@ export async function GET({ request }) {
 			proteinG: dailyLog.proteinG,
 			carbsG: dailyLog.carbsG,
 			fatG: dailyLog.fatG,
-			foodName: foods.name
+			foodName: foods.name,
+			foodNutrients: foods.nutrients
 		})
 		.from(dailyLog)
 		.innerJoin(foods, eq(dailyLog.foodId, foods.id))
 		.where(loggedToday())
 		.orderBy(asc(dailyLog.loggedAt));
+
+	const fiberMode = await getFiberMode();
+	const entries = rawEntries.map(({ foodNutrients, ...e }) => {
+		const b = bolusableForLoggedEntry(e.carbsG, foodNutrients, e.servings ?? 1, { fiberMode });
+		return { ...e, bolusableCarbsG: b.bolusableCarbsG, bolusableLowConfidence: b.lowConfidence };
+	});
 
 	const [s] = await db.select().from(settings).where(eq(settings.id, 1));
 

@@ -9,6 +9,8 @@ import {
 	NUTRIENT_KEYS,
 	type Nutrients
 } from '$lib/nutrients';
+import { bolusableForLoggedEntry } from '$lib/netCarbs';
+import { getFiberMode } from '$lib/server/prefs';
 
 // Aggregate everything eaten over a date range, for the read-only MCP nutrition
 // tool. Macros come from the cached per-entry totals on dailyLog (servings
@@ -22,6 +24,9 @@ export type NutritionTotals = {
 	calories: number;
 	proteinG: number;
 	carbsG: number;
+	// Bolusable (net glycemic) carbs — total carbs minus the derived fiber/sugar-alcohol
+	// adjustment. The carb-counting figure David doses off; carbsG stays as the total.
+	bolusableCarbsG: number;
 	fatG: number;
 	waterL: number;
 } & Partial<Record<keyof Nutrients, number>>;
@@ -45,6 +50,7 @@ function round1(n: number): number {
 
 // Aggregate intake for [from, to] inclusive (YYYY-MM-DD, APP_TZ local dates).
 export async function nutritionReport(from: string, to: string): Promise<NutritionReport> {
+	const fiberMode = await getFiberMode();
 	// Bucket each entry to its local calendar day, same expression deficit.ts uses.
 	const logDate = sql<string>`(${dailyLog.loggedAt} at time zone 'UTC' at time zone ${APP_TZ})::date`;
 
@@ -79,6 +85,7 @@ export async function nutritionReport(from: string, to: string): Promise<Nutriti
 	let calories = 0;
 	let proteinG = 0;
 	let carbsG = 0;
+	let bolusableCarbsG = 0;
 	let fatG = 0;
 	const loggedDates = new Set<string>();
 	const scaledNutrients: (Partial<Nutrients> | null)[] = [];
@@ -86,6 +93,9 @@ export async function nutritionReport(from: string, to: string): Promise<Nutriti
 		calories += e.calories ?? 0;
 		proteinG += e.proteinG ?? 0;
 		carbsG += e.carbsG ?? 0;
+		bolusableCarbsG += bolusableForLoggedEntry(e.carbsG ?? 0, e.nutrients, e.servings ?? 1, {
+			fiberMode
+		}).bolusableCarbsG;
 		fatG += e.fatG ?? 0;
 		loggedDates.add(e.date);
 		// foods.nutrients is per-serving — scale by the entry's servings.
@@ -109,6 +119,7 @@ export async function nutritionReport(from: string, to: string): Promise<Nutriti
 		calories: round1(calories),
 		proteinG: round1(proteinG),
 		carbsG: round1(carbsG),
+		bolusableCarbsG: round1(bolusableCarbsG),
 		fatG: round1(fatG),
 		waterL: round1(waterL)
 	};
@@ -116,6 +127,7 @@ export async function nutritionReport(from: string, to: string): Promise<Nutriti
 		calories: round1(calories / avgDivisor),
 		proteinG: round1(proteinG / avgDivisor),
 		carbsG: round1(carbsG / avgDivisor),
+		bolusableCarbsG: round1(bolusableCarbsG / avgDivisor),
 		fatG: round1(fatG / avgDivisor),
 		waterL: round1(waterL / Math.max(waterDays, 1))
 	};
@@ -150,11 +162,15 @@ export type LoggedEntry = {
 	calories: number;
 	proteinG: number;
 	carbsG: number;
+	// Derived net glycemic carbs for this entry (total carbs minus fiber/sugar-alcohol).
+	bolusableCarbsG: number;
+	bolusableLowConfidence: boolean; // carbs present but fiber data missing
 	fatG: number;
 	nutrients: Partial<Nutrients> | null;
 };
 
 export async function logEntries(from: string, to: string): Promise<LoggedEntry[]> {
+	const fiberMode = await getFiberMode();
 	const logDate = sql<string>`(${dailyLog.loggedAt} at time zone 'UTC' at time zone ${APP_TZ})::date`;
 	const rows = await db
 		.select({
@@ -174,17 +190,22 @@ export async function logEntries(from: string, to: string): Promise<LoggedEntry[
 		.innerJoin(foods, eq(dailyLog.foodId, foods.id))
 		.where(sql`${logDate} between ${from}::date and ${to}::date`)
 		.orderBy(logDate);
-	return rows.map((r) => ({
-		date: r.date,
-		logId: r.logId,
-		foodId: r.foodId,
-		name: r.name,
-		brand: r.brand,
-		servings: r.servings ?? 1,
-		calories: r.calories ?? 0,
-		proteinG: r.proteinG ?? 0,
-		carbsG: r.carbsG ?? 0,
-		fatG: r.fatG ?? 0,
-		nutrients: r.nutrients ?? null
-	}));
+	return rows.map((r) => {
+		const b = bolusableForLoggedEntry(r.carbsG ?? 0, r.nutrients, r.servings ?? 1, { fiberMode });
+		return {
+			date: r.date,
+			logId: r.logId,
+			foodId: r.foodId,
+			name: r.name,
+			brand: r.brand,
+			servings: r.servings ?? 1,
+			calories: r.calories ?? 0,
+			proteinG: r.proteinG ?? 0,
+			carbsG: r.carbsG ?? 0,
+			bolusableCarbsG: b.bolusableCarbsG,
+			bolusableLowConfidence: b.lowConfidence,
+			fatG: r.fatG ?? 0,
+			nutrients: r.nutrients ?? null
+		};
+	});
 }

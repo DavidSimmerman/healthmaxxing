@@ -35,6 +35,12 @@ export async function PUT({ request }) {
 		if (s !== null && s !== 'male' && s !== 'female') throw error(400, 'invalid sex');
 		profile.sex = s;
 	}
+	// Bolusable-carb fiber mode (clinical calibration). Only 'full' | 'half_over_5'.
+	if ('fiberMode' in body) {
+		const fm = body.fiberMode;
+		if (fm !== 'full' && fm !== 'half_over_5') throw error(400, 'invalid fiberMode');
+		profile.fiberMode = fm;
+	}
 
 	const set = { ...targets, ...profile };
 	await db

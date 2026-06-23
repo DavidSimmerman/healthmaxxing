@@ -1,0 +1,1 @@
+ALTER TABLE "settings" ADD COLUMN "fiber_mode" text DEFAULT 'full' NOT NULL;

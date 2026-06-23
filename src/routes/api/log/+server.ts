@@ -3,6 +3,8 @@ import { db } from '$lib/server/db';
 import { foods, dailyLog } from '$lib/server/db/schema';
 import { eq } from 'drizzle-orm';
 import { toServings, type Unit } from '$lib/units';
+import { bolusableForLoggedEntry } from '$lib/netCarbs';
+import { getFiberMode } from '$lib/server/prefs';
 
 export async function POST({ request }) {
 	const body = await request.json();
@@ -45,5 +47,14 @@ export async function POST({ request }) {
 			fatG: food.fatG * servings
 		})
 		.returning();
-	return json({ entry });
+
+	const b = bolusableForLoggedEntry(entry.carbsG, food.nutrients, servings, {
+		fiberMode: await getFiberMode()
+	});
+	return json({
+		entry,
+		foodName: food.name,
+		bolusableCarbsG: b.bolusableCarbsG,
+		bolusableLowConfidence: b.lowConfidence
+	});
 }
