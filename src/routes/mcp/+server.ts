@@ -333,7 +333,7 @@ async function callPrepFood(id: Id, args: Record<string, unknown>) {
 		const food = await prepFood(input);
 		const isRecipe = Array.isArray(food.ingredients) && food.ingredients.length > 0;
 		const verb = args.id ? 'Updated' : 'Saved';
-			const bolus = bolusableCarbsPerServing(food, { fiberMode: await getFiberMode() });
+		const bolus = bolusableCarbsPerServing(food, { fiberMode: await getFiberMode() });
 		const recipeBit = isRecipe
 			? ` Recipe of ${food.ingredients!.length} ingredient${
 					food.ingredients!.length === 1 ? '' : 's'
@@ -347,8 +347,8 @@ async function callPrepFood(id: Id, args: Record<string, unknown>) {
 				`Per serving: ${Math.round(food.calories)} kcal, ${round1(food.proteinG)}g protein, ${round1(
 					food.carbsG
 				)}g carbs (${round1(bolus.bolusableCarbsG)}g bolusable${
-						bolus.lowConfidence ? ', fiber unknown — verify from label' : ''
-					}), ${round1(food.fatG)}g fat. It’s now searchable in the app to log when eaten.`
+					bolus.lowConfidence ? ', fiber unknown — verify from label' : ''
+				}), ${round1(food.fatG)}g fat. It’s now searchable in the app to log when eaten.`
 		);
 	} catch (e) {
 		if (e instanceof FoodInputError) return toolResult(id, `Could not prep: ${e.message}`, true);

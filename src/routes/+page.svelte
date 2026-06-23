@@ -171,9 +171,14 @@
 			class="mt-3 flex items-center justify-between rounded-xl px-4 py-2.5"
 			style="background: rgba(252,211,77,0.08); border: 1px solid rgba(252,211,77,0.18);"
 		>
-			<span class="text-xs font-semibold tracking-wide uppercase" style="color: var(--color-carbs);">
+			<span
+				class="text-xs font-semibold tracking-wide uppercase"
+				style="color: var(--color-carbs);"
+			>
 				Bolusable carbs
-				{#if bolusableLowConf}<span style="color: var(--color-text-subtle);"> · ⚠︎ verify fiber</span>{/if}
+				{#if bolusableLowConf}<span style="color: var(--color-text-subtle);">
+						· ⚠︎ verify fiber</span
+					>{/if}
 			</span>
 			<span class="text-sm font-bold" style="color: var(--color-carbs);">
 				{Math.round(bolusableCarbs)}g
@@ -249,7 +254,8 @@
 							{Math.round(e.proteinG)}p · {Math.round(e.carbsG)}c
 						</div>
 						<div class="text-xs font-medium" style="color: var(--color-carbs);">
-							{Math.round(e.bolusableCarbsG)}g bolus{#if e.bolusableLowConfidence} ⚠︎{/if}
+							{Math.round(e.bolusableCarbsG)}g bolus{#if e.bolusableLowConfidence}
+								⚠︎{/if}
 						</div>
 					</div>
 				</button>

@@ -47,7 +47,10 @@ export function fiberAdjustment(fiberG: number, mode: FiberMode): number {
 }
 
 // Grams of sugar alcohol to subtract, per the polyol's glycemic factor.
-export function sugarAlcoholAdjustment(sugarAlcoholG: number, polyol: PolyolType = 'unknown'): number {
+export function sugarAlcoholAdjustment(
+	sugarAlcoholG: number,
+	polyol: PolyolType = 'unknown'
+): number {
 	return num(sugarAlcoholG) * (POLYOL_FACTOR[polyol] ?? POLYOL_FACTOR.unknown);
 }
 

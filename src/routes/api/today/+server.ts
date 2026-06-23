@@ -45,8 +45,7 @@ export async function GET({ request }) {
 	// intake. Computed here so the widget and the app's drift check agree.
 	const calSum = entries.reduce((sum, e) => sum + e.calories, 0);
 	const calTarget = s?.calorieTarget ?? 2100;
-	const deficit =
-		burnedKcal != null ? Math.round(burnedKcal - Math.max(calSum, calTarget)) : null;
+	const deficit = burnedKcal != null ? Math.round(burnedKcal - Math.max(calSum, calTarget)) : null;
 
 	return json({
 		date: todayLabel(),

@@ -31,10 +31,18 @@ export async function POST({ request }) {
 				})
 			: null;
 		return json({
-			food: { ...food, bolusableCarbsG: perServing.bolusableCarbsG, bolusableLowConfidence: perServing.lowConfidence },
+			food: {
+				...food,
+				bolusableCarbsG: perServing.bolusableCarbsG,
+				bolusableLowConfidence: perServing.lowConfidence
+			},
 			logEntry:
 				logEntry && entryBolus
-					? { ...logEntry, bolusableCarbsG: entryBolus.bolusableCarbsG, bolusableLowConfidence: entryBolus.lowConfidence }
+					? {
+							...logEntry,
+							bolusableCarbsG: entryBolus.bolusableCarbsG,
+							bolusableLowConfidence: entryBolus.lowConfidence
+						}
 					: logEntry
 		});
 	} catch (e) {

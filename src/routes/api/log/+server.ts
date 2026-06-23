@@ -17,7 +17,12 @@ export async function POST({ request }) {
 	// Gram/volume units need a serving weight to convert; without one, toServings
 	// would treat the amount as servings (188g → 188 servings). A food can lose its
 	// serving weight after a barcode source sync, so reject rather than misread it.
-	if (amount != null && unit && unit !== 'serving' && !(food.servingGrams && food.servingGrams > 0)) {
+	if (
+		amount != null &&
+		unit &&
+		unit !== 'serving' &&
+		!(food.servingGrams && food.servingGrams > 0)
+	) {
 		throw error(400, `Cannot log "${food.name}" by ${unit}: it has no serving weight.`);
 	}
 

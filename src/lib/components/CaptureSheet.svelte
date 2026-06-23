@@ -744,7 +744,10 @@
 						style="background: rgba(252,211,77,0.10); border: 1px solid rgba(252,211,77,0.22);"
 					>
 						<div>
-							<div class="text-xs font-semibold tracking-wide uppercase" style="color: var(--color-carbs);">
+							<div
+								class="text-xs font-semibold tracking-wide uppercase"
+								style="color: var(--color-carbs);"
+							>
 								Bolusable carbs
 							</div>
 							<div class="text-[11px]" style="color: var(--color-text-subtle);">
@@ -867,7 +870,10 @@
 					class="mt-4 rounded-2xl px-5 py-4 text-center"
 					style="background: rgba(252,211,77,0.10); border: 1px solid rgba(252,211,77,0.22);"
 				>
-					<div class="text-xs font-semibold tracking-wide uppercase" style="color: var(--color-carbs);">
+					<div
+						class="text-xs font-semibold tracking-wide uppercase"
+						style="color: var(--color-carbs);"
+					>
 						Bolusable carbs
 					</div>
 					<div class="text-4xl font-extrabold" style="color: var(--color-carbs);">
@@ -896,7 +902,8 @@
 										{Math.round(m.bolusableCarbsG)}g
 									</div>
 									<div class="text-[10px]" style="color: var(--color-text-subtle);">
-										of {Math.round(m.carbsG)}g{#if m.bolusableLowConfidence} ⚠︎{/if}
+										of {Math.round(m.carbsG)}g{#if m.bolusableLowConfidence}
+											⚠︎{/if}
 									</div>
 								</div>
 								<button
@@ -904,7 +911,13 @@
 									aria-label="Remove {m.name}"
 									onclick={() => removeMealItem(i)}
 								>
-									<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+									<svg
+										class="h-4 w-4"
+										fill="none"
+										stroke="currentColor"
+										stroke-width="2"
+										viewBox="0 0 24 24"
+									>
 										<path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
 									</svg>
 								</button>
@@ -929,9 +942,7 @@
 					disabled={logging || meal.length === 0}
 					onclick={confirmMeal}
 				>
-					{logging
-						? 'Logging…'
-						: `Log ${meal.length} item${meal.length === 1 ? '' : 's'} to today`}
+					{logging ? 'Logging…' : `Log ${meal.length} item${meal.length === 1 ? '' : 's'} to today`}
 				</button>
 			</div>
 		{:else if mode === 'barcode'}

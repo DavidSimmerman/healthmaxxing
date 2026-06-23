@@ -36,7 +36,15 @@ Do NOT discard `stash@{0}`. It touches schema.ts, mcp/+server.ts, drizzle/0012*,
 - [~] EditEntrySheet: deliberately NOT showing bolusable (it edits a portion; would need
       client-side fiberMode plumbing). The list/day/capture surfaces cover it.
 - [ ] Seed local DB + Playwright drive the flow (capture sheet empty on fresh DB)
-- [ ] Audit existing logged/catalog entries: confirm carbsG = TOTAL everywhere (via MCP live data)
+- [x] Audited LIVE data (read-only, via MCP). 61 catalog foods + 122 logged entries (2 wks,
+      106 with fiber). All 8 recipes store TOTAL carbs (stored/serv == ingredient-sum/serv).
+      No hand-logged high-carb food has suspiciously low carbsG. **One anomaly to review (not
+      auto-fixed — it's medical/dosing data):** the *Chocolate PB Ninja Creami* recipe has
+      per-serving fiber 5.2g > total carbs 4.5g, which is impossible if carbsG is true total —
+      likely an ingredient (fiber syrup / allulose) whose carbs were entered net while fiber is
+      also recorded. Impact is tiny (a ~0-carb dessert; the per-ingredient max(0,…) clamp makes
+      bolusable ≈ 0, never negative), but David should eyeball that recipe's ingredients. The
+      other two Creami recipes (Vanilla 4.5, Butterscotch 9.0) are fine.
 - [ ] Verify (tests green, Playwright flow, codex review --uncommitted)
 - [ ] Final commit + wake-up message
 

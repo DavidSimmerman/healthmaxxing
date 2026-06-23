@@ -224,8 +224,8 @@
 			<strong>Half over 5g</strong> only subtracts half, and only when fiber exceeds 5g (ADA-style).
 			Sugar alcohols are subtracted at a conservative 0.5× unless the polyol is known. This is a
 			<strong>clinical calibration that feeds insulin dosing</strong> — review it with your care team
-			and validate against CGM traces; it is not medical advice. Changing it recomputes every past
-			day. Total carbs always stay visible alongside the bolusable figure.
+			and validate against CGM traces; it is not medical advice. Changing it recomputes every past day.
+			Total carbs always stay visible alongside the bolusable figure.
 		</p>
 
 		<h2 class="mt-6 mb-4 text-sm font-semibold tracking-wide text-white uppercase">
