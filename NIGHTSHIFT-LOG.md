@@ -57,7 +57,36 @@ Do NOT discard `stash@{0}`. It touches schema.ts, mcp/+server.ts, drizzle/0012*,
       now agree (verified live: both read 33 under half_over_5 for the test burrito). Other note:
       a network-throw double-log window in /api/log is PRE-EXISTING (same as the old single-item
       path), not a regression; safe fix would be a client idempotency token (out of scope).
-- [ ] Final commit + wake-up message
+- [x] Final commit + wake-up message — DONE. 4 commits on `feat/bolusable-carbs`.
+
+## ✅ FINAL STATUS — COMPLETE
+Both asks shipped: (1) multi-item "log another" meal flow with a running bolus total + one
+final confirm; (2) total AND bolusable carbs shown when adding (capture detail + meal review)
+and in history (today list + day view, per-entry and daily totals), plus the MCP tool replies.
+Derivation lives in one place (`src/lib/netCarbs.ts`), configurable fiber mode (default 'full'),
+sugar-alcohol at conservative 0.5×, low-confidence flag when fiber data is missing, recipes
+rolled up at the ingredient level. Total carbs always stay visible; uncertainty errs toward
+HIGHER carbs.
+
+### To run locally
+`cd ~/dev/healthmaxxing` → `pnpm dev` (needs local Postgres `healthdash`, which is seeded).
+The app normally requires login; I ran the dev server with `MCP_AUTH_PASSWORD='' KEYCLOAK_ISSUER=''`
+only for headless testing (now stopped). Screenshots of the flow: `/tmp/hm-shots/*.png`.
+Tests: `npx tsx src/lib/netCarbs.check.ts` and `pnpm check` (0 errors).
+
+### Two things for David to glance at
+1. **Stash** `stash@{0}` holds the unrelated Fitbit/Google-Health WIP — restore with
+   `git switch feat/mcp-back-correct && git stash pop`.
+2. **Data**: the *Chocolate PB Ninja Creami* recipe has per-serving fiber (5.2g) > total carbs
+   (4.5g), which shouldn't happen if carbs is the true total — likely an ingredient whose carbs
+   were entered net. Impact is tiny (≈0-carb dessert; bolusable clamps to ≥0), but worth a look.
+   Everything else in the live data checks out (carbsG = total).
+
+### Deploy note
+The MCP server (live Health Dashboard) still runs the OLD code — these changes are committed on
+the branch, NOT deployed/pushed (nightshift doesn't push). Merge + deploy when ready. The migration
+0012 (settings.fiberMode) needs to run on deploy; it conflicts in number with the stashed Fitbit
+0012 — resolve when both land.
 
 ## Decisions (autonomous)
 - Stashed unrelated Fitbit WIP and branched fresh, to keep this feature's diff clean and
