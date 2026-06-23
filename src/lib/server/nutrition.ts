@@ -2,7 +2,13 @@ import { sql, eq, and, gte, lte } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { dailyLog, foods, dailyMetrics } from '$lib/server/db/schema';
 import { APP_TZ } from '$lib/server/day';
-import { scaleNutrients, sumNutrients, NUTRIENT_KEYS, type Nutrients } from '$lib/nutrients';
+import {
+	scaleNutrients,
+	sumNutrients,
+	nutrientCoverage,
+	NUTRIENT_KEYS,
+	type Nutrients
+} from '$lib/nutrients';
 
 // Aggregate everything eaten over a date range, for the read-only MCP nutrition
 // tool. Macros come from the cached per-entry totals on dailyLog (servings
@@ -27,6 +33,10 @@ export type NutritionReport = {
 	loggedDays: number;
 	totals: NutritionTotals;
 	dailyAvg: NutritionTotals;
+	// Per-nutrient confidence (0–1): share of logged calories whose food actually
+	// recorded that nutrient. Low coverage = treat the total as "unknown", not as a
+	// real deficiency. Only present for nutrients that appear in totals.
+	coverage: Partial<Record<keyof Nutrients, number>>;
 };
 
 function round1(n: number): number {
@@ -47,7 +57,8 @@ export async function nutritionReport(from: string, to: string): Promise<Nutriti
 				proteinG: dailyLog.proteinG,
 				carbsG: dailyLog.carbsG,
 				fatG: dailyLog.fatG,
-				nutrients: foods.nutrients
+				nutrients: foods.nutrients,
+				ingredients: foods.ingredients
 			})
 			.from(dailyLog)
 			.innerJoin(foods, eq(dailyLog.foodId, foods.id))
@@ -89,9 +100,7 @@ export async function nutritionReport(from: string, to: string): Promise<Nutriti
 
 	const loggedDays = loggedDates.size;
 	const calendarDays =
-		Math.round(
-			(Date.parse(`${to}T12:00:00Z`) - Date.parse(`${from}T12:00:00Z`)) / 86_400_000
-		) + 1;
+		Math.round((Date.parse(`${to}T12:00:00Z`) - Date.parse(`${from}T12:00:00Z`)) / 86_400_000) + 1;
 	// Per-logged-day averages are more meaningful than per-calendar-day when the
 	// user skips logging some days.
 	const avgDivisor = Math.max(loggedDays, 1);
@@ -121,5 +130,61 @@ export async function nutritionReport(from: string, to: string): Promise<Nutriti
 		}
 	}
 
-	return { from, to, calendarDays, loggedDays, totals, dailyAvg };
+	const coverage = nutrientCoverage(entries, calories);
+
+	return { from, to, calendarDays, loggedDays, totals, dailyAvg, coverage };
+}
+
+// Per-entry log over [from, to] inclusive — the review worklist for back-correcting
+// nutrients. Each row carries the food's CURRENT per-serving nutrients (read live),
+// so the caller can see which foods are missing vitamins and fix them via
+// correct_food_nutrients. Note: cal/protein/carbs/fat are snapshotted per entry and
+// are NOT changed by a nutrient correction; only the extended nutrients are live.
+export type LoggedEntry = {
+	date: string;
+	logId: string;
+	foodId: string;
+	name: string;
+	brand: string | null;
+	servings: number;
+	calories: number;
+	proteinG: number;
+	carbsG: number;
+	fatG: number;
+	nutrients: Partial<Nutrients> | null;
+};
+
+export async function logEntries(from: string, to: string): Promise<LoggedEntry[]> {
+	const logDate = sql<string>`(${dailyLog.loggedAt} at time zone 'UTC' at time zone ${APP_TZ})::date`;
+	const rows = await db
+		.select({
+			date: sql<string>`${logDate}::text`,
+			logId: dailyLog.id,
+			foodId: foods.id,
+			name: foods.name,
+			brand: foods.brand,
+			servings: dailyLog.servings,
+			calories: dailyLog.calories,
+			proteinG: dailyLog.proteinG,
+			carbsG: dailyLog.carbsG,
+			fatG: dailyLog.fatG,
+			nutrients: foods.nutrients
+		})
+		.from(dailyLog)
+		.innerJoin(foods, eq(dailyLog.foodId, foods.id))
+		.where(sql`${logDate} between ${from}::date and ${to}::date`)
+		.orderBy(logDate);
+	return rows.map((r) => ({
+		date: r.date,
+		logId: r.logId,
+		foodId: r.foodId,
+		name: r.name,
+		brand: r.brand,
+		servings: r.servings ?? 1,
+		calories: r.calories ?? 0,
+		proteinG: r.proteinG ?? 0,
+		carbsG: r.carbsG ?? 0,
+		fatG: r.fatG ?? 0,
+		nutrients: r.nutrients ?? null
+	}));
 }

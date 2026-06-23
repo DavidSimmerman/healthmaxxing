@@ -11,15 +11,19 @@ import {
 	prepFood,
 	searchFoods,
 	lookupBarcodeMacros,
+	patchFoodNutrients,
+	correctLogEntry,
 	FoodInputError,
 	type CreateAndLogInput,
+	type LogEntryPatch,
 	type PrepFoodInput
 } from '$lib/server/foods';
 import { deficitDays } from '$lib/server/deficit';
 import { fillBmrGaps, bodyInsights } from '$lib/server/projections';
 import { todayLabel } from '$lib/server/day';
 import { addDays } from '$lib/energy';
-import { nutritionReport } from '$lib/server/nutrition';
+import { nutritionReport, logEntries } from '$lib/server/nutrition';
+import { sanitizeNutrients } from '$lib/nutrients';
 
 const PROTOCOL_VERSION = '2025-03-26';
 
@@ -90,7 +94,12 @@ const LOG_FOOD_TOOL = {
 				type: 'string',
 				description: 'Confidence / assumptions, e.g. "plate estimate, ±25%"'
 			},
-			logToday: { type: 'boolean', description: 'Add to today’s log (default true)' },
+			logToday: { type: 'boolean', description: 'Add to the log (default true)' },
+			date: {
+				type: 'string',
+				description:
+					'YYYY-MM-DD to log a MISSED food to a past day instead of today. Omit for today.'
+			},
 			servings: { type: 'number', description: 'Servings actually eaten (default 1)' },
 			amount: {
 				type: 'number',
@@ -275,10 +284,14 @@ async function callLogFood(id: Id, args: Record<string, unknown>) {
 		const input = { ...args, logToday } as unknown as CreateAndLogInput;
 		const { food, logEntry } = await createAndLogFood(input);
 		const servings = logEntry?.servings ?? 1;
+		// Reflect the actual day written — "today" or the backfilled date — so a
+		// correction workflow can confirm the entry landed where intended.
+		const day = logEntry ? todayLabel(logEntry.loggedAt) : todayLabel();
+		const dayLabel = day === todayLabel() ? 'today' : day;
 		const lines = [
 			`Saved "${food.name}"${food.brand ? ` (${food.brand})` : ''}.`,
 			logEntry
-				? `Logged to today${servings !== 1 ? ` ×${servings}` : ''}: ${Math.round(
+				? `Logged to ${dayLabel}${servings !== 1 ? ` ×${servings}` : ''}: ${Math.round(
 						logEntry.calories
 					)} kcal, ${round1(logEntry.proteinG)}g protein, ${round1(logEntry.carbsG)}g carbs, ${round1(
 						logEntry.fatG
@@ -364,7 +377,8 @@ const GET_ENERGY_LEDGER_TOOL = {
 			to: { type: 'string', description: 'End date YYYY-MM-DD (inclusive, default today)' },
 			days: {
 				type: 'number',
-				description: 'Number of trailing days ending at `to` (default 14, max 370). Ignored if `from` is given.'
+				description:
+					'Number of trailing days ending at `to` (default 14, max 370). Ignored if `from` is given.'
 			}
 		}
 	}
@@ -403,7 +417,11 @@ const GET_NUTRITION_TOOL = {
 		'cholesterol, caffeine, and more. Use this to flag nutrient deficiencies or excesses, an ' +
 		'over-restrictive diet, or imbalanced macros, and to recommend improvements. Daily averages ' +
 		'are per logged day. Extended nutrients are only as complete as what has been logged per ' +
-		'food, so a missing nutrient may just mean it wasn’t recorded. Default range is the last 7 days.',
+		'food, so a missing nutrient may just mean it wasn’t recorded. The `coverage` map gives, per ' +
+		'nutrient, the share (0–1) of logged calories whose food actually recorded it: LOW coverage ' +
+		'means treat that total as UNKNOWN, not as a real deficiency. To fix sparse data, use ' +
+		'get_day_log to find the foods missing a nutrient, then correct_food_nutrients to fill it in. ' +
+		'Default range is the last 7 days.',
 	inputSchema: {
 		type: 'object',
 		properties: {
@@ -411,9 +429,93 @@ const GET_NUTRITION_TOOL = {
 			to: { type: 'string', description: 'End date YYYY-MM-DD (inclusive, default today)' },
 			days: {
 				type: 'number',
-				description: 'Number of trailing days ending at `to` (default 7). Ignored if `from` is given.'
+				description:
+					'Number of trailing days ending at `to` (default 7). Ignored if `from` is given.'
 			}
 		}
+	}
+};
+
+const GET_DAY_LOG_TOOL = {
+	name: 'get_day_log',
+	description:
+		'Read-only. The individual food entries logged over a date range — the worklist for ' +
+		'reviewing and back-correcting a day. Each entry returns its date, logId, foodId, name, brand, ' +
+		'servings, its logged macros (calories/proteinG/carbsG/fatG), and the food’s CURRENT per-serving ' +
+		'`nutrients` (vitamins, minerals, etc.). Two kinds of fix: (1) wrong/missing VITAMINS or other ' +
+		'extended nutrients → correct_food_nutrients(foodId); these are read live, so one fix applies to ' +
+		'every day the food was eaten. (2) a wrong MACRO or portion on one day → correct_log_entry(logId); ' +
+		'macros are snapshotted per entry, so this changes only that day. To add a food you MISSED on a ' +
+		'past day, use log_food with its `date`. The same food eaten on several days appears once per day. ' +
+		'Default range is the last 7 days ending today.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			from: { type: 'string', description: 'Start date YYYY-MM-DD (inclusive)' },
+			to: { type: 'string', description: 'End date YYYY-MM-DD (inclusive, default today)' },
+			days: {
+				type: 'number',
+				description:
+					'Number of trailing days ending at `to` (default 7, max 370). Ignored if `from` is given.'
+			}
+		}
+	}
+};
+
+const CORRECT_FOOD_NUTRIENTS_TOOL = {
+	name: 'correct_food_nutrients',
+	description:
+		'Back-correct a food’s extended nutrients (per serving) — e.g. fill in vitamins or minerals ' +
+		'Open Food Facts didn’t have, or fix a wrong value. Pass the foodId (from get_day_log or ' +
+		'list_foods) and ONLY the nutrient keys you’re correcting; they are merged into what’s stored, ' +
+		'so existing keys you don’t mention are kept. Because reports read a food’s nutrients live, this ' +
+		'RETROACTIVELY fixes every past day the food was eaten — there’s no need to edit each day. Macros ' +
+		'(calories/protein/carbs/fat) are not touched. Recipes are rejected (their nutrients come from ' +
+		'their ingredients — update those via prep_food). Only set values you’re confident about; resolve ' +
+		'from a nutrition label or a reliable source rather than guessing, and tell the user what you ' +
+		'changed and where the numbers came from.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			foodId: {
+				type: 'string',
+				description: 'The food to correct (from get_day_log or list_foods)'
+			},
+			nutrients: {
+				type: 'object',
+				description: `Per-serving nutrient values to merge in. Allowed keys: ${NUTRIENT_KEYS}. Unknown/negative values are ignored.`
+			}
+		},
+		required: ['foodId', 'nutrients']
+	}
+};
+
+const CORRECT_LOG_ENTRY_TOOL = {
+	name: 'correct_log_entry',
+	description:
+		'Back-correct a single past (or today’s) log entry’s MACROS — for a portion that was off or a ' +
+		'bad estimate on one day. Pass the logId (from get_day_log). Two ways to fix: pass `servings` ' +
+		'alone to recompute calories/protein/carbs/fat from the food’s current per-serving values (e.g. ' +
+		'the user actually ate 2 servings, not 1); or pass any of calories/proteinG/carbsG/fatG to ' +
+		'override those directly (only the fields you send change). This edits ONLY this one day — macros ' +
+		'are snapshotted per entry. To fix vitamins/extended nutrients instead, use correct_food_nutrients; ' +
+		'to add a food missed on a past day, use log_food with `date`. Verify the Atwater balance ' +
+		'(protein×4 + carbs×4 + fat×9 ≈ calories within ~10%) and tell the user what you changed and why.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			logId: { type: 'string', description: 'The log entry to correct (from get_day_log)' },
+			servings: {
+				type: 'number',
+				description:
+					'New servings — recomputes all four macros from the food (unless macros are also given)'
+			},
+			calories: { type: 'number', description: 'Override entry total kcal for this day' },
+			proteinG: { type: 'number', description: 'Override entry total protein (g)' },
+			carbsG: { type: 'number', description: 'Override entry total carbs (g)' },
+			fatG: { type: 'number', description: 'Override entry total fat (g)' }
+		},
+		required: ['logId']
 	}
 };
 
@@ -494,6 +596,73 @@ async function callGetNutrition(id: Id, args: Record<string, unknown>) {
 	}
 }
 
+async function callGetDayLog(id: Id, args: Record<string, unknown>) {
+	try {
+		const to = typeof args.to === 'string' ? args.to : todayLabel();
+		let days = typeof args.days === 'number' ? Math.floor(args.days) : 7;
+		if (!Number.isFinite(days) || days < 1) days = 7;
+		if (days > 370) days = 370;
+		const from = typeof args.from === 'string' ? args.from : addDays(to, -(days - 1));
+
+		const entries = await logEntries(from, to);
+		const line = entries.length
+			? `Day log ${from} → ${to}: ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}.`
+			: `Day log ${from} → ${to}: nothing logged in this range.`;
+		return toolResult(id, `${line}\n${JSON.stringify({ from, to, entries }, null, 2)}`);
+	} catch (e) {
+		console.error('get_day_log failed:', e);
+		return toolResult(id, 'Could not load the day log: an internal error occurred.', true);
+	}
+}
+
+async function callCorrectFoodNutrients(id: Id, args: Record<string, unknown>) {
+	const foodId = typeof args.foodId === 'string' ? args.foodId.trim() : '';
+	if (!foodId) return toolResult(id, 'Provide the `foodId` of the food to correct.', true);
+	const patch = sanitizeNutrients(args.nutrients);
+	if (!patch) {
+		return toolResult(id, 'Provide at least one valid nutrient value in `nutrients`.', true);
+	}
+	try {
+		const food = await patchFoodNutrients(foodId, patch);
+		const changed = Object.keys(patch).join(', ');
+		return toolResult(
+			id,
+			`Corrected ${changed} on "${food.name}"${food.brand ? ` (${food.brand})` : ''}. ` +
+				`This applies to every past and future day it was eaten.`
+		);
+	} catch (e) {
+		if (e instanceof FoodInputError) return toolResult(id, `Could not correct: ${e.message}`, true);
+		console.error('correct_food_nutrients failed:', e);
+		return toolResult(id, 'Could not correct: an internal error occurred.', true);
+	}
+}
+
+async function callCorrectLogEntry(id: Id, args: Record<string, unknown>) {
+	const logId = typeof args.logId === 'string' ? args.logId.trim() : '';
+	if (!logId) return toolResult(id, 'Provide the `logId` of the entry to correct.', true);
+	// Forward only the fields the caller actually sent; correctLogEntry validates them.
+	const patch: LogEntryPatch = {};
+	for (const k of ['servings', 'calories', 'proteinG', 'carbsG', 'fatG'] as const) {
+		if (typeof args[k] === 'number') patch[k] = args[k] as number;
+	}
+	if (Object.keys(patch).length === 0) {
+		return toolResult(id, 'Provide servings and/or macro fields (numbers) to change.', true);
+	}
+	try {
+		const e = await correctLogEntry(logId, patch);
+		return toolResult(
+			id,
+			`Corrected log entry: ×${round1(e.servings)} serving${e.servings === 1 ? '' : 's'}, ` +
+				`${Math.round(e.calories)} kcal, ${round1(e.proteinG)}g protein, ${round1(e.carbsG)}g carbs, ` +
+				`${round1(e.fatG)}g fat. Only this day’s entry changed.`
+		);
+	} catch (e) {
+		if (e instanceof FoodInputError) return toolResult(id, `Could not correct: ${e.message}`, true);
+		console.error('correct_log_entry failed:', e);
+		return toolResult(id, 'Could not correct: an internal error occurred.', true);
+	}
+}
+
 // ── HTTP handlers ─────────────────────────────────────────────────────────────
 function unauthorized(origin: string) {
 	return new Response(JSON.stringify({ error: 'invalid_token' }), {
@@ -554,7 +723,10 @@ export async function POST({ request, url }) {
 					LOOKUP_BARCODE_TOOL,
 					GET_ENERGY_LEDGER_TOOL,
 					GET_BODY_TRENDS_TOOL,
-					GET_NUTRITION_TOOL
+					GET_NUTRITION_TOOL,
+					GET_DAY_LOG_TOOL,
+					CORRECT_FOOD_NUTRIENTS_TOOL,
+					CORRECT_LOG_ENTRY_TOOL
 				]
 			});
 		case 'tools/call': {
@@ -567,6 +739,9 @@ export async function POST({ request, url }) {
 			if (name === 'get_energy_ledger') return callGetEnergyLedger(id, args);
 			if (name === 'get_body_trends') return callGetBodyTrends(id, args);
 			if (name === 'get_nutrition') return callGetNutrition(id, args);
+			if (name === 'get_day_log') return callGetDayLog(id, args);
+			if (name === 'correct_food_nutrients') return callCorrectFoodNutrients(id, args);
+			if (name === 'correct_log_entry') return callCorrectLogEntry(id, args);
 			return rpcError(id, -32602, `Unknown tool: ${String(name)}`);
 		}
 		case 'ping':

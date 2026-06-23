@@ -2,10 +2,11 @@ import { db } from '$lib/server/db';
 import { foods, dailyLog, quickAdds, type Ingredient } from '$lib/server/db/schema';
 import { and, desc, eq, ilike, isNull, sql } from 'drizzle-orm';
 import { canonicalBarcode } from '$lib/barcode';
-import { sanitizeNutrients, scaleNutrients, sumNutrients } from '$lib/nutrients';
+import { mergeNutrients, sanitizeNutrients, scaleNutrients, sumNutrients } from '$lib/nutrients';
 import type { Nutrients } from '$lib/nutrients';
 import { toServings, UNITS, type Unit } from '$lib/units';
 import { lookupBarcodeRich, type MacroBundle } from '$lib/server/openFoodFacts';
+import { APP_TZ } from './day';
 
 export class FoodInputError extends Error {}
 
@@ -245,7 +246,27 @@ export type CreateAndLogInput = PrepFoodInput & {
 	servings?: number;
 	amount?: number | null;
 	unit?: Unit | null;
+	date?: string | null; // YYYY-MM-DD to log a missed food to a PAST day (default today)
 };
+
+// A YYYY-MM-DD date → the UTC instant that buckets to that calendar day in APP_TZ
+// (loggedAt is a UTC wall-clock column reinterpreted as APP_TZ for day-bucketing).
+// Start from noon UTC and nudge by a day until the APP_TZ date matches — correct for
+// any timezone (incl. UTC+12/+14) and DST. This also rejects impossible dates: a
+// rolled-over day (2026-02-31 → Mar) never formats back to the requested string.
+const ymd = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: APP_TZ }).format(d);
+function parseLogDate(date: string | null | undefined): Date | undefined {
+	if (date == null || date === '') return undefined;
+	const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(date).trim());
+	if (!m) throw new FoodInputError(`date must be YYYY-MM-DD (got "${date}").`);
+	const target = `${m[1]}-${m[2]}-${m[3]}`;
+	let d = new Date(`${target}T12:00:00Z`);
+	for (let i = 0; i < 2 && ymd(d) !== target; i++) {
+		d = new Date(d.getTime() + (ymd(d) < target ? 1 : -1) * 86_400_000);
+	}
+	if (ymd(d) !== target) throw new FoodInputError(`Invalid date "${date}".`);
+	return d;
+}
 
 // Upsert a food (via prepFood) and optionally log it to today. Shared by the REST
 // endpoint (POST /api/foods) and the MCP `log_food` tool so both behave identically.
@@ -277,6 +298,7 @@ export async function createAndLogFood(
 			throw new FoodInputError('Could not resolve a positive amount to log.');
 		}
 
+		const loggedAt = parseLogDate(input.date); // undefined → DB default now()
 		[logEntry] = await db
 			.insert(dailyLog)
 			.values({
@@ -284,6 +306,7 @@ export async function createAndLogFood(
 				servings,
 				amount: hasAmount ? (input.amount as number) : null,
 				unit: hasAmount ? unit : null,
+				...(loggedAt ? { loggedAt } : {}),
 				calories: food.calories * servings,
 				proteinG: food.proteinG * servings,
 				carbsG: food.carbsG * servings,
@@ -293,6 +316,106 @@ export async function createAndLogFood(
 	}
 
 	return { food, logEntry };
+}
+
+// ── Back-correct extended nutrients ─────────────────────────────────────────────
+// Merge a nutrient patch into a food's stored per-serving nutrients (e.g. fill in
+// vitamins Open Food Facts didn't have). The caller only sends the keys that change.
+// Reports read foods.nutrients LIVE (daily_log caches only macros), so this
+// retroactively fixes every past day the food was eaten. Recipes derive their
+// nutrients from ingredients, so patch those via prepFood instead — rejected here.
+export async function patchFoodNutrients(id: string, patch: Partial<Nutrients>): Promise<FoodRow> {
+	const cleanPatch = sanitizeNutrients(patch);
+	if (!cleanPatch) throw new FoodInputError('No valid nutrient values to apply.');
+	const [existing] = await db.select().from(foods).where(eq(foods.id, id));
+	if (!existing) throw new FoodInputError(`No food with id ${id}`);
+	if (Array.isArray(existing.ingredients) && existing.ingredients.length > 0) {
+		throw new FoodInputError(
+			'This is a recipe — its nutrients are computed from its ingredients. Update the ' +
+				'ingredient nutrients via prep_food instead.'
+		);
+	}
+	// An OFF row cached without a serving weight stores macros/nutrients per 100g
+	// (mirrors `storedIs100g` in lookupBarcodeMacros), but the patch is per serving —
+	// merging would mix unit bases. Refuse rather than corrupt the stored bag.
+	if (existing.source === 'off' && !(existing.servingGrams && existing.servingGrams > 0)) {
+		throw new FoodInputError(
+			'This food’s nutrients are stored per 100g (an Open Food Facts item with no serving ' +
+				'size), so a per-serving correction would mix units. Re-log it via log_food with a ' +
+				'serving weight first, then correct that entry.'
+		);
+	}
+	const [food] = await db
+		.update(foods)
+		.set({
+			nutrients: mergeNutrients(existing.nutrients, cleanPatch),
+			// A hand-corrected food is a deliberate value — keep it across future scans.
+			overridden: true,
+			updatedAt: new Date()
+		})
+		.where(eq(foods.id, id))
+		.returning();
+	return food;
+}
+
+// ── Back-correct a past log entry's macros ──────────────────────────────────────
+// daily_log caches macros per entry (so editing a food never rewrites history), so a
+// wrong portion or bad estimate on one day is fixed HERE, on the entry — not on the
+// food. Pass `servings` alone to recompute the four macros from the food's CURRENT
+// per-serving values ("I actually ate 2 servings"); pass macro fields to override them
+// directly (only the fields you send change). Nutrients aren't cached per entry — to
+// fix those, correct the food via patchFoodNutrients.
+export type LogEntryPatch = {
+	servings?: number;
+	calories?: number;
+	proteinG?: number;
+	carbsG?: number;
+	fatG?: number;
+};
+
+const MACRO_KEYS = ['calories', 'proteinG', 'carbsG', 'fatG'] as const;
+
+export async function correctLogEntry(logId: string, patch: LogEntryPatch): Promise<LogRow> {
+	const [entry] = await db.select().from(dailyLog).where(eq(dailyLog.id, logId));
+	if (!entry) throw new FoodInputError(`No log entry with id ${logId}`);
+
+	const nonNeg = (v: unknown, label: string): number => {
+		if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) {
+			throw new FoodInputError(`${label} must be a non-negative number.`);
+		}
+		return v;
+	};
+
+	const set: Partial<typeof dailyLog.$inferInsert> = {};
+	const hasMacro = MACRO_KEYS.some((k) => patch[k] !== undefined);
+
+	if (patch.servings !== undefined) {
+		const servings = nonNeg(patch.servings, 'servings');
+		if (servings <= 0) throw new FoodInputError('servings must be greater than 0.');
+		set.servings = servings;
+		// servings is now the source of truth — clear any stale amount/unit display.
+		set.amount = null;
+		set.unit = null;
+		if (!hasMacro) {
+			const [food] = await db.select().from(foods).where(eq(foods.id, entry.foodId));
+			if (!food) throw new FoodInputError('Log entry references a missing food.');
+			set.calories = food.calories * servings;
+			set.proteinG = food.proteinG * servings;
+			set.carbsG = food.carbsG * servings;
+			set.fatG = food.fatG * servings;
+		}
+	}
+
+	for (const k of MACRO_KEYS) {
+		if (patch[k] !== undefined) set[k] = nonNeg(patch[k], k);
+	}
+
+	if (Object.keys(set).length === 0) {
+		throw new FoodInputError('Nothing to change — provide servings and/or macro fields.');
+	}
+
+	const [updated] = await db.update(dailyLog).set(set).where(eq(dailyLog.id, logId)).returning();
+	return updated;
 }
 
 // ── Soft delete ───────────────────────────────────────────────────────────────
