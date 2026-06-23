@@ -24,6 +24,7 @@ import { todayLabel } from '$lib/server/day';
 import { addDays } from '$lib/energy';
 import { nutritionReport, logEntries } from '$lib/server/nutrition';
 import { sanitizeNutrients } from '$lib/nutrients';
+import { searchFdc, lookupFdcByUpc } from '$lib/server/fdc';
 
 const PROTOCOL_VERSION = '2025-03-26';
 
@@ -249,6 +250,71 @@ const LOOKUP_BARCODE_TOOL = {
 		required: ['barcodes']
 	}
 };
+
+const LOOKUP_FDC_TOOL = {
+	name: 'lookup_fdc',
+	description:
+		'Read-only. Look up ground-truth nutrition from USDA FoodData Central (FDC) to fill in ' +
+		'vitamins/minerals Open Food Facts is missing — especially for whole-food ingredients and ' +
+		'recipes. Returns PER-100g panels (macros for reference + extended `nutrients` in this ' +
+		'dashboard’s keys) for the top matches. TO BUILD A RECIPE’S MICRONUTRIENT PANEL: for each ' +
+		'ingredient, look it up here, multiply the per-100g `nutrients` by (grams used / 100), set that ' +
+		'as the ingredient’s `nutrients`, then call prep_food — it sums the ingredients and divides by ' +
+		'makesServings automatically. Prefer Foundation / SR Legacy matches (clean per-100g reference ' +
+		'data) for whole foods; for a packaged product pass its `upc` for an exact Branded match. ' +
+		'IMPORTANT: FDC search is FUZZY — "chicken breast" can return a deli roll — so read each ' +
+		'match’s description/dataType and pick the closest real equivalent; record any substitution in ' +
+		'the recipe’s resolverNote. Do NOT use this to change macros (calories/protein/carbs/fat) — ' +
+		'those are source of truth; only ADD micronutrients. Values are per 100g; nutrients FDC reports ' +
+		'only in IU are omitted rather than guessed.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			query: { type: 'string', description: 'Food/ingredient name, e.g. "white rice, cooked"' },
+			upc: { type: 'string', description: 'UPC/EAN for an exact Branded match (instead of query)' },
+			dataType: {
+				type: 'array',
+				items: { type: 'string', enum: ['Foundation', 'SR Legacy', 'Branded', 'Survey (FNDDS)'] },
+				description: 'Restrict datasets (default Foundation + SR Legacy — the richest micro panels)'
+			},
+			pageSize: { type: 'number', description: 'Max matches to return (default 5, max 25)' }
+		}
+	}
+};
+
+async function callLookupFdc(id: Id, args: Record<string, unknown>) {
+	const query = typeof args.query === 'string' ? args.query.trim() : '';
+	const upc = typeof args.upc === 'string' ? args.upc.trim() : '';
+	if (!query && !upc) return toolResult(id, 'Provide a `query` or a `upc`.', true);
+	try {
+		if (upc) {
+			const match = await lookupFdcByUpc(upc);
+			return toolResult(
+				id,
+				match
+					? `FDC exact UPC match for ${upc} (per 100g).\n${JSON.stringify({ matches: [match] }, null, 2)}`
+					: `No FDC Branded entry for UPC ${upc}. Try a name \`query\`, or trust the Open Food Facts / label values.`
+			);
+		}
+		const dataType = Array.isArray(args.dataType)
+			? args.dataType.filter((d): d is string => typeof d === 'string')
+			: undefined;
+		const pageSize = typeof args.pageSize === 'number' ? args.pageSize : undefined;
+		const matches = await searchFdc(query, { dataType, pageSize });
+		const summary = matches.length
+			? `FDC: ${matches.length} match${matches.length === 1 ? '' : 'es'} for "${query}" (per 100g). Pick the closest whole-food equivalent.`
+			: `FDC: no matches for "${query}". Try a simpler/generic name (e.g. "rice, white, cooked").`;
+		return toolResult(id, `${summary}\n${JSON.stringify({ matches }, null, 2)}`);
+	} catch (e) {
+		console.error('lookup_fdc failed:', e);
+		const msg = e instanceof Error && e.message.startsWith('FDC ') ? ` (${e.message})` : '';
+		return toolResult(
+			id,
+			`Could not reach USDA FDC${msg}. It may be rate-limited (set FDC_API_KEY) — retry shortly.`,
+			true
+		);
+	}
+}
 
 async function callLookupBarcode(id: Id, args: Record<string, unknown>) {
 	const raw = args.barcodes;
@@ -721,6 +787,7 @@ export async function POST({ request, url }) {
 					PREP_FOOD_TOOL,
 					LIST_FOODS_TOOL,
 					LOOKUP_BARCODE_TOOL,
+					LOOKUP_FDC_TOOL,
 					GET_ENERGY_LEDGER_TOOL,
 					GET_BODY_TRENDS_TOOL,
 					GET_NUTRITION_TOOL,
@@ -736,6 +803,7 @@ export async function POST({ request, url }) {
 			if (name === 'prep_food') return callPrepFood(id, args);
 			if (name === 'list_foods') return callListFoods(id, args);
 			if (name === 'lookup_barcode') return callLookupBarcode(id, args);
+			if (name === 'lookup_fdc') return callLookupFdc(id, args);
 			if (name === 'get_energy_ledger') return callGetEnergyLedger(id, args);
 			if (name === 'get_body_trends') return callGetBodyTrends(id, args);
 			if (name === 'get_nutrition') return callGetNutrition(id, args);

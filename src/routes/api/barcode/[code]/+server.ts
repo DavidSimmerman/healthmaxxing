@@ -5,6 +5,8 @@ import { eq } from 'drizzle-orm';
 import { lookupBarcode } from '$lib/server/openFoodFacts';
 import { createAndLogFood, FoodInputError, findFoodByBarcode } from '$lib/server/foods';
 import { canonicalBarcode, macrosDiffer, toSnapshot, type MacroSnapshot } from '$lib/barcode';
+import { lookupFdcByUpc } from '$lib/server/fdc';
+import { mergeNutrients, scaleNutrients } from '$lib/nutrients';
 
 // Lookup flow (a scan ALWAYS re-checks the source so a stale DB copy can't go
 // unnoticed — the DB version still provides the final/logged macros):
@@ -83,10 +85,7 @@ export async function GET({ params }) {
 				return json({ food: updated, source: 'cache' });
 			}
 			if (macrosDiffer(cached.sourceMacros, offMacros)) {
-				await db
-					.update(foods)
-					.set({ sourceCheckedAt: new Date() })
-					.where(eq(foods.id, cached.id));
+				await db.update(foods).set({ sourceCheckedAt: new Date() }).where(eq(foods.id, cached.id));
 				return json({
 					food: cached,
 					source: 'cache',
@@ -103,6 +102,17 @@ export async function GET({ params }) {
 
 	// Not cached yet — cache the OFF product (source-mirrored, baseline = OFF).
 	if (off.ok) {
+		// Fill micronutrient gaps OFF is missing from an EXACT FDC UPC match (same
+		// product — no fuzzy matching). OFF values win; FDC only supplies keys OFF
+		// lacks. Best-effort with a tight timeout so a slow/absent FDC never blocks
+		// caching the scan. FDC is per-100g while off.nutrients matches the stored
+		// macro basis: per serving when servingGrams is known, else per-100g — so
+		// scale FDC to the same basis before merging (mirrors the storedIs100g rule).
+		const fdc = await lookupFdcByUpc(code, 2500).catch(() => null);
+		const factor = off.servingGrams && off.servingGrams > 0 ? off.servingGrams / 100 : 1;
+		const nutrients = fdc
+			? mergeNutrients(scaleNutrients(fdc.nutrients, factor), off.nutrients)
+			: off.nutrients;
 		const [inserted] = await db
 			.insert(foods)
 			.values({
@@ -115,7 +125,7 @@ export async function GET({ params }) {
 				proteinG: off.proteinG,
 				carbsG: off.carbsG,
 				fatG: off.fatG,
-				nutrients: off.nutrients,
+				nutrients,
 				categories: off.categories,
 				source: 'off',
 				sourcePayload: off.raw,
