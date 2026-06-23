@@ -45,7 +45,7 @@
 		p.set('window', String(data.windowDays));
 		if (data.target) p.set('target', data.target);
 		p.set('deficit', String(Math.round(Number(whatIfInput))));
-		goto(`/trends?${p}`, { noScroll: true, keepFocus: true });
+		goto(`/trends?${p}`, { noScroll: true, keepFocus: true, replaceState: true });
 	}
 
 	// Goal form state — '' means cleared (→ null on save). Weight in lb; stored kg.
@@ -84,7 +84,7 @@
 		const p = new URLSearchParams();
 		p.set('window', String(days));
 		if (data.target) p.set('target', data.target);
-		goto(`/trends?${p}`, { noScroll: true, keepFocus: true });
+		goto(`/trends?${p}`, { noScroll: true, keepFocus: true, replaceState: true });
 	}
 	function onTargetChange(e: Event) {
 		const v = (e.currentTarget as HTMLInputElement).value;
@@ -93,7 +93,7 @@
 		const p = new URLSearchParams();
 		p.set('window', String(data.windowDays));
 		if (v) p.set('target', v);
-		goto(`/trends?${p}`, { noScroll: true, keepFocus: true });
+		goto(`/trends?${p}`, { noScroll: true, keepFocus: true, replaceState: true });
 	}
 
 	// "Am I on pace?" verdict copy.
@@ -148,9 +148,6 @@
 			<p class="text-xs font-semibold tracking-widest uppercase" style="color: var(--color-text-subtle);">Body composition</p>
 			<h1 class="text-2xl font-bold text-white">Trends</h1>
 		</div>
-		<a href="/" class="card-sm ml-auto flex h-9 w-9 items-center justify-center text-white transition hover:brightness-125" aria-label="Home">
-			<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9.5L12 3l9 6.5" /><path d="M5 10v10h14V10" /></svg>
-		</a>
 	</header>
 
 	<!-- Lookback window (drives chart range + trend/projection calc) -->

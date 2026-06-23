@@ -29,11 +29,21 @@ export async function GET({ request }) {
 	const [s] = await db.select().from(settings).where(eq(settings.id, 1));
 
 	const [day] = fillBmrGaps(await deficitDays(todayLabel(), todayLabel()));
+	const burnedKcal = day?.burnedKcal ?? null;
+
+	// Widget/app deficit: if still under the calorie goal, assume they'll eat up
+	// to it (so the number doesn't look rosy mid-morning); if over, use actual
+	// intake. Computed here so the widget and the app's drift check agree.
+	const calSum = entries.reduce((sum, e) => sum + e.calories, 0);
+	const calTarget = s?.calorieTarget ?? 2100;
+	const deficit =
+		burnedKcal != null ? Math.round(burnedKcal - Math.max(calSum, calTarget)) : null;
 
 	return json({
 		date: todayLabel(),
 		entries,
 		targets: s ?? null,
-		burnedKcal: day?.burnedKcal ?? null
+		burnedKcal,
+		deficit
 	});
 }

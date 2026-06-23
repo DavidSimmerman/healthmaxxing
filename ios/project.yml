@@ -18,6 +18,7 @@ targets:
     dependencies:
       - target: HealthmaxxingWidget
         embed: true
+      - sdk: WidgetKit.framework # WidgetCenter reloads from the app + WebView
     entitlements:
       path: Healthmaxxing/Healthmaxxing.entitlements
       properties:

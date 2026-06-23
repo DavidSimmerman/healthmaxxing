@@ -1,5 +1,6 @@
 import Foundation
 import HealthKit
+import WidgetKit
 
 // HealthKit → dashboard sync.
 //
@@ -124,6 +125,10 @@ final class HealthSync {
                 try await post(path: "/api/integrations/metrics", body: ["metrics": metrics])
             }
 
+            // A sync usually means new active-energy burn, which moves the
+            // deficit; refresh the widget if it has drifted enough to matter.
+            await reloadWidgetIfDeficitMoved()
+
             let f = DateFormatter()
             f.dateStyle = .short
             f.timeStyle = .short
@@ -133,6 +138,34 @@ final class HealthSync {
         } catch {
             lastSyncDescription = "Sync failed: \(error.localizedDescription)"
         }
+    }
+
+    /// Reload the home-screen widget when today's deficit has moved ≥10 kcal
+    /// since the widget last rendered (it stores `widgetDeficit` each refresh).
+    /// "Since the last update" — not a momentary jump — because the baseline only
+    /// changes when the widget actually redraws. Same /api/today the widget reads,
+    /// so the deficit numbers agree.
+    private func reloadWidgetIfDeficitMoved() async {
+        struct Today: Decodable { let deficit: Int? }
+        guard let token = SyncConfig.apiToken else { return }
+        var req = URLRequest(url: SyncConfig.serverURL.appending(path: "/api/today"))
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        req.timeoutInterval = 15
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+            let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+            let deficit = (try? JSONDecoder().decode(Today.self, from: data))?.deficit
+        else { return }
+
+        let store = SyncConfig.store
+        let hasBaseline = store.object(forKey: "widgetDeficit") != nil
+        guard !hasBaseline || abs(deficit - store.integer(forKey: "widgetDeficit")) >= 10 else {
+            return
+        }
+        // Optimistic baseline so back-to-back syncs don't re-reload before the
+        // widget redraws and writes its own value.
+        store.set(deficit, forKey: "widgetDeficit")
+        WidgetCenter.shared.reloadAllTimelines()
     }
 
     // MARK: - Daily aggregates

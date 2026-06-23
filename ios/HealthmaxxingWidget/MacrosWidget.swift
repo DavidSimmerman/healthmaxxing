@@ -18,7 +18,7 @@ private struct TodayResponse: Decodable {
     }
     let entries: [Entry]
     let targets: Targets?
-    let burnedKcal: Double?
+    let deficit: Int?
 }
 
 // Mirrors the app's fallback when no targets row is set.
@@ -43,9 +43,10 @@ private func fetchEntry() async -> MacrosEntry {
         let proTarget = today.targets?.proteinTargetG ?? defaultProteinTarget
         let calSum = today.entries.reduce(0) { $0 + $1.calories }
         let proSum = today.entries.reduce(0) { $0 + $1.proteinG }
-        // If under goal, assume they'll eat up to the goal; if over, use actual intake.
-        let intakeForDeficit = max(calSum, calTarget)
-        let deficit: Int? = today.burnedKcal.map { Int(($0 - intakeForDeficit).rounded()) }
+        let deficit = today.deficit
+        // Record what we're about to show as the drift baseline. The app compares
+        // its sync-time deficit against this and reloads us when it moves ≥10.
+        if let deficit { SyncConfig.store.set(deficit, forKey: "widgetDeficit") }
         return MacrosEntry(
             date: Date(),
             calLeft: Int((calTarget - calSum).rounded()),

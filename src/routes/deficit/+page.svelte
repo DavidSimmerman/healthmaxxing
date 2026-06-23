@@ -100,6 +100,7 @@
 			class="card-sm ml-auto flex items-center gap-0.5 p-1"
 			aria-label="Range"
 			data-sveltekit-noscroll
+			data-sveltekit-replacestate
 		>
 			{#each ranges as r (r.key)}
 				<a
@@ -117,9 +118,10 @@
 	<input
 		type="date"
 		max={data.today}
+		value={data.today}
 		onchange={(e) => goto('/day/' + e.currentTarget.value)}
-		class="card-sm mb-4 w-full px-3 py-2 text-sm text-white"
-		style="color-scheme: dark; background: var(--color-bg-elevated);"
+		class="card-sm mb-4 block w-full min-w-0 px-3 py-2 text-sm text-white"
+		style="color-scheme: dark; background: var(--color-bg-elevated); width: 100%; max-width: 100%; box-sizing: border-box; -webkit-appearance: none; appearance: none;"
 		aria-label="Jump to a specific day"
 	/>
 

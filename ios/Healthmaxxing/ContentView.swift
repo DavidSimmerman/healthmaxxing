@@ -9,7 +9,7 @@ struct ContentView: View {
 
     var body: some View {
         WebView(url: SyncConfig.serverURL)
-            .ignoresSafeArea(edges: .bottom)
+            .ignoresSafeArea()
             .onLongPressGesture(minimumDuration: 1.5) { showSettings = true } // hidden settings entry
             .sheet(isPresented: $showSettings) { settingsSheet }
     }
