@@ -27,9 +27,14 @@ Do NOT discard `stash@{0}`. It touches schema.ts, mcp/+server.ts, drizzle/0012*,
       logEntries, MCP log_food/prep_food/list_foods/get_day_log/get_nutrition. `pnpm check` 0 errors.
 - [x] Fiber-mode setting: `settings.fiberMode` column + migration 0012 + /api/settings validation +
       `getFiberMode()` reader. UI toggle = part of settings UI task below.
-- [ ] UI: multi-item "log another" flow + final confirm (CaptureSheet)
-- [ ] UI: show Total + Bolusable carbs when adding and in history; surface lowConfidence
-- [ ] UI: settings fiber-mode toggle + clinical-calibration note
+- [x] UI: multi-item "log another" flow + final confirm (CaptureSheet) — stage items, review
+      screen with running bolus total, "+ Log another" + "Log N items to today" commit. Banner
+      in browse mode to return to review. `pnpm check` 0 errors.
+- [x] UI: show Total + Bolusable carbs when adding (capture detail + review) and in history
+      (today list + day view totals/per-entry); lowConfidence ⚠︎ surfaced everywhere.
+- [x] UI: settings fiber-mode toggle (Subtract all fiber / Half over 5g) + clinical note.
+- [~] EditEntrySheet: deliberately NOT showing bolusable (it edits a portion; would need
+      client-side fiberMode plumbing). The list/day/capture surfaces cover it.
 - [ ] Seed local DB + Playwright drive the flow (capture sheet empty on fresh DB)
 - [ ] Audit existing logged/catalog entries: confirm carbsG = TOTAL everywhere (via MCP live data)
 - [ ] Verify (tests green, Playwright flow, codex review --uncommitted)

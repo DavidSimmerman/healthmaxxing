@@ -26,7 +26,8 @@ export async function load() {
 			calorieTarget: 2100,
 			proteinTargetG: 180,
 			carbsTargetG: 220,
-			fatTargetG: 70
+			fatTargetG: 70,
+			fiberMode: 'full' as const
 		},
 		quickAddItems,
 		authEnabled: authEnabled()

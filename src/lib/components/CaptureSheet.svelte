@@ -23,6 +23,9 @@
 		proteinG: number;
 		carbsG: number;
 		fatG: number;
+		// Derived per-serving bolusable (net glycemic) carbs; carbsG stays the total.
+		bolusableCarbsG: number;
+		bolusableLowConfidence: boolean;
 		categories: string | null;
 		ingredients: Ingredient[] | null;
 		makesServings: number | null;
@@ -32,7 +35,25 @@
 		count14d: number;
 	};
 
-	type Mode = 'browse' | 'detail' | 'barcode';
+	// A food staged into the current meal (not yet written). Macros are the amount
+	// actually being logged (food per-serving × servings), so the review running
+	// total is exact without a server round-trip. foodId/amount/unit replay the
+	// same /api/log POST on confirm.
+	type MealItem = {
+		foodId: string;
+		name: string;
+		amount: number;
+		unit: Unit;
+		servings: number;
+		calories: number;
+		proteinG: number;
+		carbsG: number;
+		fatG: number;
+		bolusableCarbsG: number;
+		bolusableLowConfidence: boolean;
+	};
+
+	type Mode = 'browse' | 'detail' | 'review' | 'barcode';
 
 	let { open = $bindable(false) }: { open: boolean } = $props();
 	let mode = $state<Mode>('browse');
@@ -47,6 +68,25 @@
 	let amount = $state(1);
 	let logging = $state(false);
 	let deletingId = $state<string | null>(null);
+
+	// Items staged into the current meal (T1D bolus: log several foods, see the
+	// combined carb + bolusable total, then confirm once). Nothing is written until
+	// confirmMeal(); closing the sheet discards an unconfirmed meal.
+	let meal = $state<MealItem[]>([]);
+	let mealError = $state<string | null>(null);
+	let mealTotals = $derived(
+		meal.reduce(
+			(t, m) => ({
+				calories: t.calories + m.calories,
+				proteinG: t.proteinG + m.proteinG,
+				carbsG: t.carbsG + m.carbsG,
+				fatG: t.fatG + m.fatG,
+				bolusableCarbsG: t.bolusableCarbsG + m.bolusableCarbsG,
+				lowConfidence: t.lowConfidence || m.bolusableLowConfidence
+			}),
+			{ calories: 0, proteinG: 0, carbsG: 0, fatG: 0, bolusableCarbsG: 0, lowConfidence: false }
+		)
+	);
 
 	const isRecipe = (f: HistoryFood) => !!f.ingredients && f.ingredients.length > 0;
 
@@ -145,12 +185,14 @@
 
 	function close() {
 		open = false;
-		// reset after the sheet animates out
+		// reset after the sheet animates out — discards any unconfirmed meal.
 		setTimeout(() => {
 			mode = 'browse';
 			query = '';
 			selected = null;
 			searchFocused = false;
+			meal = [];
+			mealError = null;
 		}, 200);
 	}
 
@@ -173,6 +215,9 @@
 	let servingsPreview = $derived(
 		selected ? toServings(Number(amount) || 0, unit, selected.servingGrams) : 0
 	);
+	// Carbs at the chosen amount: total (label) vs bolusable (net glycemic, the dose figure).
+	let carbsPreview = $derived(selected ? selected.carbsG * servingsPreview : 0);
+	let bolusPreview = $derived(selected ? selected.bolusableCarbsG * servingsPreview : 0);
 
 	function unitAvail(u: Unit): boolean {
 		return u === 'serving' || hasGrams;
@@ -316,16 +361,66 @@
 		}
 	}
 
-	async function logFood(foodId: string) {
-		if (!(Number(amount) > 0)) return; // ignore cleared/NaN amount
+	// Stage the selected food (at the chosen amount) into the meal, then show the
+	// review so the running carb + bolusable total is visible. Nothing is written yet.
+	function addToMeal() {
+		const f = selected;
+		const s = servingsPreview;
+		if (!f || !(s > 0)) return;
+		meal.push({
+			foodId: f.foodId,
+			name: f.name,
+			amount: Number(amount),
+			unit,
+			servings: s,
+			calories: f.calories * s,
+			proteinG: f.proteinG * s,
+			carbsG: f.carbsG * s,
+			fatG: f.fatG * s,
+			bolusableCarbsG: f.bolusableCarbsG * s,
+			bolusableLowConfidence: f.bolusableLowConfidence
+		});
+		mealError = null;
+		selected = null;
+		mode = 'review';
+	}
+
+	function removeMealItem(i: number) {
+		meal.splice(i, 1);
+		if (meal.length === 0) mode = 'browse';
+	}
+
+	// Go pick another food, keeping the staged meal.
+	function logAnother() {
+		mode = 'browse';
+		query = '';
+		selected = null;
+	}
+
+	// Commit every staged item via /api/log. Succeeded items are removed as they
+	// land, so a retry after a mid-way failure only re-sends what's left (no
+	// double-logging). Reloads once the whole meal is written.
+	async function confirmMeal() {
+		if (meal.length === 0 || logging) return;
 		logging = true;
+		mealError = null;
 		try {
-			await fetch('/api/log', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ foodId, amount: Number(amount), unit })
-			});
+			while (meal.length > 0) {
+				const m = meal[0];
+				const res = await fetch('/api/log', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ foodId: m.foodId, amount: m.amount, unit: m.unit })
+				});
+				if (!res.ok) {
+					mealError = `Couldn't log "${m.name}". ${meal.length} item(s) left — tap to retry.`;
+					return;
+				}
+				meal.shift();
+			}
 			reload();
+		} catch {
+			mealError = 'Network error while logging. Tap to retry.';
 		} finally {
 			logging = false;
 		}
@@ -367,6 +462,22 @@
 					</div>
 				{:else}
 					<div class="mx-auto mb-4 h-1 w-12 rounded-full bg-white/20"></div>
+				{/if}
+
+				{#if meal.length > 0}
+					<!-- Meal in progress — jump back to review the running bolus total. -->
+					<button
+						class="mb-3 flex w-full items-center justify-between rounded-xl px-4 py-2.5"
+						style="background: rgba(252,211,77,0.10); border: 1px solid rgba(252,211,77,0.22);"
+						onclick={() => (mode = 'review')}
+					>
+						<span class="text-sm font-medium text-white">
+							{meal.length} item{meal.length === 1 ? '' : 's'} in meal
+						</span>
+						<span class="text-sm font-semibold" style="color: var(--color-carbs);">
+							{Math.round(mealTotals.bolusableCarbsG)}g bolusable · Review →
+						</span>
+					</button>
 				{/if}
 
 				<div class="flex items-center gap-2">
@@ -627,6 +738,25 @@
 						</div>
 					</div>
 
+					<!-- Bolusable (net glycemic) carbs — the figure to dose off. Total stays visible. -->
+					<div
+						class="mt-4 flex items-center justify-between rounded-xl px-4 py-3"
+						style="background: rgba(252,211,77,0.10); border: 1px solid rgba(252,211,77,0.22);"
+					>
+						<div>
+							<div class="text-xs font-semibold tracking-wide uppercase" style="color: var(--color-carbs);">
+								Bolusable carbs
+							</div>
+							<div class="text-[11px]" style="color: var(--color-text-subtle);">
+								of {Math.round(carbsPreview)}g total
+								{#if selected.bolusableLowConfidence}· ⚠︎ fiber unknown — verify label{/if}
+							</div>
+						</div>
+						<div class="text-2xl font-bold" style="color: var(--color-carbs);">
+							{Math.round(bolusPreview)}<span class="text-sm font-medium">g</span>
+						</div>
+					</div>
+
 					<!-- Unit picker — log by serving, grams, or volume -->
 					<div class="no-scrollbar mt-4 flex gap-1 overflow-x-auto rounded-full bg-white/5 p-1">
 						{#each UNITS as u (u)}
@@ -711,10 +841,97 @@
 
 				<button
 					class="accent-gradient mt-4 w-full rounded-2xl py-4 font-bold text-white disabled:opacity-50"
-					disabled={logging || !(Number(amount) > 0)}
-					onclick={() => logFood(selected!.foodId)}
+					disabled={!(Number(amount) > 0)}
+					onclick={addToMeal}
 				>
-					{logging ? 'Logging…' : 'Log to today'}
+					{meal.length > 0 ? 'Add to meal' : 'Log to today'}
+				</button>
+			</div>
+		{:else if mode === 'review'}
+			<div
+				class="flex flex-col p-5"
+				style="padding-bottom: calc(1.25rem + env(safe-area-inset-bottom));"
+			>
+				<div class="mx-auto mb-4 h-1 w-12 shrink-0 rounded-full bg-white/20"></div>
+
+				<div class="flex items-center justify-between">
+					<div class="w-12"></div>
+					<h2 class="font-semibold text-white">Your meal</h2>
+					<button class="text-sm" style="color: var(--color-text-subtle);" onclick={close}>
+						Cancel
+					</button>
+				</div>
+
+				<!-- Combined bolus number for the whole meal — the point of multi-logging. -->
+				<div
+					class="mt-4 rounded-2xl px-5 py-4 text-center"
+					style="background: rgba(252,211,77,0.10); border: 1px solid rgba(252,211,77,0.22);"
+				>
+					<div class="text-xs font-semibold tracking-wide uppercase" style="color: var(--color-carbs);">
+						Bolusable carbs
+					</div>
+					<div class="text-4xl font-extrabold" style="color: var(--color-carbs);">
+						{Math.round(mealTotals.bolusableCarbsG)}<span class="text-lg font-semibold">g</span>
+					</div>
+					<div class="text-xs" style="color: var(--color-text-subtle);">
+						of {Math.round(mealTotals.carbsG)}g total carbs · {Math.round(mealTotals.calories)} kcal
+						{#if mealTotals.lowConfidence}<br />⚠︎ some items missing fiber data — verify from label{/if}
+					</div>
+				</div>
+
+				<!-- Staged items, each with total + bolusable carbs -->
+				<div class="mt-4 flex flex-col gap-2">
+					{#each meal as m, i (i)}
+						<div class="card-sm flex items-center justify-between gap-3 p-3">
+							<div class="min-w-0">
+								<div class="truncate text-sm font-medium text-white">{m.name}</div>
+								<div class="text-xs" style="color: var(--color-text-subtle);">
+									{formatAmount(m.amount)}
+									{UNIT_LABEL[m.unit]} · {Math.round(m.calories)} kcal
+								</div>
+							</div>
+							<div class="flex items-center gap-3">
+								<div class="text-right">
+									<div class="text-sm font-bold" style="color: var(--color-carbs);">
+										{Math.round(m.bolusableCarbsG)}g
+									</div>
+									<div class="text-[10px]" style="color: var(--color-text-subtle);">
+										of {Math.round(m.carbsG)}g{#if m.bolusableLowConfidence} ⚠︎{/if}
+									</div>
+								</div>
+								<button
+									class="shrink-0 rounded-lg p-1.5 text-zinc-500 transition hover:bg-white/5 hover:text-white"
+									aria-label="Remove {m.name}"
+									onclick={() => removeMealItem(i)}
+								>
+									<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+										<path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+									</svg>
+								</button>
+							</div>
+						</div>
+					{/each}
+				</div>
+
+				{#if mealError}
+					<p class="mt-3 text-center text-sm" style="color: #fb7185;">{mealError}</p>
+				{/if}
+
+				<button
+					class="mt-4 w-full rounded-2xl border py-3 font-semibold text-white"
+					style="border-color: var(--color-border);"
+					onclick={logAnother}
+				>
+					+ Log another
+				</button>
+				<button
+					class="accent-gradient mt-2 w-full rounded-2xl py-4 font-bold text-white disabled:opacity-50"
+					disabled={logging || meal.length === 0}
+					onclick={confirmMeal}
+				>
+					{logging
+						? 'Logging…'
+						: `Log ${meal.length} item${meal.length === 1 ? '' : 's'} to today`}
 				</button>
 			</div>
 		{:else if mode === 'barcode'}
