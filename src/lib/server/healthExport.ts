@@ -17,6 +17,14 @@ import { todayLabel } from '$lib/server/day';
 // 'all' bundle and the tool's validation both derive from this map, so a new
 // category flows through with zero other edits.
 
+// What counts as a "sleep" metric for export bucketing. Almost all use the
+// `sleep_` prefix, but Fitbit time-in-bed is stored as `time_in_bed_min` (no
+// prefix) — so name it explicitly. Used by BOTH the sleep filter (include) and
+// the vitals filter (exclude) so the two never disagree.
+function isSleepMetric(key: string): boolean {
+	return key.startsWith('sleep_') || key === 'time_in_bed_min';
+}
+
 // Per-day vitals/activity row stripped to the metrics for a given category.
 function spanDays(from: string, to: string): number {
 	return (
@@ -37,7 +45,7 @@ async function sleepExport(from: string, to: string) {
 	const nights = days
 		.map((d) => {
 			const m: Record<string, number> = {};
-			for (const [k, v] of Object.entries(d.metrics)) if (k.startsWith('sleep_')) m[k] = v;
+			for (const [k, v] of Object.entries(d.metrics)) if (isSleepMetric(k)) m[k] = v;
 			return { date: d.date, metrics: m };
 		})
 		.filter((n) => Object.keys(n.metrics).length > 0);
@@ -55,7 +63,7 @@ async function sleepExport(from: string, to: string) {
 // lands in `vitals` automatically — no code change.
 function vitalsRow(d: DayReview) {
 	const metrics: Record<string, number> = {};
-	for (const [k, v] of Object.entries(d.metrics)) if (!k.startsWith('sleep_')) metrics[k] = v;
+	for (const [k, v] of Object.entries(d.metrics)) if (!isSleepMetric(k)) metrics[k] = v;
 	return { date: d.date, metrics };
 }
 

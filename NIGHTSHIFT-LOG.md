@@ -66,6 +66,10 @@ Run started: 2026-06-24. Branch: `feat/nightshift-reports` (off `main`).
 - [P2] body export ignored the window end date (always as-of-today). Fixed: live trend only for a current window; historical window returns an honest "not back-dated" note. Verified: today→trend, 2026-05-15→note.
 - [self-found] uuid-shape guard on /reports/[id] loader + get_report so a malformed id is a clean 404/not-found, not a Postgres cast 500.
 
+### Codex review round 2 — both fixed
+- [P2] `time_in_bed_min` (a sleep metric without the `sleep_` prefix) was dropped from sleep exports and leaked into vitals. Fixed: central `isSleepMetric()` used by both filters. Verified: sleep export has it, vitals has neither it nor any sleep_ key.
+- [P3] settings notes dirty-check compared untrimmed local vs trimmed saved → form stuck "Unsaved changes". Fixed: compare `notes.trim()`.
+
 ## Resume pointer
 Read this log + the task brief. Continue from first unchecked item. Core files:
 src/routes/mcp/+server.ts, src/lib/server/db/schema.ts, src/lib/sleepInsights.ts,

@@ -47,7 +47,9 @@
 			birthDate !== (data.settings.birthDate ?? '') ||
 			sex !== (data.settings.sex ?? '') ||
 			fiberMode !== (data.settings.fiberMode ?? 'full') ||
-			notes !== (data.settings.notes ?? '')
+			// compare trimmed — save sends notes.trim(), so trailing whitespace alone
+			// isn't a real change and shouldn't keep the form stuck "unsaved".
+			notes.trim() !== (data.settings.notes ?? '')
 	);
 
 	async function saveTargets(e: SubmitEvent) {
