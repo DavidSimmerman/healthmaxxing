@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { goto, invalidateAll } from '$app/navigation';
+	import { pullToRefresh } from '$lib/actions/pullToRefresh';
 	import { addDays, kgToLb, lbToKg, LB_PER_KG } from '$lib/energy';
 	import WeightChart from '$lib/components/WeightChart.svelte';
 
@@ -139,7 +140,7 @@
 	}
 </script>
 
-<main class="mx-auto max-w-md p-6 pb-12" style="padding-bottom: calc(3rem + env(safe-area-inset-bottom));">
+<main class="mx-auto max-w-md p-6 pb-12" style="padding-bottom: calc(3rem + env(safe-area-inset-bottom));" use:pullToRefresh>
 	<header class="mb-4 flex items-center gap-3">
 		<a href="/deficit" class="card-sm flex h-9 w-9 items-center justify-center text-white transition hover:brightness-125" aria-label="Back to energy balance">
 			<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6" /></svg>

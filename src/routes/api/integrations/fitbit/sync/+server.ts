@@ -1,5 +1,6 @@
 import { json, error } from '@sveltejs/kit';
-import { requireApiToken } from '$lib/server/auth';
+import { apiTokenOk } from '$lib/server/auth';
+import { authEnabled, sessionValid, SESSION_COOKIE } from '$lib/server/session';
 import { googleHealthEnabled, syncHealth, peekHealth } from '$lib/server/fitbit';
 
 // Daily pull (Fitbit data via the Google Health API), hit by a cron with the API token:
@@ -10,8 +11,14 @@ import { googleHealthEnabled, syncHealth, peekHealth } from '$lib/server/fitbit'
 //   {"debug": true}  return the RAW Google responses (status + body per data type)
 //                    instead of writing — use once after authorizing to confirm the
 //                    response schema / filter fields against your live account.
-export async function POST({ request }) {
-	requireApiToken(request);
+export async function POST({ request, cookies }) {
+	// Accept EITHER the cron's Bearer API token OR a logged-in dashboard session, so
+	// the /sleep pull-to-refresh (which can't hold the token in the browser) can
+	// trigger the same sync. The auth hook already gates /api/*, but this route's
+	// own check was Bearer-only — widen it to the session too.
+	if (authEnabled() && !apiTokenOk(request) && !sessionValid(cookies.get(SESSION_COOKIE))) {
+		throw error(401, 'Unauthorized');
+	}
 	if (!googleHealthEnabled())
 		throw error(503, 'Not configured (set GOOGLE_HEALTH_CLIENT_ID/SECRET).');
 

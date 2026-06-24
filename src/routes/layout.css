@@ -64,3 +64,10 @@ body {
 .no-scrollbar {
 	scrollbar-width: none;
 }
+
+/* Pull-to-refresh spinner spin (used by use:pullToRefresh) */
+@keyframes ptr-spin {
+	to {
+		transform: translate(-50%, 58px) rotate(360deg);
+	}
+}

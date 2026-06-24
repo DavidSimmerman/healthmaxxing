@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { pullToRefresh } from '$lib/actions/pullToRefresh';
+
 	let { data } = $props();
 
 	function fmtDate(iso: string): string {
@@ -17,7 +19,7 @@
 	}
 </script>
 
-<main class="mx-auto max-w-md p-5 pb-16">
+<main class="mx-auto max-w-md p-5 pb-16" use:pullToRefresh>
 	<header class="mb-5 flex items-center gap-3">
 		<a href="/" class="text-sm" style="color: var(--color-text-muted);">← Home</a>
 		<h1 class="text-lg font-bold text-white">Reports</h1>

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { invalidateAll } from '$app/navigation';
+	import { pullToRefresh } from '$lib/actions/pullToRefresh';
 
 	let { data } = $props();
 
@@ -120,6 +121,7 @@
 <main
 	class="mx-auto max-w-md p-6 pb-12"
 	style="padding-bottom: calc(3rem + env(safe-area-inset-bottom));"
+	use:pullToRefresh
 >
 	<header class="mb-6 flex items-center gap-3">
 		<a

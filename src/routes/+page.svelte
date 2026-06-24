@@ -6,6 +6,7 @@
 	import { entryDisplay } from '$lib/units';
 	import CaptureSheet from '$lib/components/CaptureSheet.svelte';
 	import EditEntrySheet from '$lib/components/EditEntrySheet.svelte';
+	import { pullToRefresh } from '$lib/actions/pullToRefresh';
 
 	let { data } = $props();
 
@@ -36,6 +37,7 @@
 <main
 	class="mx-auto max-w-md p-6 pb-32"
 	style="padding-bottom: calc(8rem + env(safe-area-inset-bottom));"
+	use:pullToRefresh
 >
 	<header class="mb-1 flex items-center justify-between">
 		<div>

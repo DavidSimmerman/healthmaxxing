@@ -1,8 +1,23 @@
 <script lang="ts">
 	import { sleepInsights, sleepTrends, type SleepAverages } from '$lib/sleepInsights';
+	import { invalidateAll } from '$app/navigation';
+	import { pullToRefresh } from '$lib/actions/pullToRefresh';
 
 	let { data } = $props();
 	const nights = data.nights;
+
+	// Pull-to-refresh on /sleep first triggers a fresh Fitbit pull (same work the
+	// daily cron does, session-authenticated — no token in the browser), THEN
+	// reloads, so the newest night shows. A failed sync still falls through to a
+	// reload so the page never gets stuck.
+	async function syncThenReload() {
+		try {
+			await fetch('/api/integrations/fitbit/sync', { method: 'POST' });
+		} catch {
+			// offline / sync error — still reload what we have
+		}
+		await invalidateAll();
+	}
 
 	function fmtDur(min: number): string {
 		const h = Math.floor(min / 60);
@@ -75,7 +90,7 @@
 
 <svelte:head><title>Sleep</title></svelte:head>
 
-<main class="mx-auto max-w-md p-5 pb-16">
+<main class="mx-auto max-w-md p-5 pb-16" use:pullToRefresh={{ onRefresh: syncThenReload }}>
 	<header class="mb-5 flex items-center gap-3">
 		<a href="/" class="text-sm" style="color: var(--color-text-muted);">← Home</a>
 		<h1 class="text-2xl font-bold text-white">Sleep</h1>
