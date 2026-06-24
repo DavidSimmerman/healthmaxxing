@@ -74,6 +74,10 @@ Run started: 2026-06-24. Branch: `feat/nightshift-reports` (off `main`).
 - [P1 security] my round-1 fix swung the bug the other way: in a token-only deployment (no MCP_AUTH_PASSWORD) the session key is derived from an empty password → publicly FORGEABLE, so a forged hd_session bypassed requireApiToken. Fixed: bypass only when `authEnabled() && sessionValid(...)`, else requireApiToken. Verified: legit session 200, unauth 401 (token-only forge path closed by the authEnabled() guard).
 - [P3] sanitize-html stripped the forced `rel="noopener noreferrer"` (rel not in allowedAttributes). Fixed: added `rel` to `a` allowlist. Verified: rendered link is `<a href=... rel="noopener noreferrer">`, script stripped.
 
+### Codex review round 4 — both fixed (root-cause this time)
+- [P1 security] latent: `sessionValid()` accepted forgeable `v1` cookies even with no MCP_AUTH_PASSWORD (empty-key sig) — in a Keycloak-only deploy a forged v1 could bypass my sync session-gate (and the whole app gate). ROOT FIX in session.ts: reject v1 sessions when MCP_AUTH_PASSWORD is unset (mirrors the existing v2/SESSION_SECRET guard). Zero-op for David (password IS set → v1 validates unchanged). Verified: David's v1 session → home/sync/reports 200; bogus → 303 login.
+- [P3] /reports/[id] header used one-time consts (`r`, `range`) → stale title/date on same-route nav. Fixed: `$derived(data.report)`.
+
 ## Resume pointer
 Read this log + the task brief. Continue from first unchecked item. Core files:
 src/routes/mcp/+server.ts, src/lib/server/db/schema.ts, src/lib/sleepInsights.ts,

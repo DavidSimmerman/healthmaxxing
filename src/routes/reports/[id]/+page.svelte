@@ -1,6 +1,9 @@
 <script lang="ts">
 	let { data } = $props();
-	const r = data.report;
+	// Derived so a direct /reports/[id] → /reports/[id] navigation (component reused,
+	// only `data` updated) refreshes the header instead of showing the prior report's
+	// title/date/tag next to the new body.
+	const r = $derived(data.report);
 
 	function fmtDate(iso: string): string {
 		return new Date(iso).toLocaleDateString('en-US', {
@@ -16,7 +19,7 @@
 		if (from && to) return from === to ? f(from) : `${f(from)} – ${f(to)}`;
 		return f((from ?? to)!);
 	}
-	const range = fmtRange(r.rangeFrom, r.rangeTo);
+	const range = $derived(fmtRange(r.rangeFrom, r.rangeTo));
 </script>
 
 <main class="mx-auto max-w-md p-5 pb-16">

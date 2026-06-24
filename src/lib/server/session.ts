@@ -97,6 +97,12 @@ export function sessionValid(value: string | undefined | null): boolean {
 	if (payload.startsWith('v1.')) {
 		const parts = payload.split('.');
 		if (parts.length !== 2) return false;
+		// v1 (legacy) sessions are only trustworthy when MCP_AUTH_PASSWORD is set —
+		// otherwise legacySigningKey() derives from an empty password and is publicly
+		// forgeable (same failure the v2/SESSION_SECRET guard above prevents). Deny
+		// rather than validate against a reproducible key, so a Keycloak-only or
+		// no-auth deployment can't be bypassed by a hand-crafted v1 cookie.
+		if (!env.MCP_AUTH_PASSWORD) return false;
 		if (!signatureMatches(legacySigningKey(), payload, sig)) return false;
 		return notExpired(parts[1]);
 	}
