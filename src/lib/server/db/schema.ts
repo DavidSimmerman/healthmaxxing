@@ -147,8 +147,32 @@ export const settings = pgTable('settings', {
 	// subtract all fiber (David's standing rule); 'half_over_5' = subtract half of
 	// fiber, only when > 5g (ADA-style). Changing it recomputes the whole history,
 	// because bolusable carbs are derived live, never stored.
-	fiberMode: text('fiber_mode').notNull().default('full') // 'full' | 'half_over_5'
+	fiberMode: text('fiber_mode').notNull().default('full'), // 'full' | 'half_over_5'
+
+	// Free-text notes surfaced to the scheduled Claude review (supplements, current
+	// questions, context) so it sees them without a heavier feature. Included in the
+	// export_data payload; editable on /settings.
+	notes: text('notes')
 });
+
+// Analysis reports written back by the scheduled Claude review (via the save_report
+// MCP tool) and read in-app at /reports. Content is markdown, rendered + sanitized
+// server-side. `rangeFrom`/`rangeTo` record the date window the analysis covered;
+// `period` is the optional label ('day'|'week'|'month'); `tag` is an optional theme.
+export const reports = pgTable(
+	'reports',
+	{
+		id: uuid('id').primaryKey().defaultRandom(),
+		createdAt: timestamp('created_at').notNull().defaultNow(),
+		title: text('title').notNull(),
+		content: text('content').notNull(), // markdown
+		period: text('period'), // 'day' | 'week' | 'month' | null
+		rangeFrom: text('range_from'), // 'YYYY-MM-DD' covered (inclusive), nullable
+		rangeTo: text('range_to'),
+		tag: text('tag') // optional theme, e.g. 'sleep'
+	},
+	(t) => [index('reports_created_at_idx').on(t.createdAt)]
+);
 
 // ── HealthKit sync (pushed by the iOS wrapper app) ──────────────────────────
 
