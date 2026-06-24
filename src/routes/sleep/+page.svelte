@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { sleepInsights, type SleepAverages } from '$lib/sleepInsights';
+	import { sleepInsights, sleepTrends, type SleepAverages } from '$lib/sleepInsights';
 
 	let { data } = $props();
 	const nights = data.nights;
@@ -56,7 +56,10 @@
 		restingHr: avg('sleep_resting_hr'),
 		hrvMs: avg('sleep_hrv_ms')
 	});
-	const insights = $derived(sleepInsights(averages));
+	const insights = $derived([
+		...sleepInsights(averages),
+		...sleepTrends(slice, data.stagesByDate, data.tz)
+	]);
 
 	const statusColor = (s: string) =>
 		s === 'good' ? '#34d399' : s === 'unknown' ? '#a1a1aa' : '#fbbf24';
