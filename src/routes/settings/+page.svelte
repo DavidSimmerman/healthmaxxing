@@ -435,4 +435,32 @@
 			</div>
 		{/if}
 	</section>
+
+	{#if data.dexcomConfigured}
+		<section class="mt-6">
+			<h2 class="mb-3 text-sm font-semibold tracking-wide text-white uppercase">Integrations</h2>
+			<article class="card-sm flex items-center gap-3 p-4">
+				<div class="min-w-0 flex-1">
+					<p class="flex items-center gap-2 text-sm font-medium text-white">
+						Dexcom CGM
+						{#if data.dexcomConnected}
+							<span class="text-xs font-normal text-emerald-400">● Connected</span>
+						{/if}
+					</p>
+					<p class="mt-0.5 text-xs leading-relaxed" style="color: var(--color-text-subtle);">
+						Syncs your glucose trace, time-in-range and GMI from Dexcom.
+					</p>
+				</div>
+				<!-- Full-page redirect to Dexcom's consent screen (no token needed — being
+				     logged in is the owner check; see the authorize route). -->
+				<a
+					href="/api/integrations/dexcom/authorize"
+					class="shrink-0 rounded-lg px-4 py-2 text-sm font-semibold text-black transition hover:brightness-110"
+					style="background: #fb923c;"
+				>
+					{data.dexcomConnected ? 'Reconnect' : 'Connect'}
+				</a>
+			</article>
+		</section>
+	{/if}
 </main>

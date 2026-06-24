@@ -1,10 +1,16 @@
 import { db } from '$lib/server/db';
-import { settings, quickAdds, foods } from '$lib/server/db/schema';
+import { settings, quickAdds, foods, dexcomAuth } from '$lib/server/db/schema';
 import { asc, eq } from 'drizzle-orm';
 import { authEnabled } from '$lib/server/session';
+import { dexcomEnabled } from '$lib/server/dexcom';
 
 export async function load() {
 	const [settingsRow] = await db.select().from(settings).where(eq(settings.id, 1));
+
+	const [dexcomRow] = await db
+		.select({ id: dexcomAuth.id })
+		.from(dexcomAuth)
+		.where(eq(dexcomAuth.id, 1));
 
 	const quickAddItems = await db
 		.select({
@@ -30,6 +36,8 @@ export async function load() {
 			fiberMode: 'full' as const
 		},
 		quickAddItems,
-		authEnabled: authEnabled()
+		authEnabled: authEnabled(),
+		dexcomConfigured: dexcomEnabled(),
+		dexcomConnected: !!dexcomRow
 	};
 }
