@@ -7,6 +7,17 @@ import { createAndLogFood, FoodInputError, findFoodByBarcode } from '$lib/server
 import { canonicalBarcode, macrosDiffer, toSnapshot, type MacroSnapshot } from '$lib/barcode';
 import { lookupFdcByUpc } from '$lib/server/fdc';
 import { mergeNutrients, scaleNutrients } from '$lib/nutrients';
+import { bolusableCarbsPerServing } from '$lib/netCarbs';
+import { getFiberMode } from '$lib/server/prefs';
+
+// Decorate a foods row with derived per-serving bolusable (net glycemic) carbs,
+// matching /api/foods/history — so the scan card and meal staging show the dose
+// figure (and a barcode food can be staged into a multi-item meal). One getFiberMode
+// read per request: only the taken return path calls this.
+async function withBolusable(food: typeof foods.$inferSelect) {
+	const b = bolusableCarbsPerServing(food, { fiberMode: await getFiberMode() });
+	return { ...food, bolusableCarbsG: b.bolusableCarbsG, bolusableLowConfidence: b.lowConfidence };
+}
 
 // Lookup flow (a scan ALWAYS re-checks the source so a stale DB copy can't go
 // unnoticed — the DB version still provides the final/logged macros):
@@ -60,7 +71,7 @@ export async function GET({ params }) {
 						})
 						.where(eq(foods.id, cached.id))
 						.returning();
-					return json({ food: updated, source: 'cache' });
+					return json({ food: await withBolusable(updated), source: 'cache' });
 				}
 				if (!cached.sourceMacros) {
 					await db
@@ -69,7 +80,7 @@ export async function GET({ params }) {
 						.where(eq(foods.id, cached.id));
 				}
 			}
-			return json({ food: cached, source: 'cache' });
+			return json({ food: await withBolusable(cached), source: 'cache' });
 		}
 
 		// Overridden food: keep the user's macros; compare the SOURCE to our baseline.
@@ -87,7 +98,7 @@ export async function GET({ params }) {
 			if (macrosDiffer(cached.sourceMacros, offMacros)) {
 				await db.update(foods).set({ sourceCheckedAt: new Date() }).where(eq(foods.id, cached.id));
 				return json({
-					food: cached,
+					food: await withBolusable(cached),
 					source: 'cache',
 					sourceUpdate: {
 						current: toSnapshot(cached),
@@ -134,7 +145,7 @@ export async function GET({ params }) {
 				sourceCheckedAt: new Date()
 			})
 			.returning();
-		return json({ food: inserted, source: 'off' });
+		return json({ food: await withBolusable(inserted), source: 'off' });
 	}
 
 	return json({
@@ -192,7 +203,7 @@ export async function PUT({ params, request }) {
 			})
 			.where(eq(foods.id, food.id))
 			.returning();
-		return json({ food: updated });
+		return json({ food: await withBolusable(updated) });
 	}
 
 	if (action === 'dismiss') {
@@ -201,7 +212,7 @@ export async function PUT({ params, request }) {
 			.set({ sourceMacros: offMacros, sourceCheckedAt: new Date() })
 			.where(eq(foods.id, food.id))
 			.returning();
-		return json({ food: updated });
+		return json({ food: await withBolusable(updated) });
 	}
 
 	throw error(400, 'unknown action');

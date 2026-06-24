@@ -948,7 +948,16 @@
 		{:else if mode === 'barcode'}
 			<div class="p-5" style="padding-bottom: calc(1.25rem + env(safe-area-inset-bottom));">
 				<div class="mx-auto mb-4 h-1 w-12 rounded-full bg-white/20"></div>
-				<BarcodeScan onback={() => (mode = 'browse')} onlogged={reload} />
+				<BarcodeScan
+					onback={() => (mode = 'browse')}
+					onlogged={reload}
+					mealCount={meal.length}
+					onadd={(item) => {
+						meal.push(item);
+						mealError = null;
+						mode = 'review';
+					}}
+				/>
 			</div>
 		{/if}
 	</div>

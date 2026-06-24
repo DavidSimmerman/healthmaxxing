@@ -10,11 +10,6 @@
 	let { data } = $props();
 
 	let totals = $derived(sumMacros(data.todayEntries));
-	// Bolusable (net glycemic) carbs — the carb-counting figure for insulin dosing.
-	let bolusableCarbs = $derived(
-		data.todayEntries.reduce((s, e) => s + (e.bolusableCarbsG ?? 0), 0)
-	);
-	let bolusableLowConf = $derived(data.todayEntries.some((e) => e.bolusableLowConfidence));
 	let goalPct = $derived(pct(totals.calories, data.settings.calorieTarget));
 	let captureOpen = $state(false);
 	let editingEntry = $state<(typeof data.todayEntries)[number] | null>(null);
@@ -53,6 +48,24 @@
 			<h1 class="text-2xl font-bold text-white">{monthDay}</h1>
 		</div>
 		<div class="flex items-center gap-2">
+			<a
+				href="/sleep"
+				class="card-sm flex h-9 w-9 items-center justify-center text-white transition hover:brightness-125"
+				aria-label="Sleep"
+			>
+				<svg
+					width="16"
+					height="16"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+				>
+					<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+				</svg>
+			</a>
 			<a
 				href="/trends"
 				class="card-sm flex h-9 w-9 items-center justify-center text-white transition hover:brightness-125"
@@ -165,27 +178,6 @@
 			/>
 			<MacroBar label="Carbs" value={totals.carbsG} color="var(--color-carbs)" />
 			<MacroBar label="Fat" value={totals.fatG} color="var(--color-fat)" />
-		</div>
-		<!-- Bolusable (net glycemic) carbs for the day — total stays visible above. -->
-		<div
-			class="mt-3 flex items-center justify-between rounded-xl px-4 py-2.5"
-			style="background: rgba(252,211,77,0.08); border: 1px solid rgba(252,211,77,0.18);"
-		>
-			<span
-				class="text-xs font-semibold tracking-wide uppercase"
-				style="color: var(--color-carbs);"
-			>
-				Bolusable carbs
-				{#if bolusableLowConf}<span style="color: var(--color-text-subtle);">
-						· ⚠︎ verify fiber</span
-					>{/if}
-			</span>
-			<span class="text-sm font-bold" style="color: var(--color-carbs);">
-				{Math.round(bolusableCarbs)}g
-				<span class="font-normal" style="color: var(--color-text-subtle);">
-					of {Math.round(totals.carbsG)}g</span
-				>
-			</span>
 		</div>
 	</section>
 

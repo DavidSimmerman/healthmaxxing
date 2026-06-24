@@ -3,8 +3,28 @@
 	import { UNITS, UNIT_LABEL, toServings, type Unit } from '$lib/units';
 	import { loadReader, decodeBarcode, needsConfirmation } from '$lib/scanner';
 
-	type Props = { onback: () => void; onlogged: () => void };
-	let { onback, onlogged }: Props = $props();
+	// Item staged into the current meal (mirrors CaptureSheet's MealItem) so a
+	// scanned food can join a multi-item meal instead of logging straight away.
+	type StagedItem = {
+		foodId: string;
+		name: string;
+		amount: number;
+		unit: Unit;
+		servings: number;
+		calories: number;
+		proteinG: number;
+		carbsG: number;
+		fatG: number;
+		bolusableCarbsG: number;
+		bolusableLowConfidence: boolean;
+	};
+	type Props = {
+		onback: () => void;
+		onlogged: () => void;
+		onadd: (item: StagedItem) => void;
+		mealCount: number;
+	};
+	let { onback, onlogged, onadd, mealCount }: Props = $props();
 
 	let stream: MediaStream | null = null;
 	let video = $state<HTMLVideoElement | undefined>(undefined);
@@ -263,14 +283,25 @@
 		}
 	}
 
-	async function logIt() {
-		if (!(Number(amount) > 0)) return; // ignore cleared/NaN amount
-		await fetch('/api/log', {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ foodId: result.id, amount: Number(amount), unit })
+	// Stage the scanned food into the meal (the review screen shows the running
+	// total, then one confirm logs them all) — the same flow as picking from
+	// search/history, so several barcodes can go into a single meal.
+	function addIt() {
+		if (!result || !(Number(amount) > 0)) return; // ignore cleared/NaN amount
+		const s = servingsPreview;
+		onadd({
+			foodId: result.id,
+			name: result.name,
+			amount: Number(amount),
+			unit,
+			servings: s,
+			calories: result.calories * s,
+			proteinG: result.proteinG * s,
+			carbsG: result.carbsG * s,
+			fatG: result.fatG * s,
+			bolusableCarbsG: (result.bolusableCarbsG ?? 0) * s,
+			bolusableLowConfidence: result.bolusableLowConfidence ?? false
 		});
-		onlogged();
 	}
 
 	let resolveValid = $derived(
@@ -498,9 +529,9 @@
 	<button
 		class="accent-gradient mt-4 w-full rounded-2xl py-4 font-bold text-white disabled:opacity-50"
 		disabled={!(Number(amount) > 0)}
-		onclick={logIt}
+		onclick={addIt}
 	>
-		Log to today
+		{mealCount > 0 ? 'Add to meal' : 'Log to today'}
 	</button>
 {:else if status === 'not_found'}
 	<div class="card-sm mt-4 p-5">
@@ -611,9 +642,12 @@
 	</div>
 
 	<form class="mt-3" onsubmit={submitManualCode}>
-		<label class="text-xs" style="color: var(--color-text-subtle);">Or type the code</label>
+		<label class="text-xs" style="color: var(--color-text-subtle);" for="manual-barcode"
+			>Or type the code</label
+		>
 		<div class="mt-2 flex gap-2">
 			<input
+				id="manual-barcode"
 				bind:value={manualCode}
 				inputmode="numeric"
 				placeholder="e.g. 3017624010701"

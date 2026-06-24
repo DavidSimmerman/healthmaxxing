@@ -57,13 +57,11 @@
 				calories: a.calories + e.calories,
 				proteinG: a.proteinG + e.proteinG,
 				carbsG: a.carbsG + e.carbsG,
-				bolusableCarbsG: a.bolusableCarbsG + (e.bolusableCarbsG ?? 0),
 				fatG: a.fatG + e.fatG
 			}),
-			{ calories: 0, proteinG: 0, carbsG: 0, bolusableCarbsG: 0, fatG: 0 }
+			{ calories: 0, proteinG: 0, carbsG: 0, fatG: 0 }
 		)
 	);
-	const dayLowConf = $derived(data.entries.some((e) => e.bolusableLowConfidence));
 
 	const water = $derived(data.metrics.find((m) => m.metric === 'water_l') ?? null);
 	const otherMetrics = $derived(data.metrics.filter((m) => m.metric !== 'water_l'));
@@ -261,22 +259,6 @@
 					<span style="color: var(--color-protein);">{Math.round(entryTotals.proteinG)}P</span>
 					<span style="color: var(--color-carbs);">{Math.round(entryTotals.carbsG)}C</span>
 					<span style="color: var(--color-fat);">{Math.round(entryTotals.fatG)}F</span>
-				</span>
-			</div>
-			<div
-				class="mt-2 flex items-center justify-between text-xs font-semibold"
-				style="color: var(--color-carbs);"
-			>
-				<span
-					>Bolusable carbs{#if dayLowConf}<span style="color: var(--color-text-subtle);">
-							· ⚠︎ verify fiber</span
-						>{/if}</span
-				>
-				<span>
-					{Math.round(entryTotals.bolusableCarbsG)}g
-					<span class="font-normal" style="color: var(--color-text-subtle);">
-						of {Math.round(entryTotals.carbsG)}g total</span
-					>
 				</span>
 			</div>
 		{/if}
