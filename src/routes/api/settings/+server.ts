@@ -41,6 +41,15 @@ export async function PUT({ request }) {
 		if (fm !== 'full' && fm !== 'half_over_5') throw error(400, 'invalid fiberMode');
 		profile.fiberMode = fm;
 	}
+	// Free-text notes surfaced to the scheduled Claude review. Trim, cap length;
+	// blank → null so clearing the field doesn't store an empty string.
+	if ('notes' in body) {
+		const n = body.notes;
+		if (n !== null && typeof n !== 'string') throw error(400, 'invalid notes');
+		const trimmed = n == null ? null : n.trim();
+		if (trimmed != null && trimmed.length > 4000) throw error(400, 'notes too long (max 4000)');
+		profile.notes = trimmed && trimmed.length ? trimmed : null;
+	}
 
 	const set = { ...targets, ...profile };
 	await db

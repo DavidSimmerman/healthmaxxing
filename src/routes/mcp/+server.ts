@@ -29,6 +29,10 @@ import { bolusableCarbsPerServing, bolusableForLoggedEntry } from '$lib/netCarbs
 import { getFiberMode } from '$lib/server/prefs';
 import { periodRange } from '$lib/period';
 import { healthReview } from '$lib/server/healthMetrics';
+import { runExport, EXPORT_CATEGORY_NAMES } from '$lib/server/healthExport';
+import { db } from '$lib/server/db';
+import { reports } from '$lib/server/db/schema';
+import { eq, desc } from 'drizzle-orm';
 
 const PROTOCOL_VERSION = '2025-03-26';
 
@@ -687,6 +691,186 @@ async function callGetHealthMetrics(id: Id, args: Record<string, unknown>) {
 	}
 }
 
+// ── Data export + reports round-trip ──────────────────────────────────────────
+// export_data is the firehose behind the scheduled review: it bundles the same
+// data the individual read tools expose, by category, for one window. The review
+// then writes its findings back with save_report, read in-app at /reports and
+// listed/fetched here with list_reports / get_report.
+
+const EXPORT_DATA_TOOL = {
+	name: 'export_data',
+	description:
+		'Read-only. Bundle the dashboard data for a window so you can review it and write a report. ' +
+		`Categories: ${EXPORT_CATEGORY_NAMES.join(', ')}. ` +
+		'nutrition = intake totals + the full per-entry food log; sleep = per-night aggregates + the ' +
+		'stage timeline; vitals = the daily HealthKit panel (HR/HRV/SpO2/resp/VO2max/BP/glucose/temps/' +
+		'mobility/events/distances); activity = per-day active/basal kcal, steps, exercise minutes; ' +
+		'workouts = each workout session; body = weight/body-fat/lean trends + projections (fit over ≥90d ' +
+		'regardless of period); energy = the per-day calorie in/out deficit ledger. ' +
+		'Use category="all" for the SCHEDULED FULL REVIEW — it returns every category plus the user’s ' +
+		'free-text notes; use a SINGLE category for a focused follow-up so you pull only what you need. ' +
+		'Pick `period` for the window length (day=1, week=7, month=30 trailing days ending at `date`).',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			period: {
+				type: 'string',
+				enum: ['day', 'week', 'month'],
+				description: 'Window length ending at `date`: day=1, week=7, month=30 trailing days'
+			},
+			date: { type: 'string', description: 'End of the window, YYYY-MM-DD (default today)' },
+			category: {
+				type: 'string',
+				description: `One of: ${EXPORT_CATEGORY_NAMES.join(', ')}, or "all" for the full review`
+			}
+		},
+		required: ['period', 'category']
+	}
+};
+
+async function callExportData(id: Id, args: Record<string, unknown>) {
+	const period = typeof args.period === 'string' ? args.period : '';
+	const category = typeof args.category === 'string' ? args.category : '';
+	if (!['day', 'week', 'month'].includes(period)) {
+		return toolResult(id, 'Provide `period` as one of: day, week, month.', true);
+	}
+	const valid = [...EXPORT_CATEGORY_NAMES, 'all'];
+	if (!valid.includes(category)) {
+		return toolResult(id, `Unknown category "${category}". Valid: ${valid.join(', ')}.`, true);
+	}
+	try {
+		const anchor = typeof args.date === 'string' ? args.date : todayLabel();
+		const { from, to } = periodRange(period, anchor);
+		const data = await runExport(category, from, to);
+		const line = `Export ${category} ${from} → ${to} (${period}).`;
+		return toolResult(id, `${line}\n${JSON.stringify({ period, from, to, category, data }, null, 2)}`);
+	} catch (e) {
+		if (e instanceof Error && e.message === 'invalid date') {
+			return toolResult(id, 'Invalid `date` — use YYYY-MM-DD.', true);
+		}
+		console.error('export_data failed:', e);
+		return toolResult(id, 'Could not export data: an internal error occurred.', true);
+	}
+}
+
+const SAVE_REPORT_TOOL = {
+	name: 'save_report',
+	description:
+		'Save an analysis report (markdown) back to the dashboard so the user can read it in-app at ' +
+		'/reports. Use this after reviewing exported data — write your findings, trends, and concrete ' +
+		'recommendations as markdown. Record the window the analysis covered in `rangeFrom`/`rangeTo` ' +
+		'(and `period`) so the report shows what it was about, and an optional `tag` for the theme ' +
+		'(e.g. "sleep", "weekly"). Returns the new report id.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			title: { type: 'string', description: 'Short report title' },
+			content: { type: 'string', description: 'The report body as markdown' },
+			period: { type: 'string', description: 'Optional label: day | week | month' },
+			rangeFrom: { type: 'string', description: 'Window start covered, YYYY-MM-DD' },
+			rangeTo: { type: 'string', description: 'Window end covered, YYYY-MM-DD' },
+			tag: { type: 'string', description: 'Optional theme, e.g. "sleep" or "weekly"' }
+		},
+		required: ['title', 'content']
+	}
+};
+
+async function callSaveReport(id: Id, args: Record<string, unknown>) {
+	const title = typeof args.title === 'string' ? args.title.trim() : '';
+	const content = typeof args.content === 'string' ? args.content.trim() : '';
+	if (!title) return toolResult(id, 'Provide a non-empty `title`.', true);
+	if (!content) return toolResult(id, 'Provide non-empty `content` (markdown).', true);
+	const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+	try {
+		const [row] = await db
+			.insert(reports)
+			.values({
+				title,
+				content,
+				period: str(args.period),
+				rangeFrom: str(args.rangeFrom),
+				rangeTo: str(args.rangeTo),
+				tag: str(args.tag)
+			})
+			.returning({ id: reports.id });
+		return toolResult(id, `Saved report "${title}" (id ${row.id}). View it at /reports/${row.id}.`);
+	} catch (e) {
+		console.error('save_report failed:', e);
+		return toolResult(id, 'Could not save the report: an internal error occurred.', true);
+	}
+}
+
+const LIST_REPORTS_TOOL = {
+	name: 'list_reports',
+	description:
+		'Read-only. List recent analysis reports (newest first) WITHOUT their content — the index for ' +
+		'finding a past report. Each row has id, createdAt, title, period, rangeFrom, rangeTo, tag. Use ' +
+		'get_report with an id to read the full markdown.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			limit: { type: 'number', description: 'Max reports to return (default 20, max 100)' }
+		}
+	}
+};
+
+async function callListReports(id: Id, args: Record<string, unknown>) {
+	let limit = typeof args.limit === 'number' ? Math.floor(args.limit) : 20;
+	if (!Number.isFinite(limit) || limit < 1) limit = 20;
+	if (limit > 100) limit = 100;
+	try {
+		const rows = await db
+			.select({
+				id: reports.id,
+				createdAt: reports.createdAt,
+				title: reports.title,
+				period: reports.period,
+				rangeFrom: reports.rangeFrom,
+				rangeTo: reports.rangeTo,
+				tag: reports.tag
+			})
+			.from(reports)
+			.orderBy(desc(reports.createdAt))
+			.limit(limit);
+		const list = rows.map((r) => ({ ...r, createdAt: r.createdAt.toISOString() }));
+		const line = list.length
+			? `${list.length} report${list.length === 1 ? '' : 's'} (newest first).`
+			: 'No reports saved yet.';
+		return toolResult(id, `${line}\n${JSON.stringify({ reports: list }, null, 2)}`);
+	} catch (e) {
+		console.error('list_reports failed:', e);
+		return toolResult(id, 'Could not list reports: an internal error occurred.', true);
+	}
+}
+
+const GET_REPORT_TOOL = {
+	name: 'get_report',
+	description:
+		'Read-only. Fetch one saved report by id, including its full markdown content. Use list_reports ' +
+		'first to find the id.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			id: { type: 'string', description: 'The report id (uuid) from list_reports' }
+		},
+		required: ['id']
+	}
+};
+
+async function callGetReport(id: Id, args: Record<string, unknown>) {
+	const reportId = typeof args.id === 'string' ? args.id.trim() : '';
+	if (!reportId) return toolResult(id, 'Provide the report `id`.', true);
+	try {
+		const [row] = await db.select().from(reports).where(eq(reports.id, reportId)).limit(1);
+		if (!row) return toolResult(id, `No report found with id ${reportId}.`, true);
+		const payload = { ...row, createdAt: row.createdAt.toISOString() };
+		return toolResult(id, `Report "${row.title}".\n${JSON.stringify(payload, null, 2)}`);
+	} catch (e) {
+		console.error('get_report failed:', e);
+		return toolResult(id, 'Could not load the report: an internal error occurred.', true);
+	}
+}
+
 async function callGetEnergyLedger(id: Id, args: Record<string, unknown>) {
 	try {
 		const to = typeof args.to === 'string' ? args.to : todayLabel();
@@ -896,7 +1080,11 @@ export async function POST({ request, url }) {
 					GET_HEALTH_METRICS_TOOL,
 					GET_DAY_LOG_TOOL,
 					CORRECT_FOOD_NUTRIENTS_TOOL,
-					CORRECT_LOG_ENTRY_TOOL
+					CORRECT_LOG_ENTRY_TOOL,
+					EXPORT_DATA_TOOL,
+					SAVE_REPORT_TOOL,
+					LIST_REPORTS_TOOL,
+					GET_REPORT_TOOL
 				]
 			});
 		case 'tools/call': {
@@ -914,6 +1102,10 @@ export async function POST({ request, url }) {
 			if (name === 'get_day_log') return callGetDayLog(id, args);
 			if (name === 'correct_food_nutrients') return callCorrectFoodNutrients(id, args);
 			if (name === 'correct_log_entry') return callCorrectLogEntry(id, args);
+			if (name === 'export_data') return callExportData(id, args);
+			if (name === 'save_report') return callSaveReport(id, args);
+			if (name === 'list_reports') return callListReports(id, args);
+			if (name === 'get_report') return callGetReport(id, args);
 			return rpcError(id, -32602, `Unknown tool: ${String(name)}`);
 		}
 		case 'ping':

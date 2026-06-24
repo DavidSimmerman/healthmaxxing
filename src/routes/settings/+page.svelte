@@ -20,6 +20,8 @@
 	let fiberMode = $state<'full' | 'half_over_5'>(
 		data.settings.fiberMode === 'half_over_5' ? 'half_over_5' : 'full'
 	);
+	// Free-text context for the scheduled Claude review.
+	let notes = $state(data.settings.notes ?? '');
 
 	// A cleared number input binds as '' / null / undefined depending on path —
 	// treat all as blank so clearing both fields saves null, not 0.
@@ -43,7 +45,8 @@
 			heightCm !== (data.settings.heightCm ?? null) ||
 			birthDate !== (data.settings.birthDate ?? '') ||
 			sex !== (data.settings.sex ?? '') ||
-			fiberMode !== (data.settings.fiberMode ?? 'full')
+			fiberMode !== (data.settings.fiberMode ?? 'full') ||
+			notes !== (data.settings.notes ?? '')
 	);
 
 	async function saveTargets(e: SubmitEvent) {
@@ -60,7 +63,8 @@
 					heightCm,
 					birthDate: birthDate || null,
 					sex: sex || null,
-					fiberMode
+					fiberMode,
+					notes: notes.trim() || null
 				})
 			});
 			if (!res.ok) {
@@ -295,6 +299,19 @@
 				/>
 			</label>
 		</div>
+
+		<h2 class="mt-6 mb-2 text-sm font-semibold tracking-wide text-white uppercase">Notes</h2>
+		<textarea
+			bind:value={notes}
+			rows="3"
+			maxlength="4000"
+			placeholder="Supplements, current questions, context…"
+			class="w-full resize-y rounded-lg border bg-transparent px-3 py-2 text-sm text-white outline-none focus:border-orange-400"
+			style="border-color: var(--color-border);"
+		></textarea>
+		<p class="mt-2 text-xs leading-relaxed" style="color: var(--color-text-subtle);">
+			Supplements, current questions, context — included in the scheduled Claude review.
+		</p>
 
 		<div class="mt-4 flex items-center justify-between gap-3">
 			<div class="text-xs" style="color: var(--color-text-subtle);">
