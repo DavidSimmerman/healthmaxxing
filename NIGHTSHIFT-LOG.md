@@ -82,6 +82,22 @@ Run started 2026-06-24 on `main`. **STATUS: ✅ COMPLETE — all tasks shipped, 
 ### Codex review round 5 — CLEAN ✅
 "No discrete correctness, security, or maintainability issues that should block the patch." Converged.
 
+## Follow-up: "no sleep data on prod when I pull to refresh" (morning-after fix)
+ROOT CAUSE: Fitbit/Google Health is authorized PER-ENVIRONMENT — the refresh token lives in each
+DB's `fitbit_auth` table. The sandbox has a row (so local PTR synced fine); prod almost certainly
+has none, so `syncHealth()` throws "not authorized" → route returns 502 → and the PTR was SWALLOWING
+that 502 silently → no data, no explanation.
+FIX (committed): /sleep PTR now surfaces the sync status + server message in a dismissible banner
+(verified via Playwright forcing a 502 → banner reads the real message). Also fixed the stale
+"authorize?token=…" guidance to point at the session-gated authorize route.
+PROD REMEDY (David): while logged in to https://healthmaxxing.simmerman.cc, open
+`/api/integrations/fitbit/authorize` once → Google consent → callback stores the refresh token in
+PROD's fitbit_auth. Then pull-to-refresh (or wait for the 16:00 ET timer) populates sleep.
+  - Needs on prod: GOOGLE_HEALTH_CLIENT_ID/SECRET set (else 503 "Not configured"), AND the prod
+    callback URL `https://healthmaxxing.simmerman.cc/api/integrations/fitbit/callback` registered in
+    the Google Cloud OAuth client's authorized redirect URIs (else Google rejects with redirect_uri_mismatch).
+  - The next PTR will now TELL you which of these is the blocker via the banner.
+
 ## Notes for David
 - A clearly-labeled **sample report** ("Weekly review — Jun 18–24 (sample)", tag=sample) sits in `reports`
   so /reports isn't empty. Delete anytime: `psql "$DATABASE_URL" -c "delete from reports where tag='sample';"`.

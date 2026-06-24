@@ -12,12 +12,25 @@
 	// Pull-to-refresh on /sleep first triggers a fresh Fitbit pull (same work the
 	// daily cron does, session-authenticated — no token in the browser), THEN
 	// reloads, so the newest night shows. A failed sync still falls through to a
-	// reload so the page never gets stuck.
+	// reload so the page never gets stuck — but we SURFACE the failure (status +
+	// server message) instead of swallowing it, so "nothing happened" is never a
+	// silent dead end (e.g. Fitbit not yet authorized on this server → 502).
+	let syncError = $state<string | null>(null);
 	async function syncThenReload() {
+		syncError = null;
 		try {
-			await fetch('/api/integrations/fitbit/sync', { method: 'POST' });
+			const res = await fetch('/api/integrations/fitbit/sync', { method: 'POST' });
+			if (!res.ok) {
+				let detail = '';
+				try {
+					detail = ((await res.clone().json()) as { message?: string })?.message ?? '';
+				} catch {
+					detail = await res.text().catch(() => '');
+				}
+				syncError = `Sleep sync failed (${res.status})${detail ? `: ${detail}` : ''}`;
+			}
 		} catch {
-			// offline / sync error — still reload what we have
+			syncError = 'Sleep sync failed — network error. Pull to try again.';
 		}
 		await invalidateAll();
 	}
@@ -108,9 +121,27 @@
 		<h1 class="text-2xl font-bold text-white">Sleep</h1>
 	</header>
 
+	{#if syncError}
+		<div
+			class="mb-4 flex items-start gap-2 rounded-xl p-3 text-sm"
+			style="background: rgba(251,113,133,0.1); border: 1px solid rgba(251,113,133,0.3); color: #fda4af;"
+			role="alert"
+		>
+			<span class="mt-0.5 shrink-0">⚠︎</span>
+			<span class="min-w-0 break-words">{syncError}</span>
+			<button
+				type="button"
+				onclick={() => (syncError = null)}
+				class="ml-auto shrink-0 px-1 text-base leading-none"
+				aria-label="Dismiss">×</button
+			>
+		</div>
+	{/if}
+
 	{#if nights.length === 0}
 		<div class="card p-8 text-center" style="color: var(--color-text-subtle);">
-			No sleep synced yet. Your Fitbit data lands here each afternoon once it's synced.
+			No sleep synced yet. Pull down to refresh — if this server hasn't been connected to Fitbit
+			yet, that'll show an error explaining how.
 		</div>
 	{:else}
 		<!-- Period selector -->

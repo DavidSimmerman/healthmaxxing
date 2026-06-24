@@ -95,7 +95,10 @@ export async function exchangeCode(code: string, redirectUri: string): Promise<v
 // so we only re-store it on the rare occasion it returns a new one.
 async function accessToken(): Promise<string> {
 	const [row] = await db.select().from(fitbitAuth).where(eq(fitbitAuth.id, 1));
-	if (!row) throw new Error('Not authorized yet — visit /api/integrations/fitbit/authorize?token=…');
+	if (!row)
+		throw new Error(
+			'Fitbit not connected on this server. While logged in, open /api/integrations/fitbit/authorize to link it.'
+		);
 	const tok = await tokenRequest({ grant_type: 'refresh_token', refresh_token: row.refreshToken });
 	if (tok.refresh_token && tok.refresh_token !== row.refreshToken) {
 		await storeRefresh(tok.refresh_token, tok.scope);
