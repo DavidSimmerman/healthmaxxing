@@ -37,11 +37,6 @@ export function safeEqual(a: string, b: string): boolean {
 	return x.length === y.length && timingSafeEqual(x, y);
 }
 
-export function ownerTokenOk(provided: string): boolean {
-	const t = env.API_TOKEN;
-	return !!t && safeEqual(provided, t);
-}
-
 export function authorizeUrl(redirectUri: string): string {
 	const p = new URLSearchParams({
 		client_id: env.GOOGLE_HEALTH_CLIENT_ID ?? '',
