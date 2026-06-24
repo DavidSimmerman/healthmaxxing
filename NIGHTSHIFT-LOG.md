@@ -70,6 +70,10 @@ Run started: 2026-06-24. Branch: `feat/nightshift-reports` (off `main`).
 - [P2] `time_in_bed_min` (a sleep metric without the `sleep_` prefix) was dropped from sleep exports and leaked into vitals. Fixed: central `isSleepMetric()` used by both filters. Verified: sleep export has it, vitals has neither it nor any sleep_ key.
 - [P3] settings notes dirty-check compared untrimmed local vs trimmed saved → form stuck "Unsaved changes". Fixed: compare `notes.trim()`.
 
+### Codex review round 3 — both fixed (CONVERGED — round-4 clean expected)
+- [P1 security] my round-1 fix swung the bug the other way: in a token-only deployment (no MCP_AUTH_PASSWORD) the session key is derived from an empty password → publicly FORGEABLE, so a forged hd_session bypassed requireApiToken. Fixed: bypass only when `authEnabled() && sessionValid(...)`, else requireApiToken. Verified: legit session 200, unauth 401 (token-only forge path closed by the authEnabled() guard).
+- [P3] sanitize-html stripped the forced `rel="noopener noreferrer"` (rel not in allowedAttributes). Fixed: added `rel` to `a` allowlist. Verified: rendered link is `<a href=... rel="noopener noreferrer">`, script stripped.
+
 ## Resume pointer
 Read this log + the task brief. Continue from first unchecked item. Core files:
 src/routes/mcp/+server.ts, src/lib/server/db/schema.ts, src/lib/sleepInsights.ts,

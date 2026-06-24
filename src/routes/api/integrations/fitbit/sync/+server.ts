@@ -1,6 +1,6 @@
 import { json, error } from '@sveltejs/kit';
 import { requireApiToken } from '$lib/server/auth';
-import { sessionValid, SESSION_COOKIE } from '$lib/server/session';
+import { authEnabled, sessionValid, SESSION_COOKIE } from '$lib/server/session';
 import { googleHealthEnabled, syncHealth, peekHealth } from '$lib/server/fitbit';
 
 // Daily pull (Fitbit data via the Google Health API), hit by a cron with the API token:
@@ -13,11 +13,13 @@ import { googleHealthEnabled, syncHealth, peekHealth } from '$lib/server/fitbit'
 //                    response schema / filter fields against your live account.
 export async function POST({ request, cookies }) {
 	// Allow the /sleep pull-to-refresh (logged-in browser, no token) to trigger the
-	// same sync as the cron — but a valid session is the ONLY thing that bypasses
-	// the bearer check. Otherwise fall back to requireApiToken, which still demands
-	// the Bearer token whenever API_TOKEN is configured (so the debug dump stays
-	// protected even in deployments where dashboard auth is off).
-	if (!sessionValid(cookies.get(SESSION_COOKIE))) {
+	// same sync as the cron. A session only bypasses the bearer check when app auth
+	// is actually ENABLED — with no MCP_AUTH_PASSWORD/Keycloak the session signing
+	// key is derived from an empty password and is publicly forgeable, so we must
+	// NOT trust a session there. Everything else falls back to requireApiToken,
+	// which demands the Bearer token whenever API_TOKEN is set (keeping the debug
+	// dump protected even when dashboard auth is off).
+	if (!(authEnabled() && sessionValid(cookies.get(SESSION_COOKIE)))) {
 		requireApiToken(request);
 	}
 	if (!googleHealthEnabled())

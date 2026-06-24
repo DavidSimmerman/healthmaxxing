@@ -15,7 +15,9 @@ const SANITIZE_OPTS: sanitizeHtml.IOptions = {
 		'blockquote', 'a', 'hr', 'br',
 		'table', 'thead', 'tbody', 'tr', 'th', 'td'
 	],
-	allowedAttributes: { a: ['href'] },
+	// `rel` must be allowed or sanitize-html strips the rel="noopener noreferrer"
+	// forced by transformTags below (attribute filtering runs after the transform).
+	allowedAttributes: { a: ['href', 'rel'] },
 	allowedSchemes: ['http', 'https', 'mailto'],
 	transformTags: {
 		a: sanitizeHtml.simpleTransform('a', { rel: 'noopener noreferrer' })
