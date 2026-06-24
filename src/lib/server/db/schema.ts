@@ -324,3 +324,31 @@ export const oauthTokens = pgTable(
 		index('oauth_tokens_refresh_idx').on(t.refreshTokenHash)
 	]
 );
+
+// ── Dexcom (CGM) OAuth — server-side sync ───────────────────────────────────
+// Single-row store for the Dexcom refresh token. Dexcom ROTATES the refresh token
+// on every use (valid ≤1yr), so it must be persisted writably (env won't do).
+// Never returned to any client — the owner authorizes once via
+// /api/integrations/dexcom/authorize, and the cron sync refreshes from here.
+export const dexcomAuth = pgTable('dexcom_auth', {
+	id: integer('id').primaryKey().default(1),
+	refreshToken: text('refresh_token').notNull(),
+	updatedAt: timestamp('updated_at').notNull().defaultNow()
+});
+
+// Intraday CGM trace — one row per Dexcom EGV (~every 5 min) for the glucose curve
+// and time-in-range. `at` is the reading's UTC systemTime (a stable id; EGVs are
+// unique per timestamp). `date` is the device-local day (from displayTime) it
+// belongs to, for fast per-day queries. Daily summaries (avg/TIR/GMI) are rolled
+// up separately into daily_metrics so the existing vitals/MCP surface picks them
+// up. Idempotent: re-syncing a window upserts on `at`.
+export const glucoseReadings = pgTable(
+	'glucose_readings',
+	{
+		at: timestamp('at', { withTimezone: true }).primaryKey(), // EGV systemTime (UTC)
+		date: text('date').notNull(), // 'YYYY-MM-DD' device-local (displayTime)
+		mgdl: real('mgdl').notNull(),
+		trend: text('trend') // e.g. 'flat', 'fortyFiveUp' — nullable (Dexcom omits on gaps)
+	},
+	(t) => [index('glucose_readings_date_idx').on(t.date)]
+);
