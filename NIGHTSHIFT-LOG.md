@@ -1,6 +1,7 @@
 # 🌙 Nightshift log — healthmaxxing
 
-Run started: 2026-06-24. Branch: `feat/nightshift-reports` (off `main`).
+Run started 2026-06-24 on `main`. **STATUS: ✅ COMPLETE — all tasks shipped, 5 codex rounds
+(round 5 clean), pushed to origin/main.**
 
 ## How to run / verify
 - Build + restart: `pnpm build && sudo systemctl restart healthmaxxing` (port 5184, prod build).
@@ -77,6 +78,16 @@ Run started: 2026-06-24. Branch: `feat/nightshift-reports` (off `main`).
 ### Codex review round 4 — both fixed (root-cause this time)
 - [P1 security] latent: `sessionValid()` accepted forgeable `v1` cookies even with no MCP_AUTH_PASSWORD (empty-key sig) — in a Keycloak-only deploy a forged v1 could bypass my sync session-gate (and the whole app gate). ROOT FIX in session.ts: reject v1 sessions when MCP_AUTH_PASSWORD is unset (mirrors the existing v2/SESSION_SECRET guard). Zero-op for David (password IS set → v1 validates unchanged). Verified: David's v1 session → home/sync/reports 200; bogus → 303 login.
 - [P3] /reports/[id] header used one-time consts (`r`, `range`) → stale title/date on same-route nav. Fixed: `$derived(data.report)`.
+
+### Codex review round 5 — CLEAN ✅
+"No discrete correctness, security, or maintainability issues that should block the patch." Converged.
+
+## Notes for David
+- A clearly-labeled **sample report** ("Weekly review — Jun 18–24 (sample)", tag=sample) sits in `reports`
+  so /reports isn't empty. Delete anytime: `psql "$DATABASE_URL" -c "delete from reports where tag='sample';"`.
+- There's no in-app report delete (YAGNI — the scheduled routine appends; prune via psql if ever needed).
+- Prod: run migration 0015 on the prod DB (`pnpm db:migrate`) and `pnpm build && restart` so the new
+  schema (settings.notes, reports) + MCP tools go live before the first scheduled run.
 
 ## Resume pointer
 Read this log + the task brief. Continue from first unchecked item. Core files:
