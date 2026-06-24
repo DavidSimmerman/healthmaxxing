@@ -20,11 +20,10 @@
 	};
 	type Props = {
 		onback: () => void;
-		onlogged: () => void;
 		onadd: (item: StagedItem) => void;
 		mealCount: number;
 	};
-	let { onback, onlogged, onadd, mealCount }: Props = $props();
+	let { onback, onadd, mealCount }: Props = $props();
 
 	let stream: MediaStream | null = null;
 	let video = $state<HTMLVideoElement | undefined>(undefined);
@@ -299,9 +298,20 @@
 			proteinG: result.proteinG * s,
 			carbsG: result.carbsG * s,
 			fatG: result.fatG * s,
-			bolusableCarbsG: (result.bolusableCarbsG ?? 0) * s,
-			bolusableLowConfidence: result.bolusableLowConfidence ?? false
+			...bolus(result, s)
 		});
+	}
+
+	// Bolusable for a staged item. SAFETY: if the derived figure is somehow absent,
+	// fall back to TOTAL carbs (over-, never under-counting — the safe direction for
+	// an insulin dose) and flag low-confidence; NEVER 0, which would under-dose.
+	function bolus(food: any, servings: number) {
+		const perServing = food.bolusableCarbsG ?? food.carbsG ?? 0;
+		return {
+			bolusableCarbsG: perServing * servings,
+			bolusableLowConfidence:
+				food.bolusableCarbsG == null ? true : (food.bolusableLowConfidence ?? false)
+		};
 	}
 
 	let resolveValid = $derived(
@@ -330,8 +340,23 @@
 				source: 'manual'
 			})
 		});
-		if (res.ok) onlogged();
-		else {
+		if (res.ok) {
+			// Created (not logged) — stage it into the meal at one serving, same as the
+			// found-barcode path, so an in-progress meal is never discarded.
+			const food = (await res.json()).food;
+			onadd({
+				foodId: food.id,
+				name: food.name,
+				amount: 1,
+				unit: 'serving',
+				servings: 1,
+				calories: food.calories,
+				proteinG: food.proteinG,
+				carbsG: food.carbsG,
+				fatG: food.fatG,
+				...bolus(food, 1)
+			});
+		} else {
 			resolveBusy = false;
 			message = 'Failed to save.';
 		}
@@ -605,7 +630,7 @@
 		disabled={!resolveValid || resolveBusy}
 		onclick={saveManual}
 	>
-		{resolveBusy ? 'Saving…' : 'Save & log to today'}
+		{resolveBusy ? 'Saving…' : mealCount > 0 ? 'Save & add to meal' : 'Save & log to today'}
 	</button>
 
 	<button

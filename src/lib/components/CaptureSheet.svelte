@@ -950,7 +950,6 @@
 				<div class="mx-auto mb-4 h-1 w-12 rounded-full bg-white/20"></div>
 				<BarcodeScan
 					onback={() => (mode = 'browse')}
-					onlogged={reload}
 					mealCount={meal.length}
 					onadd={(item) => {
 						meal.push(item);

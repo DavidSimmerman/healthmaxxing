@@ -225,13 +225,16 @@ export async function PUT({ params, request }) {
 export async function POST({ params, request }) {
 	const body = await request.json();
 	try {
-		const { food, logEntry } = await createAndLogFood({
+		// Create but DON'T log — the capture sheet stages it into the meal (review →
+		// one confirm logs everything), matching the found-barcode flow so an
+		// in-progress meal is never discarded. Decorate with derived bolusable carbs.
+		const { food } = await createAndLogFood({
 			...body,
 			barcode: params.code,
 			source: body.source ?? 'manual',
-			logToday: true
+			logToday: false
 		});
-		return json({ food, logEntry });
+		return json({ food: await withBolusable(food) });
 	} catch (e) {
 		if (e instanceof FoodInputError) throw error(400, e.message);
 		throw e;
