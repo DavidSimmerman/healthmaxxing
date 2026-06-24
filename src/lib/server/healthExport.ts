@@ -5,6 +5,7 @@ import { nutritionReport, logEntries } from '$lib/server/nutrition';
 import { healthReview, type DayReview } from '$lib/server/healthMetrics';
 import { deficitDays } from '$lib/server/deficit';
 import { fillBmrGaps, bodyInsights } from '$lib/server/projections';
+import { todayLabel } from '$lib/server/day';
 
 // The data-export registry behind the export_data MCP tool. Each category is a
 // thin adapter over an EXISTING server function (nutritionReport, healthReview,
@@ -80,7 +81,18 @@ export const EXPORT_CATEGORIES: Record<
 		(await healthReview(from, to)).flatMap((d) => d.workouts.map((w) => ({ date: d.date, ...w }))),
 	// ponytail: body composition moves slowly, so fit the trend over ≥90 days
 	// regardless of the requested period — a 7-day window has too few weigh-ins.
-	body: (from, to) => bodyInsights({ windowDays: Math.max(spanDays(from, to), 90) }),
+	// bodyInsights is a live "as of today" trend/projection (its series cutoff,
+	// deficit window and projections all anchor on today), so a HISTORICAL export
+	// window can't be back-dated honestly — omit it with a note rather than mix
+	// today's weigh-ins into a past report. The scheduled review uses today, so the
+	// common path returns the full trend.
+	body: async (from, to) =>
+		to === todayLabel()
+			? bodyInsights({ windowDays: Math.max(spanDays(from, to), 90) })
+			: {
+					asOf: to,
+					note: 'Body composition is a live "as of today" trend and is not back-dated; it is omitted for historical export windows. Request a current-period export, or use get_body_trends.'
+				},
 	energy: async (from, to) => fillBmrGaps(await deficitDays(from, to))
 };
 

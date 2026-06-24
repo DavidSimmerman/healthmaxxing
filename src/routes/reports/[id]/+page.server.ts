@@ -22,7 +22,12 @@ const SANITIZE_OPTS: sanitizeHtml.IOptions = {
 	}
 };
 
+// uuid shape — guard before the query so a malformed id is a clean 404 instead of
+// a Postgres "invalid input syntax for type uuid" 500.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function load({ params }) {
+	if (!UUID_RE.test(params.id)) throw error(404, 'Report not found');
 	const [row] = await db.select().from(reports).where(eq(reports.id, params.id)).limit(1);
 	if (!row) throw error(404, 'Report not found');
 

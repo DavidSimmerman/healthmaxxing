@@ -4,7 +4,10 @@
 	import { pullToRefresh } from '$lib/actions/pullToRefresh';
 
 	let { data } = $props();
-	const nights = data.nights;
+	// Derived (not a one-time const) so a pull-to-refresh that imports a new night
+	// flows into the slices/averages/insights/list — otherwise they'd stay stale
+	// until a full navigation.
+	const nights = $derived(data.nights);
 
 	// Pull-to-refresh on /sleep first triggers a fresh Fitbit pull (same work the
 	// daily cron does, session-authenticated — no token in the browser), THEN
@@ -79,8 +82,17 @@
 	const statusColor = (s: string) =>
 		s === 'good' ? '#34d399' : s === 'unknown' ? '#a1a1aa' : '#fbbf24';
 
-	// Hypnogram — defaults to the most recent night, tap any night to switch.
+	// Hypnogram — follows the most recent night until the user taps one, then sticks
+	// to their pick. After a refresh this snaps to a freshly-imported newest night
+	// (and recovers if the selected night disappears).
 	let selectedDate = $state(nights[0]?.date ?? '');
+	let userPicked = $state(false);
+	$effect(() => {
+		if (!nights.length) return;
+		if (!userPicked || !nights.some((n) => n.date === selectedDate)) {
+			selectedDate = nights[0].date;
+		}
+	});
 	const sel = $derived(data.stagesByDate[selectedDate] ?? null);
 	const selNight = $derived(nights.find((n) => n.date === selectedDate) ?? null);
 	const totalMin = $derived(
@@ -193,7 +205,10 @@
 					class="card p-3 text-left transition hover:bg-white/5"
 					class:ring-1={n.date === selectedDate}
 					style={n.date === selectedDate ? 'box-shadow: inset 0 0 0 1px var(--color-text-muted);' : ''}
-					onclick={() => (selectedDate = n.date)}
+					onclick={() => {
+						selectedDate = n.date;
+						userPicked = true;
+					}}
 				>
 					<div class="flex items-baseline justify-between">
 						<span class="text-sm font-semibold text-white">{fmtDate(n.date)}</span>

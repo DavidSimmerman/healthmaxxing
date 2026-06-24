@@ -860,6 +860,10 @@ const GET_REPORT_TOOL = {
 async function callGetReport(id: Id, args: Record<string, unknown>) {
 	const reportId = typeof args.id === 'string' ? args.id.trim() : '';
 	if (!reportId) return toolResult(id, 'Provide the report `id`.', true);
+	// Guard the uuid shape so a malformed id is a clean "not found", not a DB cast error.
+	if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(reportId)) {
+		return toolResult(id, `No report found with id ${reportId}.`, true);
+	}
 	try {
 		const [row] = await db.select().from(reports).where(eq(reports.id, reportId)).limit(1);
 		if (!row) return toolResult(id, `No report found with id ${reportId}.`, true);
