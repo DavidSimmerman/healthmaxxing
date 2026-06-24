@@ -105,15 +105,18 @@ async function accessToken(): Promise<string> {
 
 const enc = encodeURIComponent;
 function pointsUrl(type: string, filter: string, pageSize: number): string {
-	return `${API}/users/me/dataTypes/${type}/dataPoints?pageSize=${pageSize}&filter=${enc(filter)}`;
+	const f = filter ? `&filter=${enc(filter)}` : '';
+	return `${API}/users/me/dataTypes/${type}/dataPoints?pageSize=${pageSize}${f}`;
 }
 
-// The six reads for the window. `daily-*` filter by date; sample/session types by
-// timestamp. (Filter field names are best-effort — debug mode surfaces any 4xx.)
+// The reads for the window. `daily-*` and the sample types filter by date/time
+// (confirmed working). Sleep has no usable date-member filter, so we fetch the
+// most recent sessions (pageSize max 25 for sleep) unfiltered and let the
+// idempotent upsert sort out the dates — 25 sessions easily covers the window.
 function windowUrls(startDate: string): { key: keyof RawWindow; url: string }[] {
 	const startIso = `${startDate}T00:00:00Z`;
 	return [
-		{ key: 'sleep', url: pointsUrl('sleep', `sleep.session_end_time.physical_time >= "${startIso}"`, 25) },
+		{ key: 'sleep', url: pointsUrl('sleep', '', 25) },
 		{ key: 'restingHr', url: pointsUrl('daily-resting-heart-rate', `daily_resting_heart_rate.date >= "${startDate}"`, 100) },
 		{ key: 'hrv', url: pointsUrl('heart-rate-variability', `heart_rate_variability.sample_time.physical_time >= "${startIso}"`, 1440) },
 		{ key: 'spo2', url: pointsUrl('oxygen-saturation', `oxygen_saturation.sample_time.physical_time >= "${startIso}"`, 1440) },
