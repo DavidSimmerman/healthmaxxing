@@ -4,7 +4,7 @@
 // Shapes mirror real responses captured via the sync's {"debug":true} mode
 // (note: minute totals come as int64 → JSON STRINGS).
 import assert from 'node:assert/strict';
-import { parseHealthData } from './fitbitParse.ts';
+import { parseHealthData, parseSleepSessions } from './fitbitParse.ts';
 
 const TZ = 'America/New_York'; // EDT (-4) in June
 const FIT = { dataSource: { platform: 'FITBIT' } };
@@ -128,5 +128,46 @@ assert.equal(tm.sleep_efficiency_pct, 80); // (90 + 70) / 2 averaged
 
 // Empty / missing → no rows, no throw.
 assert.deepEqual(parseHealthData({}, TZ), []);
+
+// parseSleepSessions: build the hypnogram timeline; keep the LONGEST session per
+// wake date (main sleep, not a nap), with minute offsets from sleep start.
+{
+	const sess = parseSleepSessions(
+		{
+			dataPoints: [
+				// a short nap earlier the same wake date — must be discarded
+				{
+					...FIT,
+					sleep: {
+						interval: { startTime: '2026-06-22T18:00:00Z', endTime: '2026-06-22T18:30:00Z' },
+						stages: [{ startTime: '2026-06-22T18:00:00Z', endTime: '2026-06-22T18:30:00Z', type: 'LIGHT' }]
+					}
+				},
+				// the main sleep
+				{
+					...FIT,
+					sleep: {
+						interval: { startTime: '2026-06-22T04:00:00Z', endTime: '2026-06-22T11:00:00Z' },
+						stages: [
+							{ startTime: '2026-06-22T04:00:00Z', endTime: '2026-06-22T04:30:00Z', type: 'LIGHT' },
+							{ startTime: '2026-06-22T04:30:00Z', endTime: '2026-06-22T05:30:00Z', type: 'DEEP' }
+						]
+					}
+				},
+				// an Apple session must be ignored (platform filter)
+				{
+					...APPLE,
+					sleep: { interval: { startTime: '2026-06-22T04:00:00Z', endTime: '2026-06-22T12:00:00Z' }, stages: [] }
+				}
+			]
+		},
+		TZ
+	);
+	assert.equal(sess.length, 1);
+	assert.equal(sess[0].date, '2026-06-22');
+	assert.equal(sess[0].segments.length, 2); // the 7h main session, not the nap
+	assert.deepEqual(sess[0].segments[1], { stage: 'DEEP', startMin: 30, durationMin: 60 });
+}
+assert.deepEqual(parseSleepSessions({}, TZ), []);
 
 console.log('fitbitParse.selfcheck: OK');

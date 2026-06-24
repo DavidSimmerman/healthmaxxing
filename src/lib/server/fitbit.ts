@@ -2,10 +2,10 @@ import { env } from '$env/dynamic/private';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { db } from '$lib/server/db';
-import { dailyMetrics, fitbitAuth } from '$lib/server/db/schema';
+import { dailyMetrics, fitbitAuth, sleepStages } from '$lib/server/db/schema';
 import { APP_TZ, todayLabel } from '$lib/server/day';
 import { addDays } from '$lib/energy';
-import { parseHealthData, type MetricRow } from '$lib/fitbitParse';
+import { parseHealthData, parseSleepSessions, type MetricRow } from '$lib/fitbitParse';
 
 // Fitbit (worn at night) → dashboard, via Google's Health API. The legacy Fitbit
 // Web API was retired Sept 2026; Google OAuth 2.0 + https://health.googleapis.com
@@ -155,7 +155,8 @@ async function fetchWindow(token: string, startDate: string): Promise<RawWindow>
 export async function syncHealth(days = 3): Promise<{ days: number; metrics: number }> {
 	const token = await accessToken();
 	const startDate = addDays(todayLabel(), -days);
-	const rows: MetricRow[] = parseHealthData(await fetchWindow(token, startDate), APP_TZ);
+	const raw = await fetchWindow(token, startDate);
+	const rows: MetricRow[] = parseHealthData(raw, APP_TZ);
 	if (rows.length) {
 		await db
 			.insert(dailyMetrics)
@@ -165,6 +166,32 @@ export async function syncHealth(days = 3): Promise<{ days: number; metrics: num
 				set: { value: sql`excluded.value`, updatedAt: new Date() }
 			});
 	}
+
+	// Per-night stage timeline (for the hypnogram). The sleep endpoint returns the
+	// recent ~25 sessions, so this also backfills history on the first sync.
+	const sessions = parseSleepSessions(raw.sleep, APP_TZ);
+	if (sessions.length) {
+		await db
+			.insert(sleepStages)
+			.values(
+				sessions.map((s) => ({
+					date: s.date,
+					startAt: new Date(s.startAt),
+					endAt: new Date(s.endAt),
+					segments: s.segments
+				}))
+			)
+			.onConflictDoUpdate({
+				target: sleepStages.date,
+				set: {
+					startAt: sql`excluded.start_at`,
+					endAt: sql`excluded.end_at`,
+					segments: sql`excluded.segments`,
+					updatedAt: new Date()
+				}
+			});
+	}
+
 	return { days: new Set(rows.map((r) => r.date)).size, metrics: rows.length };
 }
 

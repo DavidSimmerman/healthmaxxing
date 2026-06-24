@@ -218,6 +218,20 @@ export const dailyMetrics = pgTable(
 	(t) => [primaryKey({ columns: [t.date, t.metric] })]
 );
 
+// One row per night's sleep-stage timeline (Fitbit via Google Health), kept so the
+// /sleep hypnogram can draw the night. The aggregate minutes live in daily_metrics;
+// this is the per-segment detail. Keyed by local wake date; the main (longest)
+// session of the night wins. `segments` offsets are minutes from `startAt`.
+export const sleepStages = pgTable('sleep_stages', {
+	date: text('date').primaryKey(), // 'YYYY-MM-DD' in APP_TZ (wake date)
+	startAt: timestamp('start_at').notNull(),
+	endAt: timestamp('end_at').notNull(),
+	segments: jsonb('segments')
+		.$type<{ stage: string; startMin: number; durationMin: number }[]>()
+		.notNull(),
+	updatedAt: timestamp('updated_at').notNull().defaultNow()
+});
+
 // ── Fitbit (Google) OAuth — server-side nightly sync ────────────────────────
 // Single-row store for the Fitbit refresh token. Fitbit ROTATES the refresh token
 // on every refresh, so it must be persisted writably (env won't do). Never

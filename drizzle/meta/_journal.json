@@ -99,6 +99,13 @@
       "when": 1782221320895,
       "tag": "0013_black_mikhail_rasputin",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1782270918760,
+      "tag": "0014_bored_karnak",
+      "breakpoints": true
     }
   ]
 }
