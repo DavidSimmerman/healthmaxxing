@@ -2,6 +2,10 @@
 	import { pullToRefresh } from '$lib/actions/pullToRefresh';
 	import ScoreRing from '$lib/components/ScoreRing.svelte';
 	import GoalRow from '$lib/components/GoalRow.svelte';
+	import GoalRing from '$lib/components/GoalRing.svelte';
+
+	// Apple-Fitness-style rings by default; List = the precise progress bars.
+	let ringView = $state(true);
 
 	let { data } = $props();
 
@@ -209,27 +213,66 @@
 
 	<!-- Daily goals -->
 	<section class="card mb-3 p-5">
-		<p
-			class="mb-2 text-[10px] font-semibold tracking-widest uppercase"
-			style="color: var(--color-accent-from);"
-		>
-			Daily goals
-		</p>
-		{#each view.goals as goal (goal.key)}
-			<GoalRow {goal} />
-		{/each}
+		<div class="mb-3 flex items-center justify-between gap-3">
+			<p
+				class="text-[10px] font-semibold tracking-widest uppercase"
+				style="color: var(--color-accent-from);"
+			>
+				Daily goals
+			</p>
+			<div
+				class="flex gap-0.5 rounded-full p-0.5"
+				style="background: var(--color-bg-elevated);"
+				role="group"
+				aria-label="Goal view"
+			>
+				<button
+					onclick={() => (ringView = true)}
+					aria-pressed={ringView}
+					class="rounded-full px-3 py-1 text-[11px] font-semibold transition"
+					style={ringView ? 'background:#fb923c; color:#000;' : 'color: var(--color-text-subtle);'}
+					>Rings</button
+				>
+				<button
+					onclick={() => (ringView = false)}
+					aria-pressed={!ringView}
+					class="rounded-full px-3 py-1 text-[11px] font-semibold transition"
+					style={!ringView ? 'background:#fb923c; color:#000;' : 'color: var(--color-text-subtle);'}
+					>List</button
+				>
+			</div>
+		</div>
+		{#if ringView}
+			<div class="grid grid-cols-3 gap-x-2 gap-y-4">
+				{#each view.goals as goal (goal.key)}
+					<GoalRing {goal} />
+				{/each}
+			</div>
+		{:else}
+			{#each view.goals as goal (goal.key)}
+				<GoalRow {goal} />
+			{/each}
+		{/if}
 	</section>
 
 	<!-- Weekly goals -->
 	<section class="card mb-3 p-5">
 		<p
-			class="mb-2 text-[10px] font-semibold tracking-widest uppercase"
+			class="mb-3 text-[10px] font-semibold tracking-widest uppercase"
 			style="color: var(--color-carbs);"
 		>
 			Weekly goals
 		</p>
-		{#each view.weeklyGoals as goal (goal.key)}
-			<GoalRow {goal} />
-		{/each}
+		{#if ringView}
+			<div class="flex justify-center gap-8">
+				{#each view.weeklyGoals as goal (goal.key)}
+					<GoalRing {goal} />
+				{/each}
+			</div>
+		{:else}
+			{#each view.weeklyGoals as goal (goal.key)}
+				<GoalRow {goal} />
+			{/each}
+		{/if}
 	</section>
 </main>
