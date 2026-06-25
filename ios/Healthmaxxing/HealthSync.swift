@@ -353,6 +353,13 @@ final class HealthSync {
             {
                 entry["kcal"] = energy.doubleValue(for: .kilocalorie())
             }
+            // Walking/running distance drives the running-mileage goal. Omit the
+            // field for workouts with no distance — never send 0.
+            if let distance = workout.statistics(for: HKQuantityType(.distanceWalkingRunning))?
+                .sumQuantity()
+            {
+                entry["distanceKm"] = distance.doubleValue(for: .meterUnit(with: .kilo))
+            }
             if let stats = try await heartRateStats(from: workout.startDate, to: workout.endDate) {
                 if let avg = stats.averageQuantity() {
                     entry["avgHr"] = avg.doubleValue(for: bpm)

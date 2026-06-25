@@ -51,6 +51,26 @@
 		</div>
 		<div class="flex items-center gap-2">
 			<a
+				href="/goals"
+				class="card-sm flex h-9 w-9 items-center justify-center text-white transition hover:brightness-125"
+				aria-label="Goals & score"
+			>
+				<svg
+					width="16"
+					height="16"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+				>
+					<circle cx="12" cy="12" r="10" />
+					<circle cx="12" cy="12" r="6" />
+					<circle cx="12" cy="12" r="2" />
+				</svg>
+			</a>
+			<a
 				href="/sleep"
 				class="card-sm flex h-9 w-9 items-center justify-center text-white transition hover:brightness-125"
 				aria-label="Sleep"
