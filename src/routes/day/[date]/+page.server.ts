@@ -1,7 +1,14 @@
 import { error } from '@sveltejs/kit';
 import { sql, eq, and, asc, desc } from 'drizzle-orm';
 import { db } from '$lib/server/db';
-import { dailyLog, foods, bodyComp, workouts, dailyMetrics } from '$lib/server/db/schema';
+import {
+	dailyLog,
+	foods,
+	bodyComp,
+	workouts,
+	dailyMetrics,
+	glucoseReadings
+} from '$lib/server/db/schema';
 import { deficitDays } from '$lib/server/deficit';
 import { fillBmrGaps } from '$lib/server/projections';
 import { APP_TZ, todayLabel } from '$lib/server/day';
@@ -21,7 +28,10 @@ export async function load({ params }) {
 	const workoutDate = sql<string>`(${workouts.startedAt} at time zone 'UTC' at time zone ${APP_TZ})::date`;
 	const compDate = sql<string>`(${bodyComp.measuredAt} at time zone 'UTC' at time zone ${APP_TZ})::date`;
 
-	const [[day], entries, [weighIn], workoutRows, metrics] = await Promise.all([
+	// Each EGV's local hour-of-day (0–24) in APP_TZ, for the intraday glucose curve.
+	const glucoseHour = sql<number>`extract(epoch from ((${glucoseReadings.at} at time zone 'UTC' at time zone ${APP_TZ}) - ${date}::date)) / 3600`;
+
+	const [[day], entries, [weighIn], workoutRows, metrics, glucose] = await Promise.all([
 		// Energy ledger for the single day, with interpolated BMR filled in.
 		(async () => fillBmrGaps(await deficitDays(date, date)))(),
 		// Everything eaten that day, oldest first.
@@ -78,7 +88,13 @@ export async function load({ params }) {
 		db
 			.select({ metric: dailyMetrics.metric, value: dailyMetrics.value })
 			.from(dailyMetrics)
-			.where(eq(dailyMetrics.date, date))
+			.where(eq(dailyMetrics.date, date)),
+		// Intraday CGM trace for the day (empty until Dexcom is connected).
+		db
+			.select({ hour: glucoseHour, mgdl: glucoseReadings.mgdl })
+			.from(glucoseReadings)
+			.where(eq(glucoseReadings.date, date))
+			.orderBy(asc(glucoseReadings.at))
 	]);
 
 	const fiberMode = await getFiberMode();
@@ -103,6 +119,7 @@ export async function load({ params }) {
 		weighIn: weighIn ?? null,
 		workouts: workoutRows,
 		metrics,
+		glucose,
 		prevDate: addDays(date, -1),
 		nextDate: addDays(date, 1),
 		today
