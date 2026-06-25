@@ -68,8 +68,31 @@ awful day but bumps a non-perfect one up. **Streak** = consecutive perfect days.
 - [x] /goals route + ScoreRing + GoalRow components (day/week/month, ?period=&date=)
 - [x] link from home page (target icon → /goals)
 - [x] seed demo DB (multi-source) + verified with Playwright screenshots (day/week/month)
-- [~] codex review --uncommitted — running; address findings then commit fixes
+- [x] codex review --uncommitted — 1 P1 + 4 P2; all addressed (commit 772cc83)
 - [x] commit (real files; demo vite.config/.env excluded)
+
+## ✅ FINAL STATUS — COMPLETE
+
+Commits on `feat/goals-score` (unmerged, off main): `681fceb` (feature) + `772cc83` (review fixes).
+Verified: `score.check.ts OK` (25 assertions) · svelte-check 0 errors (the 1 error is the
+demo-only vite.config preset, NOT committed) · day/week/month all render 200 · invalid `?date=`
+falls back instead of 500 · Playwright screenshots captured (day 95/A, week 98/A+, month 95/A).
+
+**Codex review (5 findings, all handled):**
+- P1 demo vite.config preset import → intentionally NOT committed (would break CI); lives only in
+  the worktree for the live demo.
+- P2 hypo target → 2%→4% (clinical / documented `<4%`).
+- P2 daily bonus divisor → excludes missing bonus goals (a disconnected sensor no longer shrinks
+  the bonus); locked with a test.
+- P2 `?date=2026-02-31` 500 → round-trip validation, falls back to today.
+- P2 running-mile undercount for already-synced workouts → one-time iOS anchor reset backfills
+  `distanceKm` (server upsert is idempotent). iOS not buildable here — synced to the Mac.
+
+**Live demo:** https://goals-demo.simmerman.cc/goals (tmux `goals-demo`, port 5191, demo DB
+`healthdash_demo`). Real `healthdash` DB untouched (0 goals/glucose rows written to it).
+
+**To ship:** merge `feat/goals-score` → main, `npm run build`, restart `healthmaxxing` service.
+The Goals tile is already on the home page; real data flows in as Dexcom/Fitbit/HealthKit populate.
 
 ## Suggested additional goals (for the user to consider)
 
