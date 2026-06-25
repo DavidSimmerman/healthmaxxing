@@ -136,6 +136,21 @@ approx(overshoot(SPEC.gmi, 6.5), 0); // exactly at target → no bonus
 	assert.equal(s.goals.find((g) => g.key === 'gmi')!.display, '—');
 }
 
+// ── a missing bonus metric must NOT dilute the bonus divisor ──
+// No Dexcom (GMI/TIR null) but a crushed deficit → deficit alone earns full bonus,
+// not 1/3 of it (the absent sensors are excluded from the divisor, like the base).
+{
+	const s = scoreDay({
+		...perfectDay,
+		gmi: null,
+		tir: null,
+		over250: null,
+		below70: null,
+		deficit: 1500
+	});
+	approx(s.bonus, BONUS_CAP_DAY); // deficit overshoot = 1, only bonus goal with data
+}
+
 // ── all data missing → null score, not 0 ──
 {
 	const empty: DayMetrics = {

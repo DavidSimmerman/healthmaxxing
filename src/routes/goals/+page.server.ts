@@ -16,8 +16,17 @@ export async function load({ url }) {
 	const period: Period = PERIODS.includes(rawPeriod as Period) ? (rawPeriod as Period) : 'day';
 
 	// Validate the date param; fall back to today, and clamp any future date down.
+	// Round-trip through Date so impossible-but-well-formed values (e.g. 2026-02-31,
+	// which would make periodRange throw → 500) fall back instead of erroring.
 	let date = url.searchParams.get('date') ?? today;
-	if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) date = today;
+	const d = new Date(`${date}T00:00:00Z`);
+	if (
+		!/^\d{4}-\d{2}-\d{2}$/.test(date) ||
+		Number.isNaN(d.getTime()) ||
+		d.toISOString().slice(0, 10) !== date
+	) {
+		date = today;
+	}
 	if (date > today) date = today;
 
 	const view = await buildGoalsView(period, date);

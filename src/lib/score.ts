@@ -86,7 +86,7 @@ export const GOAL_SPECS: GoalSpec[] = [
 		label: 'Time below 70',
 		unit: '%',
 		dir: '<=',
-		target: 2,
+		target: 4, // clinical hypo target: < 4% time below 70 (Battelino consensus)
 		floor: 8,
 		scope: 'day',
 		fmt: (v) => `${v.toFixed(1)}%`
@@ -257,9 +257,17 @@ export function scoreDay(m: DayMetrics): DayScore {
 		? (withData.reduce((s, g) => s + (g.attainment as number), 0) / withData.length) * 100
 		: null;
 
-	const bonusOver = DAY_BONUS_GOALS.map((k) => overshoot(SPEC[k], DAY_VALUE[k](m)));
+	// Only the bonus goals that HAVE data count toward the divisor — a missing
+	// sensor (e.g. no Dexcom → null GMI/TIR) must not dilute the bonus, same as it's
+	// excluded from the base.
+	const bonusData = DAY_BONUS_GOALS.map((k) => ({ spec: SPEC[k], v: DAY_VALUE[k](m) })).filter(
+		(x) => x.v != null
+	);
 	const bonus =
-		base == null ? 0 : BONUS_CAP_DAY * (bonusOver.reduce((s, o) => s + o, 0) / bonusOver.length);
+		base == null || bonusData.length === 0
+			? 0
+			: BONUS_CAP_DAY *
+				(bonusData.reduce((s, x) => s + overshoot(x.spec, x.v), 0) / bonusData.length);
 
 	const score = base == null ? null : Math.max(0, Math.min(100, base + bonus));
 	const perfect = goals.every((g) => g.attainment != null) && goals.every((g) => g.met);
