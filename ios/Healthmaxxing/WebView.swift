@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import WebKit
 import WidgetKit
 
@@ -48,6 +49,49 @@ struct WebView: UIViewRepresentable {
             decisionHandler: @escaping (WKPermissionDecision) -> Void
         ) {
             decisionHandler(origin.host == SyncConfig.serverURL.host ? .grant : .deny)
+        }
+
+        // WKWebView has no built-in JS dialogs: without these, confirm() returns
+        // false and alert()/prompt() no-op — so e.g. the food-remove button (gated
+        // on confirm()) silently did nothing. Bridge them to UIAlertController.
+        func webView(
+            _ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
+            initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void
+        ) {
+            let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in completionHandler() })
+            present(alert, on: webView)
+        }
+
+        func webView(
+            _ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
+            initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void
+        ) {
+            let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in completionHandler(false) })
+            alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in completionHandler(true) })
+            present(alert, on: webView)
+        }
+
+        func webView(
+            _ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String,
+            defaultText: String?, initiatedByFrame frame: WKFrameInfo,
+            completionHandler: @escaping (String?) -> Void
+        ) {
+            let alert = UIAlertController(title: nil, message: prompt, preferredStyle: .alert)
+            alert.addTextField { $0.text = defaultText }
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in completionHandler(nil) })
+            alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in
+                completionHandler(alert.textFields?.first?.text)
+            })
+            present(alert, on: webView)
+        }
+
+        // Present on the top-most VC so dialogs survive over sheets/modals.
+        private func present(_ alert: UIAlertController, on webView: WKWebView) {
+            var vc = webView.window?.rootViewController
+            while let presented = vc?.presentedViewController { vc = presented }
+            vc?.present(alert, animated: true)
         }
     }
 }
