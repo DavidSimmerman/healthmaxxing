@@ -167,9 +167,18 @@ export async function buildGoalsView(
 		perfectDays = ps.perfectDays;
 	}
 
-	// Current streak: independent 60-day lookback so it isn't truncated by the window.
-	const lookDays = await dayMetricsForRange(addDays(anchor, -59), anchor);
-	const streak = currentStreak(lookDays.map(scoreDay));
+	// Current streak ending on `anchor`: walk back in 60-day chunks until a
+	// non-perfect day, so a long run isn't truncated by a fixed window. As long as
+	// a whole chunk is perfect, keep going. The 20-iteration cap (~3 years) is just
+	// an infinite-loop backstop — the real stop is the breaking day.
+	let streak = 0;
+	for (let end = anchor, i = 0; i < 20; i++) {
+		const chunk = (await dayMetricsForRange(addDays(end, -59), end)).map(scoreDay);
+		const s = currentStreak(chunk);
+		streak += s;
+		if (s < chunk.length) break; // found the non-perfect day that ends the streak
+		end = addDays(end, -60);
+	}
 
 	return {
 		period,
