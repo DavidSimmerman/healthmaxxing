@@ -16,6 +16,7 @@ type WorkoutIn = {
 	kcal?: number | null;
 	avgHr?: number | null;
 	maxHr?: number | null;
+	distanceKm?: number | null;
 };
 
 function num(v: unknown, min: number, max: number, label: string): number | null {
@@ -46,7 +47,8 @@ function parseWorkout(raw: unknown): WorkoutIn {
 		end,
 		kcal: num(r.kcal, 0, 20_000, 'kcal'),
 		avgHr: num(r.avgHr, 20, 250, 'avgHr'),
-		maxHr: num(r.maxHr, 20, 260, 'maxHr')
+		maxHr: num(r.maxHr, 20, 260, 'maxHr'),
+		distanceKm: num(r.distanceKm, 0, 1000, 'distanceKm')
 	};
 }
 
@@ -81,7 +83,8 @@ export async function POST({ request }) {
 					endedAt: w.end ? new Date(w.end) : null,
 					kcal: w.kcal,
 					avgHr: w.avgHr,
-					maxHr: w.maxHr
+					maxHr: w.maxHr,
+					distanceKm: w.distanceKm
 				}))
 			)
 			.onConflictDoUpdate({
@@ -93,7 +96,8 @@ export async function POST({ request }) {
 					endedAt: sql`excluded.ended_at`,
 					kcal: sql`excluded.kcal`,
 					avgHr: sql`excluded.avg_hr`,
-					maxHr: sql`excluded.max_hr`
+					maxHr: sql`excluded.max_hr`,
+					distanceKm: sql`excluded.distance_km`
 				}
 			});
 	}

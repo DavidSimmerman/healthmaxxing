@@ -321,6 +321,13 @@ final class HealthSync {
     private var pendingWorkoutAnchor: HKQueryAnchor?
 
     private func collectWorkouts() async throws -> [[String: Any]] {
+        // One-time backfill: distanceKm was added after some workouts already synced.
+        // Clearing the anchor once re-POSTs every workout WITH distance (the server
+        // upsert is idempotent, so re-sending is harmless). Versioned flag → runs once.
+        if !UserDefaults.standard.bool(forKey: "workoutDistanceBackfilled_v1") {
+            UserDefaults.standard.removeObject(forKey: "workoutAnchor")
+            UserDefaults.standard.set(true, forKey: "workoutDistanceBackfilled_v1")
+        }
         let anchor: HKQueryAnchor? = UserDefaults.standard.data(forKey: "workoutAnchor")
             .flatMap {
                 try? NSKeyedUnarchiver.unarchivedObject(ofClass: HKQueryAnchor.self, from: $0)
@@ -352,6 +359,13 @@ final class HealthSync {
                 ?? workout.totalEnergyBurned
             {
                 entry["kcal"] = energy.doubleValue(for: .kilocalorie())
+            }
+            // Walking/running distance drives the running-mileage goal. Omit the
+            // field for workouts with no distance — never send 0.
+            if let distance = workout.statistics(for: HKQuantityType(.distanceWalkingRunning))?
+                .sumQuantity()
+            {
+                entry["distanceKm"] = distance.doubleValue(for: .meterUnit(with: .kilo))
             }
             if let stats = try await heartRateStats(from: workout.startDate, to: workout.endDate) {
                 if let avg = stats.averageQuantity() {

@@ -221,6 +221,7 @@ export const workouts = pgTable(
 		kcal: real('kcal'), // total energy burned, if recorded
 		avgHr: real('avg_hr'),
 		maxHr: real('max_hr'),
+		distanceKm: real('distance_km'), // walking/running distance, if recorded (drives the running-miles goal)
 		createdAt: timestamp('created_at').notNull().defaultNow()
 	},
 	(t) => [index('workouts_started_at_idx').on(t.startedAt)]
