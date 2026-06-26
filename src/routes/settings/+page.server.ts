@@ -1,8 +1,10 @@
 import { db } from '$lib/server/db';
 import { settings, quickAdds, foods, dexcomAuth } from '$lib/server/db/schema';
 import { asc, eq } from 'drizzle-orm';
+import { fail } from '@sveltejs/kit';
 import { authEnabled } from '$lib/server/session';
 import { dexcomEnabled } from '$lib/server/dexcom';
+import { tandemEnabled, tandemConnected, storeCreds, syncInsulin } from '$lib/server/tandem';
 
 export async function load() {
 	const [settingsRow] = await db.select().from(settings).where(eq(settings.id, 1));
@@ -38,6 +40,34 @@ export async function load() {
 		quickAddItems,
 		authEnabled: authEnabled(),
 		dexcomConfigured: dexcomEnabled(),
-		dexcomConnected: !!dexcomRow
+		dexcomConnected: !!dexcomRow,
+		tandemConfigured: tandemEnabled(),
+		tandemConnected: await tandemConnected()
 	};
 }
+
+// The settings page is owner-gated by hooks.server.ts (valid session when app
+// auth is enabled), so this action inherits that protection.
+export const actions = {
+	connectTandem: async ({ request }) => {
+		if (!tandemEnabled()) return fail(503, { tandemError: 'Not configured (set TANDEM_ENC_KEY).' });
+		const form = await request.formData();
+		const username = String(form.get('username') ?? '').trim();
+		const password = String(form.get('password') ?? '');
+		const region = String(form.get('region') ?? 'US') === 'EU' ? 'EU' : 'US';
+		if (!username || !password)
+			return fail(400, { tandemError: 'Tandem Source username and password are required.' });
+
+		await storeCreds(username, password, region);
+		// Verify the credentials by pulling a few days now, so a typo surfaces here
+		// rather than silently on the next cron.
+		try {
+			const r = await syncInsulin(3);
+			return { tandemConnected: true, tandemSynced: r.events, tandemGlucose: r.glucose };
+		} catch (e) {
+			return fail(502, {
+				tandemError: e instanceof Error ? e.message : 'Saved, but the first sync failed.'
+			});
+		}
+	}
+};

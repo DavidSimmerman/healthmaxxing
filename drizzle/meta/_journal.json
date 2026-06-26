@@ -120,13 +120,6 @@
       "when": 1782310985770,
       "tag": "0016_even_whistler",
       "breakpoints": true
-    },
-    {
-      "idx": 17,
-      "version": "7",
-      "when": 1782356161995,
-      "tag": "0017_watery_punisher",
-      "breakpoints": true
     }
   ]
 }

@@ -353,3 +353,58 @@ export const glucoseReadings = pgTable(
 	},
 	(t) => [index('glucose_readings_date_idx').on(t.date)]
 );
+
+// ── Tandem (insulin pump) — unofficial Tandem Source API via Python sidecar ──
+// Tandem has NO official API; the only live route is the reverse-engineered
+// Tandem Source event log, decoded by tconnectsync (Python). We store login
+// credentials because that API uses username/password, not OAuth — encrypted at
+// rest (aes-256-gcm, keyed off TANDEM_ENC_KEY) since it's a reusable account
+// password, not a revocable token. Single row, never returned to any client.
+export const tandemAuth = pgTable('tandem_auth', {
+	id: integer('id').primaryKey().default(1),
+	username: text('username').notNull(),
+	secret: text('secret').notNull(), // iv:tag:ciphertext (hex), aes-256-gcm
+	region: text('region').notNull().default('US'), // 'US' | 'EU'
+	updatedAt: timestamp('updated_at').notNull().defaultNow()
+});
+
+// Intraday insulin trace from the pump, the insulin counterpart to
+// glucose_readings — drawn on the same day time-axis. Two kinds share one table:
+//   kind='basal' → one ~5-min sample; `units` is the commanded basal RATE (U/hr).
+//   kind='bolus' → one delivered bolus; `units` is units DELIVERED, plus carbs
+//                  entered, BG used, units requested, and bolusType (notably
+//                  'Automatic Correction' = a Control-IQ auto-bolus).
+// Idempotent re-sync upserts on (at, kind).
+// ponytail: PK (at, kind) — two boluses in the same second would collide (one
+// wins). Add seqNum to the PK if that ever shows up; pump events are ≥ seconds apart.
+export const insulinEvents = pgTable(
+	'insulin_events',
+	{
+		at: timestamp('at', { withTimezone: true }).notNull(), // event time (UTC)
+		date: text('date').notNull(), // 'YYYY-MM-DD' device-local (APP_TZ)
+		kind: text('kind').notNull(), // 'basal' | 'bolus'
+		units: real('units').notNull(), // basal: U/hr rate; bolus: units delivered
+		bolusType: text('bolus_type'), // bolus only: 'Insulin'|'Carb'|'Automatic Correction'|'Remote'
+		carbs: real('carbs'), // bolus only: grams entered
+		bg: real('bg'), // bolus only: mg/dL used for the bolus
+		requested: real('requested') // bolus only: units requested (delivered may be less)
+	},
+	(t) => [primaryKey({ columns: [t.at, t.kind] }), index('insulin_events_date_idx').on(t.date)]
+);
+
+// Pump-reported CGM (mg/dL the pump received from its linked sensor). Kept in a
+// SEPARATE table from glucose_readings (Dexcom's) on purpose: the two clocks
+// differ by seconds, so sharing one table would create near-duplicate points
+// once the Dexcom API is live. Mirrors glucose_readings minus trend. The day
+// chart prefers Dexcom per-day and falls back to this, so they coexist cleanly.
+// ponytail: only 'Precise Value' status readings are stored; Special High/Low/
+// Do-Not-Show are dropped (the curve wants real numbers, not sentinels).
+export const pumpGlucose = pgTable(
+	'pump_glucose',
+	{
+		at: timestamp('at', { withTimezone: true }).primaryKey(), // reading time (UTC)
+		date: text('date').notNull(), // 'YYYY-MM-DD' device-local (APP_TZ)
+		mgdl: real('mgdl').notNull()
+	},
+	(t) => [index('pump_glucose_date_idx').on(t.date)]
+);

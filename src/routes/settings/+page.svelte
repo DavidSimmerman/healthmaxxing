@@ -1,8 +1,10 @@
 <script lang="ts">
 	import { invalidateAll } from '$app/navigation';
+	import { enhance } from '$app/forms';
 	import { pullToRefresh } from '$lib/actions/pullToRefresh';
 
-	let { data } = $props();
+	let { data, form } = $props();
+	let tandemSaving = $state(false);
 
 	let calorieTarget = $state(data.settings.calorieTarget);
 	let proteinTargetG = $state(data.settings.proteinTargetG);
@@ -436,31 +438,103 @@
 		{/if}
 	</section>
 
-	{#if data.dexcomConfigured}
+	{#if data.dexcomConfigured || data.tandemConfigured}
 		<section class="mt-6">
 			<h2 class="mb-3 text-sm font-semibold tracking-wide text-white uppercase">Integrations</h2>
-			<article class="card-sm flex items-center gap-3 p-4">
-				<div class="min-w-0 flex-1">
+			{#if data.dexcomConfigured}
+				<article class="card-sm flex items-center gap-3 p-4">
+					<div class="min-w-0 flex-1">
+						<p class="flex items-center gap-2 text-sm font-medium text-white">
+							Dexcom CGM
+							{#if data.dexcomConnected}
+								<span class="text-xs font-normal text-emerald-400">● Connected</span>
+							{/if}
+						</p>
+						<p class="mt-0.5 text-xs leading-relaxed" style="color: var(--color-text-subtle);">
+							Syncs your glucose trace, time-in-range and GMI from Dexcom.
+						</p>
+					</div>
+					<!-- Full-page redirect to Dexcom's consent screen (no token needed — being
+					     logged in is the owner check; see the authorize route). -->
+					<a
+						href="/api/integrations/dexcom/authorize"
+						class="shrink-0 rounded-lg px-4 py-2 text-sm font-semibold text-black transition hover:brightness-110"
+						style="background: #fb923c;"
+					>
+						{data.dexcomConnected ? 'Reconnect' : 'Connect'}
+					</a>
+				</article>
+			{/if}
+
+			{#if data.tandemConfigured}
+				<article class="card-sm mt-3 p-4">
 					<p class="flex items-center gap-2 text-sm font-medium text-white">
-						Dexcom CGM
-						{#if data.dexcomConnected}
+						Tandem t:slim (insulin)
+						{#if data.tandemConnected}
 							<span class="text-xs font-normal text-emerald-400">● Connected</span>
 						{/if}
 					</p>
 					<p class="mt-0.5 text-xs leading-relaxed" style="color: var(--color-text-subtle);">
-						Syncs your glucose trace, time-in-range and GMI from Dexcom.
+						Pulls your basal rate, boluses (carbs + delivered) and Control-IQ auto-corrections from
+						Tandem Source. Uses your Tandem&nbsp;Source login — stored encrypted, only used to sync.
 					</p>
-				</div>
-				<!-- Full-page redirect to Dexcom's consent screen (no token needed — being
-				     logged in is the owner check; see the authorize route). -->
-				<a
-					href="/api/integrations/dexcom/authorize"
-					class="shrink-0 rounded-lg px-4 py-2 text-sm font-semibold text-black transition hover:brightness-110"
-					style="background: #fb923c;"
-				>
-					{data.dexcomConnected ? 'Reconnect' : 'Connect'}
-				</a>
-			</article>
+					<form
+						method="POST"
+						action="?/connectTandem"
+						class="mt-3 flex flex-col gap-2"
+						use:enhance={() => {
+							tandemSaving = true;
+							return async ({ update }) => {
+								await update();
+								tandemSaving = false;
+							};
+						}}
+					>
+						<input
+							name="username"
+							type="email"
+							autocomplete="username"
+							placeholder="Tandem Source email"
+							required
+							class="rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white placeholder:text-white/30"
+						/>
+						<input
+							name="password"
+							type="password"
+							autocomplete="current-password"
+							placeholder="Tandem Source password"
+							required
+							class="rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white placeholder:text-white/30"
+						/>
+						<div class="flex items-center gap-2">
+							<select
+								name="region"
+								class="rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
+							>
+								<option value="US">US</option>
+								<option value="EU">EU</option>
+							</select>
+							<button
+								type="submit"
+								disabled={tandemSaving}
+								class="flex-1 rounded-lg px-4 py-2 text-sm font-semibold text-black transition hover:brightness-110 disabled:opacity-50"
+								style="background: #fb923c;"
+							>
+								{tandemSaving ? 'Connecting…' : data.tandemConnected ? 'Reconnect' : 'Connect'}
+							</button>
+						</div>
+						{#if form?.tandemError}
+							<p class="text-xs text-rose-400">{form.tandemError}</p>
+						{:else if form?.tandemConnected}
+							<p class="text-xs text-emerald-400">
+								Connected — pulled {form.tandemSynced} insulin event{form.tandemSynced === 1
+									? ''
+									: 's'}{form.tandemGlucose ? ` and ${form.tandemGlucose} glucose readings` : ''}.
+							</p>
+						{/if}
+					</form>
+				</article>
+			{/if}
 		</section>
 	{/if}
 </main>

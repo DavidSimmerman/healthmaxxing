@@ -7,7 +7,9 @@ import {
 	bodyComp,
 	workouts,
 	dailyMetrics,
-	glucoseReadings
+	glucoseReadings,
+	insulinEvents,
+	pumpGlucose
 } from '$lib/server/db/schema';
 import { deficitDays } from '$lib/server/deficit';
 import { fillBmrGaps } from '$lib/server/projections';
@@ -27,75 +29,101 @@ export async function load({ params }) {
 	const logDate = sql<string>`(${dailyLog.loggedAt} at time zone 'UTC' at time zone ${APP_TZ})::date`;
 	const workoutDate = sql<string>`(${workouts.startedAt} at time zone 'UTC' at time zone ${APP_TZ})::date`;
 	const compDate = sql<string>`(${bodyComp.measuredAt} at time zone 'UTC' at time zone ${APP_TZ})::date`;
+	// Minute-of-day (0–1439) in local time, so the intraday chart needs no tz math.
+	const glucoseMin = sql<number>`(extract(hour from (${glucoseReadings.at} at time zone ${APP_TZ})) * 60 + extract(minute from (${glucoseReadings.at} at time zone ${APP_TZ})))::int`;
+	const insulinMin = sql<number>`(extract(hour from (${insulinEvents.at} at time zone ${APP_TZ})) * 60 + extract(minute from (${insulinEvents.at} at time zone ${APP_TZ})))::int`;
+	const pumpGlucoseMin = sql<number>`(extract(hour from (${pumpGlucose.at} at time zone ${APP_TZ})) * 60 + extract(minute from (${pumpGlucose.at} at time zone ${APP_TZ})))::int`;
 
-	// Each EGV's local hour-of-day (0–24) in APP_TZ, for the intraday glucose curve.
-	const glucoseHour = sql<number>`extract(epoch from ((${glucoseReadings.at} at time zone 'UTC' at time zone ${APP_TZ}) - ${date}::date)) / 3600`;
+	const [[day], entries, [weighIn], workoutRows, metrics, dexcomGlucose, insulin, pumpGlucoseRows] =
+		await Promise.all([
+			// Energy ledger for the single day, with interpolated BMR filled in.
+			(async () => fillBmrGaps(await deficitDays(date, date)))(),
+			// Everything eaten that day, oldest first.
+			db
+				.select({
+					id: dailyLog.id,
+					name: foods.name,
+					brand: foods.brand,
+					servings: dailyLog.servings,
+					amount: dailyLog.amount,
+					unit: dailyLog.unit,
+					loggedAt: dailyLog.loggedAt,
+					calories: dailyLog.calories,
+					proteinG: dailyLog.proteinG,
+					carbsG: dailyLog.carbsG,
+					fatG: dailyLog.fatG,
+					foodNutrients: foods.nutrients,
+					foodIngredients: foods.ingredients,
+					foodMakesServings: foods.makesServings
+				})
+				.from(dailyLog)
+				.innerJoin(foods, eq(dailyLog.foodId, foods.id))
+				.where(sql`${logDate} = ${date}::date`)
+				.orderBy(asc(dailyLog.loggedAt)),
+			// Latest weigh-in on/before this day.
+			db
+				.select({
+					weightKg: bodyComp.weightKg,
+					bodyFatPct: bodyComp.bodyFatPct,
+					leanMassKg: bodyComp.leanMassKg,
+					measuredAt: bodyComp.measuredAt,
+					measuredDate: sql<string>`${compDate}::text`, // local (APP_TZ) date, matches server selection
+					source: bodyComp.source
+				})
+				.from(bodyComp)
+				.where(sql`${compDate} <= ${date}::date`)
+				.orderBy(desc(bodyComp.measuredAt))
+				.limit(1),
+			// Workouts that started that day.
+			db
+				.select({
+					hkUuid: workouts.hkUuid,
+					name: workouts.name,
+					startedAt: workouts.startedAt,
+					endedAt: workouts.endedAt,
+					kcal: workouts.kcal,
+					avgHr: workouts.avgHr,
+					maxHr: workouts.maxHr
+				})
+				.from(workouts)
+				.where(sql`${workoutDate} = ${date}::date`)
+				.orderBy(asc(workouts.startedAt)),
+			// Daily vitals (water, HR, HRV, …) for that day.
+			db
+				.select({ metric: dailyMetrics.metric, value: dailyMetrics.value })
+				.from(dailyMetrics)
+				.where(eq(dailyMetrics.date, date)),
+			// Dexcom CGM trace for the day (intraday glucose curve).
+			db
+				.select({ min: glucoseMin, mgdl: glucoseReadings.mgdl })
+				.from(glucoseReadings)
+				.where(eq(glucoseReadings.date, date))
+				.orderBy(asc(glucoseReadings.at)),
+			// Tandem insulin trace: basal-rate samples + boluses for the day.
+			db
+				.select({
+					min: insulinMin,
+					kind: insulinEvents.kind,
+					units: insulinEvents.units,
+					bolusType: insulinEvents.bolusType,
+					carbs: insulinEvents.carbs,
+					bg: insulinEvents.bg,
+					requested: insulinEvents.requested
+				})
+				.from(insulinEvents)
+				.where(eq(insulinEvents.date, date))
+				.orderBy(asc(insulinEvents.at)),
+			// Pump-reported CGM (fallback glucose source when Dexcom isn't connected).
+			db
+				.select({ min: pumpGlucoseMin, mgdl: pumpGlucose.mgdl })
+				.from(pumpGlucose)
+				.where(eq(pumpGlucose.date, date))
+				.orderBy(asc(pumpGlucose.at))
+		]);
 
-	const [[day], entries, [weighIn], workoutRows, metrics, glucose] = await Promise.all([
-		// Energy ledger for the single day, with interpolated BMR filled in.
-		(async () => fillBmrGaps(await deficitDays(date, date)))(),
-		// Everything eaten that day, oldest first.
-		db
-			.select({
-				id: dailyLog.id,
-				name: foods.name,
-				brand: foods.brand,
-				servings: dailyLog.servings,
-				amount: dailyLog.amount,
-				unit: dailyLog.unit,
-				loggedAt: dailyLog.loggedAt,
-				calories: dailyLog.calories,
-				proteinG: dailyLog.proteinG,
-				carbsG: dailyLog.carbsG,
-				fatG: dailyLog.fatG,
-				foodNutrients: foods.nutrients,
-				foodIngredients: foods.ingredients,
-				foodMakesServings: foods.makesServings
-			})
-			.from(dailyLog)
-			.innerJoin(foods, eq(dailyLog.foodId, foods.id))
-			.where(sql`${logDate} = ${date}::date`)
-			.orderBy(asc(dailyLog.loggedAt)),
-		// Latest weigh-in on/before this day.
-		db
-			.select({
-				weightKg: bodyComp.weightKg,
-				bodyFatPct: bodyComp.bodyFatPct,
-				leanMassKg: bodyComp.leanMassKg,
-				measuredAt: bodyComp.measuredAt,
-				measuredDate: sql<string>`${compDate}::text`, // local (APP_TZ) date, matches server selection
-				source: bodyComp.source
-			})
-			.from(bodyComp)
-			.where(sql`${compDate} <= ${date}::date`)
-			.orderBy(desc(bodyComp.measuredAt))
-			.limit(1),
-		// Workouts that started that day.
-		db
-			.select({
-				hkUuid: workouts.hkUuid,
-				name: workouts.name,
-				startedAt: workouts.startedAt,
-				endedAt: workouts.endedAt,
-				kcal: workouts.kcal,
-				avgHr: workouts.avgHr,
-				maxHr: workouts.maxHr
-			})
-			.from(workouts)
-			.where(sql`${workoutDate} = ${date}::date`)
-			.orderBy(asc(workouts.startedAt)),
-		// Daily vitals (water, HR, HRV, …) for that day.
-		db
-			.select({ metric: dailyMetrics.metric, value: dailyMetrics.value })
-			.from(dailyMetrics)
-			.where(eq(dailyMetrics.date, date)),
-		// Intraday CGM trace for the day (empty until Dexcom is connected).
-		db
-			.select({ hour: glucoseHour, mgdl: glucoseReadings.mgdl })
-			.from(glucoseReadings)
-			.where(eq(glucoseReadings.date, date))
-			.orderBy(asc(glucoseReadings.at))
-	]);
+	// One glucose source on the chart: prefer Dexcom (authoritative, gap-free),
+	// fall back to the pump's own CGM log for the day when Dexcom has nothing.
+	const glucose = dexcomGlucose.length ? dexcomGlucose : pumpGlucoseRows;
 
 	const fiberMode = await getFiberMode();
 	const entriesWithBolusable = entries.map((e) => {
@@ -120,6 +148,7 @@ export async function load({ params }) {
 		workouts: workoutRows,
 		metrics,
 		glucose,
+		insulin,
 		prevDate: addDays(date, -1),
 		nextDate: addDays(date, 1),
 		today

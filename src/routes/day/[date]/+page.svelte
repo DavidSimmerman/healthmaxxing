@@ -2,7 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { pullToRefresh } from '$lib/actions/pullToRefresh';
 	import { kgToLb } from '$lib/energy';
-	import GlucoseChart from '$lib/components/GlucoseChart.svelte';
+	import InsulinGlucoseChart from '$lib/components/InsulinGlucoseChart.svelte';
 
 	let { data } = $props();
 
@@ -341,15 +341,15 @@
 		{/if}
 	</section>
 
-	<!-- Glucose (Dexcom CGM) -->
-	{#if data.glucose.length}
+	<!-- Glucose & insulin intraday trace (Dexcom/pump CGM + Tandem insulin) -->
+	{#if data.glucose.length || data.insulin.length}
 		<section class="card mb-3 p-5">
 			<div class="mb-3 flex items-center justify-between">
 				<p
 					class="text-[10px] font-semibold tracking-widest uppercase"
 					style="color: var(--color-text-subtle);"
 				>
-					Glucose
+					Glucose &amp; Insulin
 				</p>
 				<div class="flex gap-4 text-xs" style="color: var(--color-text-subtle);">
 					{#if glucoseAvg != null}<span>avg <b class="text-white">{Math.round(glucoseAvg)}</b></span
@@ -358,7 +358,7 @@
 					{#if gmi != null}<span>GMI <b class="text-white">{gmi.toFixed(1)}%</b></span>{/if}
 				</div>
 			</div>
-			<GlucoseChart points={data.glucose} />
+			<InsulinGlucoseChart glucose={data.glucose} insulin={data.insulin} />
 		</section>
 	{/if}
 
