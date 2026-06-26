@@ -2,6 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { pullToRefresh } from '$lib/actions/pullToRefresh';
 	import { kgToLb } from '$lib/energy';
+	import GlucoseChart from '$lib/components/GlucoseChart.svelte';
 
 	let { data } = $props();
 
@@ -64,8 +65,17 @@
 		)
 	);
 
+	// Glucose summaries get their own section (below); keep them out of the generic list.
+	const GLUCOSE_KEYS = ['blood_glucose_mgdl', 'glucose_tir_pct', 'glucose_gmi_pct'];
+	const metricVal = (k: string) => data.metrics.find((m) => m.metric === k)?.value ?? null;
+
 	const water = $derived(data.metrics.find((m) => m.metric === 'water_l') ?? null);
-	const otherMetrics = $derived(data.metrics.filter((m) => m.metric !== 'water_l'));
+	const otherMetrics = $derived(
+		data.metrics.filter((m) => m.metric !== 'water_l' && !GLUCOSE_KEYS.includes(m.metric))
+	);
+	const glucoseAvg = $derived(metricVal('blood_glucose_mgdl'));
+	const tir = $derived(metricVal('glucose_tir_pct'));
+	const gmi = $derived(metricVal('glucose_gmi_pct'));
 
 	function workoutMinutes(startedAt: Date | string, endedAt: Date | string | null): number | null {
 		if (!endedAt) return null;
@@ -330,6 +340,27 @@
 			</div>
 		{/if}
 	</section>
+
+	<!-- Glucose (Dexcom CGM) -->
+	{#if data.glucose.length}
+		<section class="card mb-3 p-5">
+			<div class="mb-3 flex items-center justify-between">
+				<p
+					class="text-[10px] font-semibold tracking-widest uppercase"
+					style="color: var(--color-text-subtle);"
+				>
+					Glucose
+				</p>
+				<div class="flex gap-4 text-xs" style="color: var(--color-text-subtle);">
+					{#if glucoseAvg != null}<span>avg <b class="text-white">{Math.round(glucoseAvg)}</b></span
+						>{/if}
+					{#if tir != null}<span>TIR <b class="text-white">{Math.round(tir)}%</b></span>{/if}
+					{#if gmi != null}<span>GMI <b class="text-white">{gmi.toFixed(1)}%</b></span>{/if}
+				</div>
+			</div>
+			<GlucoseChart points={data.glucose} />
+		</section>
+	{/if}
 
 	<!-- Metrics -->
 	{#if water || otherMetrics.length}
