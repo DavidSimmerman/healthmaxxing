@@ -18,9 +18,27 @@
 		'3m': '3 months'
 	};
 
-	// Only days where expenditure could be estimated AND something was logged
-	// count toward averages — an unlogged day is missing data, not a giant deficit.
-	let counted = $derived(data.days.filter((d) => d.deficitKcal !== null && d.intakeKcal > 0));
+	// Today's deficit assumes you eat up to your calorie budget (matches the
+	// widget): burn − max(logged, target). Past days use actual intake. `counts`
+	// gates averages — a past unlogged day is missing data, not a giant deficit;
+	// today always counts once we can estimate burn (budget is assumed eaten).
+	let days = $derived(
+		data.days.map((d) => {
+			const isToday = d.date === data.today;
+			const deficitKcal =
+				isToday && d.burnedKcal !== null
+					? Math.round(d.burnedKcal - Math.max(d.intakeKcal, data.calorieTarget))
+					: d.deficitKcal;
+			const counts = isToday ? d.burnedKcal !== null : d.deficitKcal !== null && d.intakeKcal > 0;
+			return { ...d, deficitKcal, counts, isToday };
+		})
+	);
+
+	// Today is excluded from the week/month/3-month average unless "include today"
+	// is on (the range=d view is today, so it's always counted there).
+	let counted = $derived(
+		days.filter((d) => d.counts && (data.range === 'd' || data.includeToday || !d.isToday))
+	);
 	let totalDeficit = $derived(counted.reduce((a, d) => a + (d.deficitKcal ?? 0), 0));
 	let avgDeficit = $derived(counted.length ? Math.round(totalDeficit / counted.length) : null);
 	let avgIntake = $derived(
@@ -62,7 +80,7 @@
 		});
 	}
 
-	let listed = $derived([...data.days].reverse().filter((d) => d.intakeKcal > 0 || d.activeKcal));
+	let listed = $derived([...days].reverse().filter((d) => d.intakeKcal > 0 || d.activeKcal));
 </script>
 
 <main
@@ -162,6 +180,25 @@
 						).toFixed(1)} lb
 					</span>
 				</div>
+				<a
+					href="?range={data.range}{data.includeToday ? '' : '&today=1'}"
+					data-sveltekit-noscroll
+					data-sveltekit-replacestate
+					class="mt-3 flex items-center justify-between rounded-lg px-3 py-2 text-xs transition"
+					style="background: var(--color-bg-elevated); color: var(--color-text-muted);"
+				>
+					<span>Include today <span style="color: var(--color-text-subtle);">(assumes full budget)</span></span>
+					<span
+						class="flex h-5 w-9 items-center rounded-full p-0.5 transition"
+						class:accent-gradient={data.includeToday}
+						style={data.includeToday ? '' : 'background: rgba(255,255,255,0.12);'}
+					>
+						<span
+							class="h-4 w-4 rounded-full bg-white transition"
+							style="transform: translateX({data.includeToday ? '16px' : '0'});"
+						></span>
+					</span>
+				</a>
 			{/if}
 		</section>
 
@@ -210,19 +247,19 @@
 							class="mx-2 flex-1 overflow-hidden rounded-full"
 							style="height: 6px; background: rgba(255,255,255,0.07);"
 						>
-							{#if day.deficitKcal !== null && day.intakeKcal > 0}
+							{#if day.counts}
 								<div
 									class="h-full rounded-full"
-									style="width: {(Math.abs(day.deficitKcal) / maxBar) *
-										100}%; background: {day.deficitKcal >= 0
+									style="width: {(Math.abs(day.deficitKcal!) / maxBar) *
+										100}%; background: {day.deficitKcal! >= 0
 										? 'linear-gradient(90deg, var(--color-accent-from), var(--color-accent-to))'
 										: 'var(--color-fat)'};"
 								></div>
 							{/if}
 						</div>
-						{#if day.deficitKcal !== null && day.intakeKcal > 0}
-							<b style={day.deficitKcal < 0 ? 'color: var(--color-fat);' : ''}>
-								{day.deficitKcal >= 0 ? '−' : '+'}{Math.abs(day.deficitKcal)}
+						{#if day.counts}
+							<b style={day.deficitKcal! < 0 ? 'color: var(--color-fat);' : ''}>
+								{day.deficitKcal! >= 0 ? '−' : '+'}{Math.abs(day.deficitKcal!)}
 							</b>
 						{:else}
 							<b style="color: var(--color-text-subtle); font-weight: 400;">no data</b>

@@ -30,3 +30,6 @@ test-results
 
 # Claude Code local tooling (dev-side, not part of the app)
 .claude/
+
+# in-repo feature worktrees (local only)
+.claude/worktrees/

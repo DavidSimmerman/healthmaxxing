@@ -165,7 +165,11 @@ export async function bodyInsights({
 	// kcal/kg. Positive deficit ⇒ losing ⇒ negative weight change.
 	const from = addDays(today, -windowDays + 1);
 	const ledger = await deficitDays(from, today);
-	const counted = ledger.filter((d) => d.deficitKcal != null && d.intakeKcal > 0);
+	// Exclude today's deficit — you're not done eating, so it's an inflated
+	// partial. Today's weigh-in still counts (it's in `series` above).
+	const counted = ledger.filter(
+		(d) => d.deficitKcal != null && d.intakeKcal > 0 && d.date !== today
+	);
 	const deficitImplied = counted.length
 		? (() => {
 				const avgDeficitKcal =
@@ -440,7 +444,9 @@ export async function energyInsights({
 
 	// Window ledger for intake / protein / our formula-TDEE.
 	const from = addDays(today, -windowDays + 1);
-	const ledger = fillBmrGaps(await deficitDays(from, today));
+	// Drop today: its partial intake/deficit would skew intake, TDEE and pace.
+	// The weigh-in trend (body.series) keeps today's weigh-in.
+	const ledger = fillBmrGaps(await deficitDays(from, today)).filter((d) => d.date !== today);
 	const logged = ledger.filter((d) => d.intakeKcal > 0);
 	const withBurn = ledger.filter((d) => d.burnedKcal != null);
 	const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
