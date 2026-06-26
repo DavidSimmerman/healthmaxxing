@@ -4,7 +4,7 @@ import { asc, eq } from 'drizzle-orm';
 import { fail } from '@sveltejs/kit';
 import { authEnabled } from '$lib/server/session';
 import { dexcomEnabled } from '$lib/server/dexcom';
-import { tandemEnabled, tandemConnected, storeCreds, syncInsulin } from '$lib/server/tandem';
+import { tandemEnabled, tandemConnected, connectAndVerify } from '$lib/server/tandem';
 
 export async function load() {
 	const [settingsRow] = await db.select().from(settings).where(eq(settings.id, 1));
@@ -58,15 +58,14 @@ export const actions = {
 		if (!username || !password)
 			return fail(400, { tandemError: 'Tandem Source username and password are required.' });
 
-		await storeCreds(username, password, region);
-		// Verify the credentials by pulling a few days now, so a typo surfaces here
-		// rather than silently on the next cron.
+		// Store + verify by pulling a few days now, so a typo surfaces here rather
+		// than silently on the next cron. Rolls back to the prior creds on failure.
 		try {
-			const r = await syncInsulin(3);
+			const r = await connectAndVerify(username, password, region);
 			return { tandemConnected: true, tandemSynced: r.events, tandemGlucose: r.glucose };
 		} catch (e) {
 			return fail(502, {
-				tandemError: e instanceof Error ? e.message : 'Saved, but the first sync failed.'
+				tandemError: e instanceof Error ? e.message : 'Could not verify Tandem credentials.'
 			});
 		}
 	}

@@ -110,7 +110,11 @@ function projAt(trend: Trend | null, date: string): number | null {
 	return trend.intercept + trend.slopePerDay * daysBetween(trend.anchorDate, date);
 }
 
-function goalEta(trend: Trend | null, goal: number | null | undefined, today: string): GoalEta | null {
+function goalEta(
+	trend: Trend | null,
+	goal: number | null | undefined,
+	today: string
+): GoalEta | null {
 	if (!trend || goal == null) return null;
 	const etaDays = etaDaysToGoal(trend.current, goal, trend.slopePerDay);
 	return {
@@ -198,7 +202,10 @@ export async function bodyInsights({
 		});
 	}
 
-	const [settingsRow] = await db.select().from(settings).where(sql`${settings.id} = 1`);
+	const [settingsRow] = await db
+		.select()
+		.from(settings)
+		.where(sql`${settings.id} = 1`);
 	return {
 		asOf: today,
 		series,
@@ -322,7 +329,8 @@ function stepBodyComp(
 	const dW = -(tdee - plannedIntake) / RHO_KCAL_PER_KG; // kg/day, neg when in a deficit
 	if (s.fat != null && s.lean != null) {
 		const bf = s.weight > 0 ? (s.fat / s.weight) * 100 : 0;
-		const adequate = proteinG != null && s.weight > 0 && proteinG / s.weight >= PROTEIN_ADEQUATE_G_PER_KG;
+		const adequate =
+			proteinG != null && s.weight > 0 && proteinG / s.weight >= PROTEIN_ADEQUATE_G_PER_KG;
 		const leanShare = leanLossFraction(bf, adequate);
 		const fat = Math.max(0, s.fat + dW * (1 - leanShare));
 		const lean = Math.max(0, s.lean + dW * leanShare);
@@ -405,7 +413,9 @@ function simulateToGoals(opts: {
 	const wReached = (v: number) =>
 		opts.goalWeightKg != null && (wDown ? v <= opts.goalWeightKg : v >= opts.goalWeightKg);
 	const bfReached = (v: number | null) =>
-		opts.goalBodyFatPct != null && v != null && (bfDown ? v <= opts.goalBodyFatPct : v >= opts.goalBodyFatPct);
+		opts.goalBodyFatPct != null &&
+		v != null &&
+		(bfDown ? v <= opts.goalBodyFatPct : v >= opts.goalBodyFatPct);
 
 	let weightEtaDays: number | null = wReached(state.weight) ? 0 : null;
 	let bodyFatEtaDays: number | null = bfReached(bf0) ? 0 : null;
@@ -442,8 +452,11 @@ export async function energyInsights({
 	const today = todayLabel();
 	const body = await bodyInsights({ windowDays, horizons, targetDate });
 
-	// Window ledger for intake / protein / our formula-TDEE.
-	const from = addDays(today, -windowDays + 1);
+	// Window ledger for intake / protein / our formula-TDEE. Fetch one extra day
+	// back (−windowDays, not −windowDays+1) because we drop today below — this
+	// keeps a full `windowDays` of COMPLETED days so the coverage gate (≥7) can
+	// still trip on the 7-day view.
+	const from = addDays(today, -windowDays);
 	// Drop today: its partial intake/deficit would skew intake, TDEE and pace.
 	// The weigh-in trend (body.series) keeps today's weigh-in.
 	const ledger = fillBmrGaps(await deficitDays(from, today)).filter((d) => d.date !== today);

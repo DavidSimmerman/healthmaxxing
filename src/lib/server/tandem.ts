@@ -69,6 +69,37 @@ export async function storeCreds(
 		});
 }
 
+// Connect flow: store the submitted creds, then verify them by pulling a few
+// days. If the verify sync fails (wrong password/region), roll back to the
+// previous credentials — a failed reconnect must not clobber a working one, nor
+// leave a bad row that the cron then keeps using.
+export async function connectAndVerify(
+	username: string,
+	password: string,
+	region: string
+): Promise<{ days: number; events: number; glucose: number }> {
+	const [prev] = await db.select().from(tandemAuth).where(eq(tandemAuth.id, 1));
+	await storeCreds(username, password, region);
+	try {
+		return await syncInsulin(3);
+	} catch (e) {
+		if (prev) {
+			await db
+				.update(tandemAuth)
+				.set({
+					username: prev.username,
+					secret: prev.secret,
+					region: prev.region,
+					updatedAt: new Date()
+				})
+				.where(eq(tandemAuth.id, 1));
+		} else {
+			await db.delete(tandemAuth).where(eq(tandemAuth.id, 1));
+		}
+		throw e;
+	}
+}
+
 export async function tandemConnected(): Promise<boolean> {
 	const [row] = await db.select({ id: tandemAuth.id }).from(tandemAuth).where(eq(tandemAuth.id, 1));
 	return !!row;
