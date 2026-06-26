@@ -19,6 +19,7 @@
 		"lint": "prettier --check . && eslint .",
 		"format": "prettier --write .",
 		"test:e2e": "playwright install && playwright test",
+		"test:unit": "vitest run",
 		"test": "npm run test:e2e",
 		"db:start": "docker compose up",
 		"db:push": "drizzle-kit push",
@@ -52,7 +53,8 @@
 		"tsx": "^4.22.3",
 		"typescript": "^6.0.2",
 		"typescript-eslint": "^8.58.1",
-		"vite": "^8.0.7"
+		"vite": "^8.0.7",
+		"vitest": "4.1.9"
 	},
 	"dependencies": {
 		"drizzle-orm": "^0.45.2",

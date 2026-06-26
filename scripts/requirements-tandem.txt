@@ -1,0 +1,11 @@
+# Sidecar deps for scripts/tandem_sync.py (the Tandem insulin integration).
+# Tandem has no official API; tconnectsync is the reverse-engineered client that
+# decodes the binary Tandem Source event log. When Tandem changes their endpoints
+# and a sync starts failing, bump tconnectsync: `pip install -U tconnectsync`.
+#
+# Setup:
+#   python3 -m venv ~/.venvs/tandem
+#   ~/.venvs/tandem/bin/pip install -r scripts/requirements-tandem.txt
+# Point the app at it with TANDEM_PYTHON=~/.venvs/tandem/bin/python
+tconnectsync==2.3.4
+setuptools<81  # tconnectsync imports pkg_resources, removed from setuptools 81+

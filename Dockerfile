@@ -31,6 +31,19 @@ COPY --from=build /app/src/lib/server/db/migrate.mjs ./migrate.mjs
 COPY --from=build /app/drizzle ./drizzle
 COPY package.json ./
 
+# Tandem insulin sidecar (Python). Tandem has no official API, so
+# scripts/tandem_sync.py drives tconnectsync to decode the Tandem Source event
+# log. Inert unless TANDEM_ENC_KEY is configured, but baked in so the integration
+# works in this image when enabled. tandem.ts spawns it via these env paths.
+COPY --from=build /app/scripts ./scripts
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends python3 python3-venv \
+	&& rm -rf /var/lib/apt/lists/* \
+	&& python3 -m venv /opt/tandem-venv \
+	&& /opt/tandem-venv/bin/pip install --no-cache-dir -r scripts/requirements-tandem.txt
+ENV TANDEM_PYTHON=/opt/tandem-venv/bin/python
+ENV TANDEM_SCRIPT=/app/scripts/tandem_sync.py
+
 # Run pending migrations, then start the server. If migration fails the
 # container exits non-zero (Coolify will surface it) rather than serving on a
 # stale schema.

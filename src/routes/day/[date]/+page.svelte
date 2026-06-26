@@ -2,6 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { pullToRefresh } from '$lib/actions/pullToRefresh';
 	import { kgToLb } from '$lib/energy';
+	import InsulinGlucoseChart from '$lib/components/InsulinGlucoseChart.svelte';
 
 	let { data } = $props();
 
@@ -330,6 +331,19 @@
 			</div>
 		{/if}
 	</section>
+
+	<!-- Glucose & insulin intraday trace (Dexcom CGM + Tandem pump) -->
+	{#if data.glucose.length || data.insulin.length}
+		<section class="card mb-3 p-5">
+			<p
+				class="mb-3 text-[10px] font-semibold tracking-widest uppercase"
+				style="color: var(--color-text-subtle);"
+			>
+				Glucose &amp; Insulin
+			</p>
+			<InsulinGlucoseChart glucose={data.glucose} insulin={data.insulin} />
+		</section>
+	{/if}
 
 	<!-- Metrics -->
 	{#if water || otherMetrics.length}
