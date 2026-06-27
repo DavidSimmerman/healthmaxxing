@@ -227,11 +227,14 @@ export type GoalResult = {
 	display: string; // formatted value or '—'
 };
 
+export type BonusPart = { key: GoalKey; label: string; points: number };
+
 export type DayScore = {
 	date: string;
 	goals: GoalResult[];
 	base: number | null; // mean attainment ×100, or null if no data at all
 	bonus: number;
+	bonusParts: BonusPart[]; // where the bonus came from (gmi / tir / deficit overshoot)
 	score: number | null;
 	perfect: boolean; // every day-goal has data AND is met
 	veryBad: boolean; // protein < VERY_BAD_PROTEIN_G
@@ -259,21 +262,21 @@ export function scoreDay(m: DayMetrics): DayScore {
 
 	// Only the bonus goals that HAVE data count toward the divisor — a missing
 	// sensor (e.g. no Dexcom → null GMI/TIR) must not dilute the bonus, same as it's
-	// excluded from the base.
+	// excluded from the base. Each contributes BONUS_CAP_DAY × overshoot ÷ that count.
 	const bonusData = DAY_BONUS_GOALS.map((k) => ({ spec: SPEC[k], v: DAY_VALUE[k](m) })).filter(
 		(x) => x.v != null
 	);
-	const bonus =
-		base == null || bonusData.length === 0
-			? 0
-			: BONUS_CAP_DAY *
-				(bonusData.reduce((s, x) => s + overshoot(x.spec, x.v), 0) / bonusData.length);
+	const per = base == null || bonusData.length === 0 ? 0 : BONUS_CAP_DAY / bonusData.length;
+	const bonusParts = bonusData
+		.map((x) => ({ key: x.spec.key, label: x.spec.label, points: per * overshoot(x.spec, x.v) }))
+		.filter((p) => p.points >= 0.05);
+	const bonus = bonusParts.reduce((s, p) => s + p.points, 0);
 
 	const score = base == null ? null : Math.max(0, Math.min(100, base + bonus));
 	const perfect = goals.every((g) => g.attainment != null) && goals.every((g) => g.met);
 	const veryBad = m.protein != null && m.protein < VERY_BAD_PROTEIN_G;
 
-	return { date: m.date, goals, base, bonus: base == null ? 0 : bonus, score, perfect, veryBad };
+	return { date: m.date, goals, base, bonus, bonusParts, score, perfect, veryBad };
 }
 
 // ── Period (week / month) ─────────────────────────────────────────────────────
@@ -285,9 +288,11 @@ export type PeriodExtras = {
 
 export type PeriodScore = {
 	dayScores: DayScore[];
+	dailyGoals: GoalResult[]; // each daily goal scored on its period-average value
 	weeklyGoals: GoalResult[]; // strength + running (targets prorated for the period)
 	base: number | null;
 	bonus: number;
+	bonusParts: BonusPart[]; // where the period bonus came from
 	score: number | null;
 	perfectDays: number;
 	streak: number; // consecutive perfect days ending at the last day
@@ -305,9 +310,13 @@ function proratedSpec(spec: GoalSpec, days: number): GoalSpec {
 
 export function scorePeriod(days: DayMetrics[], extras: PeriodExtras): PeriodScore {
 	const dayScores = days.map(scoreDay);
-	const scored = dayScores.filter((d) => d.score != null);
-	const dailyMean = scored.length
-		? scored.reduce((s, d) => s + (d.score as number), 0) / scored.length
+
+	// Daily goals scored on their period-AVERAGE value (a day under and a day over
+	// cancel out), not the mean of daily scores. `days` should be COMPLETED days only.
+	const dailyGoals = aggregateDailyGoals(dayScores);
+	const dailyData = dailyGoals.filter((g) => g.attainment != null);
+	const dailyMean = dailyData.length
+		? (dailyData.reduce((s, g) => s + (g.attainment as number), 0) / dailyData.length) * 100
 		: null;
 
 	const strengthSpec = proratedSpec(SPEC.strength, extras.days);
@@ -328,26 +337,37 @@ export function scorePeriod(days: DayMetrics[], extras: PeriodExtras): PeriodSco
 		base = dailyMean * (1 - W_WEEKLY) + weeklyMean * W_WEEKLY;
 	else base = dailyMean ?? weeklyMean;
 
-	// Period bonus: average daily bonus-goal overshoot + strength/running overshoot.
-	const dailyOver = scored.length
-		? scored.reduce((s, d) => s + d.bonus / BONUS_CAP_DAY, 0) / scored.length
-		: 0;
-	const wOver = [
-		overshoot(strengthSpec, extras.strengthCount),
-		overshoot(runningSpec, extras.runningMiles)
+	// Period bonus = BONUS_CAP_WEEK × mean([daily, strength, running] overshoot) — the
+	// same three-way split as before, but daily overshoot now comes from the AVERAGED
+	// bonus goals (not per-day). Attribute to named parts that sum to that total: the
+	// daily third is shared among its bonus goals (each CAP×oᵢ/(3·n)); strength/running
+	// take CAP×overshoot/3 each.
+	const dailyBonusGoals = DAY_BONUS_GOALS.map((k) => dailyGoals.find((g) => g.key === k)).filter(
+		(g): g is GoalResult => !!g && g.value != null
+	);
+	const n = dailyBonusGoals.length;
+	const rawParts: BonusPart[] = [
+		...dailyBonusGoals.map((g) => ({
+			key: g.key,
+			label: g.label,
+			points: n ? (BONUS_CAP_WEEK * overshoot(SPEC[g.key], g.value)) / (3 * n) : 0
+		})),
+		{ key: 'strength', label: SPEC.strength.label, points: (BONUS_CAP_WEEK * overshoot(strengthSpec, extras.strengthCount)) / 3 },
+		{ key: 'running', label: SPEC.running.label, points: (BONUS_CAP_WEEK * overshoot(runningSpec, extras.runningMiles)) / 3 }
 	];
-	const overParts = [dailyOver, ...wOver];
-	const bonus =
-		base == null ? 0 : BONUS_CAP_WEEK * (overParts.reduce((s, o) => s + o, 0) / overParts.length);
+	const bonusParts = base == null ? [] : rawParts.filter((p) => p.points >= 0.05);
+	const bonus = bonusParts.reduce((s, p) => s + p.points, 0);
 
 	const score = base == null ? null : Math.max(0, Math.min(100, base + bonus));
 	const perfectDays = dayScores.filter((d) => d.perfect).length;
 
 	return {
 		dayScores,
+		dailyGoals,
 		weeklyGoals,
 		base,
-		bonus: base == null ? 0 : bonus,
+		bonus,
+		bonusParts,
 		score,
 		perfectDays,
 		streak: currentStreak(dayScores)
@@ -376,30 +396,29 @@ export function currentStreak(dayScores: { perfect: boolean }[]): number {
 	return n;
 }
 
-// Per daily-goal averages across a period, for the week/month goal rows: mean
-// attainment and mean value over the days that have data. A goal with no data on
-// any day → attainment null, display '—'.
+// Per daily-goal AVERAGE across a period, for the week/month goal rows: average the
+// value over the days that have data, then score that average. So a day 100 under
+// and a day 100 over cancel to "hit exactly" — the period is judged on the mean, not
+// the mean of daily pass/fail. A goal with no data on any day → null, display '—'.
+// (Pass COMPLETED days only — exclude today/future, which would drag the average.)
 export function aggregateDailyGoals(dayScores: DayScore[]): GoalResult[] {
 	return DAY_GOALS.map((key) => {
 		const spec = SPEC[key];
-		const cells = dayScores
-			.map((d) => d.goals.find((g) => g.key === key))
-			.filter((g): g is GoalResult => !!g && g.attainment != null);
-		if (!cells.length) {
+		const vals = dayScores
+			.map((d) => d.goals.find((g) => g.key === key)?.value)
+			.filter((v): v is number => v != null && Number.isFinite(v));
+		if (!vals.length) {
 			return { key, label: spec.label, value: null, attainment: null, met: false, display: '—' };
 		}
-		const att = cells.reduce((s, g) => s + (g.attainment as number), 0) / cells.length;
-		const valCells = cells.filter((g) => g.value != null);
-		const value = valCells.length
-			? valCells.reduce((s, g) => s + (g.value as number), 0) / valCells.length
-			: null;
+		const value = vals.reduce((s, v) => s + v, 0) / vals.length;
+		const att = attainment(spec, value);
 		return {
 			key,
 			label: spec.label,
 			value,
 			attainment: att,
-			met: att >= 1,
-			display: value == null ? '—' : (spec.fmt?.(value) ?? String(value))
+			met: att === 1,
+			display: spec.fmt?.(value) ?? String(value)
 		};
 	});
 }

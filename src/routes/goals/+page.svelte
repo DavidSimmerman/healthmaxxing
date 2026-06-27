@@ -5,23 +5,20 @@
 
 	let { data } = $props();
 	const view = $derived(data.view);
+	const day = $derived(view.day);
 
 	function fmt(date: string, opts: Intl.DateTimeFormatOptions): string {
 		return new Date(`${date}T12:00:00Z`).toLocaleDateString('en-US', { timeZone: 'UTC', ...opts });
 	}
 
-	const selectedLabel = $derived(
-		fmt(data.date, { weekday: 'long', month: 'short', day: 'numeric' })
-	);
+	const selectedLabel = $derived(fmt(data.date, { weekday: 'long', month: 'short', day: 'numeric' }));
 	const weekLabel = $derived(
 		`${fmt(data.weekDays[0].date, { month: 'short', day: 'numeric' })} – ${fmt(data.weekDays[6].date, { month: 'short', day: 'numeric' })}`
 	);
 
-	function dateHref(d: string): string {
-		return `/goals?date=${d}`;
-	}
+	const dateHref = (d: string) => `/goals?date=${d}`;
 
-	// Day-ring color ramp (mirrors ScoreRing / GoalRow).
+	// Ring color ramp (mirrors ScoreRing / GoalRow).
 	function ringColor(score: number | null): string {
 		if (score == null) return 'transparent';
 		if (score >= 90) return '#4ade80';
@@ -30,8 +27,8 @@
 		return '#f87171';
 	}
 
-	// Day-ring geometry (small).
-	const SZ = 40;
+	// Day-ring geometry (small, fits 7 across).
+	const SZ = 38;
 	const STK = 4;
 	const R = (SZ - STK) / 2;
 	const CIRC = 2 * Math.PI * R;
@@ -78,44 +75,34 @@
 			</a>
 		</div>
 
-		<div class="flex justify-between">
-			{#each data.weekDays as day (day.date)}
-				{@const pct = day.score == null ? 0 : Math.max(0, Math.min(100, day.score)) / 100}
+		<div class="grid grid-cols-7 gap-1">
+			{#each data.weekDays as d (d.date)}
+				{@const pct = d.score == null ? 0 : Math.max(0, Math.min(100, d.score)) / 100}
 				<svelte:element
-					this={day.future ? 'div' : 'a'}
-					href={day.future ? undefined : dateHref(day.date)}
-					aria-current={day.selected ? 'date' : undefined}
-					aria-disabled={day.future ? true : undefined}
-					class="flex flex-col items-center gap-1 rounded-xl px-1.5 py-1.5 transition"
-					style={day.selected ? 'background: rgba(255,255,255,0.10);' : ''}
-					class:opacity-30={day.future}
+					this={d.future ? 'div' : 'a'}
+					href={d.future ? undefined : dateHref(d.date)}
+					aria-current={d.selected ? 'date' : undefined}
+					aria-disabled={d.future ? true : undefined}
+					class="flex flex-col items-center gap-1 rounded-xl py-1.5 transition"
+					style={d.selected ? 'background: rgba(255,255,255,0.10);' : ''}
+					class:opacity-30={d.future}
 				>
 					<span class="text-[10px] font-semibold" style="color: var(--color-text-subtle);">
-						{fmt(day.date, { weekday: 'narrow' })}
+						{fmt(d.date, { weekday: 'narrow' })}
 					</span>
 					<span class="relative grid place-items-center" style="width: {SZ}px; height: {SZ}px;">
 						<svg width={SZ} height={SZ} viewBox="0 0 {SZ} {SZ}" class="-rotate-90">
 							<circle cx={SZ / 2} cy={SZ / 2} r={R} fill="none" stroke="rgba(255,255,255,0.08)" stroke-width={STK} />
-							{#if day.score != null}
-								<circle
-									cx={SZ / 2}
-									cy={SZ / 2}
-									r={R}
-									fill="none"
-									stroke={ringColor(day.score)}
-									stroke-width={STK}
-									stroke-linecap="round"
-									stroke-dasharray={CIRC}
-									stroke-dashoffset={CIRC * (1 - pct)}
-								/>
+							{#if d.score != null}
+								<circle cx={SZ / 2} cy={SZ / 2} r={R} fill="none" stroke={ringColor(d.score)} stroke-width={STK} stroke-linecap="round" stroke-dasharray={CIRC} stroke-dashoffset={CIRC * (1 - pct)} />
 							{/if}
 						</svg>
-						<span
-							class="absolute text-[11px] font-bold tabular-nums"
-							style="color: {day.selected ? '#fff' : 'var(--color-text-subtle)'};"
-						>
-							{fmt(day.date, { day: 'numeric' })}
+						<span class="absolute text-[11px] font-bold tabular-nums text-white">
+							{d.score == null ? '–' : Math.round(d.score)}
 						</span>
+					</span>
+					<span class="text-[10px] tabular-nums" style="color: {d.selected ? '#fff' : 'var(--color-text-subtle)'};">
+						{fmt(d.date, { day: 'numeric' })}
 					</span>
 				</svelte:element>
 			{/each}
@@ -127,23 +114,26 @@
 
 	<!-- Hero -->
 	<section class="card mb-3 flex items-center gap-5 p-5">
-		<ScoreRing score={view.score} />
+		<ScoreRing score={day.score} />
 		<div class="min-w-0 flex-1">
-			{#if view.score == null}
+			{#if day.score == null}
 				<p class="text-sm" style="color: var(--color-text-subtle);">No data yet — connect your sources.</p>
 			{:else}
-				<div class="flex items-baseline gap-2">
-					<span class="text-lg font-bold text-white">Grade {view.grade}</span>
-				</div>
-				{#if view.streak > 0}
+				<span class="text-lg font-bold text-white">Grade {day.grade}</span>
+				{#if day.streak > 0}
 					<div class="mt-2 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold" style="background: rgba(251,146,60,0.15); color: #fb923c;">
-						🔥 {view.streak}-day streak
+						🔥 {day.streak}-day streak
 					</div>
 				{/if}
-				{#if view.bonus > 0}
-					<p class="mt-2 text-xs" style="color: var(--color-text-subtle);">
-						{Math.round(view.base ?? 0)} base · +{Math.round(view.bonus)} bonus
-					</p>
+				<p class="mt-2 text-xs" style="color: var(--color-text-subtle);">
+					{Math.round(day.base ?? 0)} base{#if day.bonus > 0} · +{day.bonus.toFixed(1)} bonus{/if}
+				</p>
+				{#if day.bonusParts.length}
+					<div class="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-[11px]" style="color: #4ade80;">
+						{#each day.bonusParts as p (p.key)}
+							<span>{p.label} +{p.points.toFixed(1)}</span>
+						{/each}
+					</div>
 				{/if}
 			{/if}
 		</div>
@@ -152,16 +142,33 @@
 	<!-- Daily goals -->
 	<section class="card mb-3 p-5">
 		<p class="mb-3 text-[10px] font-semibold tracking-widest uppercase" style="color: var(--color-accent-from);">Daily goals</p>
-		{#each view.goals as goal (goal.key)}
+		{#each day.goals as goal (goal.key)}
 			<GoalRow {goal} />
 		{/each}
 	</section>
 
-	<!-- Weekly goals -->
-	<section class="card mb-3 p-5">
-		<p class="mb-3 text-[10px] font-semibold tracking-widest uppercase" style="color: var(--color-carbs);">Weekly goals</p>
-		{#each view.weeklyGoals as goal (goal.key)}
-			<GoalRow {goal} />
-		{/each}
-	</section>
+	<!-- Week / month summaries -->
+	{@render summary('This week', view.week)}
+	{@render summary('This month', view.month)}
 </main>
+
+{#snippet summary(title: string, sum: typeof view.week)}
+	<section class="card mb-3 p-5">
+		<div class="mb-4 flex items-center gap-4">
+			<ScoreRing score={sum.score} size={72} />
+			<div class="min-w-0">
+				<p class="text-[10px] font-semibold tracking-widest uppercase" style="color: var(--color-carbs);">{title}</p>
+				<p class="text-base font-bold text-white">Grade {sum.grade}</p>
+				<p class="text-xs" style="color: var(--color-text-subtle);">
+					avg of {sum.completedDays} completed day{sum.completedDays === 1 ? '' : 's'}{#if sum.bonus > 0} · +{sum.bonus.toFixed(1)} bonus{/if}
+				</p>
+			</div>
+		</div>
+		{#if sum.completedDays === 0}
+			<p class="text-sm" style="color: var(--color-text-subtle);">No completed days yet this {title === 'This week' ? 'week' : 'month'}.</p>
+		{:else}
+			{#each sum.goals as goal (goal.key)}<GoalRow {goal} />{/each}
+			{#each sum.weeklyGoals as goal (goal.key)}<GoalRow {goal} />{/each}
+		{/if}
+	</section>
+{/snippet}

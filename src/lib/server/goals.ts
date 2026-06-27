@@ -2,18 +2,18 @@ import { and, gte, lte, inArray, sql } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { activityDays, dailyMetrics, glucoseReadings, pumpGlucose, workouts } from '$lib/server/db/schema';
 import { deficitDays } from '$lib/server/deficit';
-import { APP_TZ } from '$lib/server/day';
+import { APP_TZ, todayLabel } from '$lib/server/day';
 import { addDays } from '$lib/energy';
-import { periodRange, weekToDate } from '$lib/period';
+import { weekToDate } from '$lib/period';
 import { glucoseStats } from '$lib/glucose';
 import {
 	scoreDay,
 	scorePeriod,
-	aggregateDailyGoals,
 	currentStreak,
 	grade,
 	type DayMetrics,
-	type GoalResult
+	type GoalResult,
+	type BonusPart
 } from '$lib/score';
 
 const L_TO_OZ = 33.814; // liters → US fluid ounces
@@ -150,95 +150,94 @@ export async function periodExtras(
 	return { strengthCount, runningMiles: runningKm * KM_TO_MI };
 }
 
-export type GoalsView = {
-	period: string;
+export type PeriodSummary = {
 	from: string;
 	to: string;
+	completedDays: number; // days that counted toward the averages (excludes today)
 	score: number | null;
 	grade: string;
-	base: number | null;
 	bonus: number;
-	goals: GoalResult[]; // daily-goal rows (day: that day; week/month: period averages)
-	weeklyGoals: GoalResult[]; // strength + running (period totals vs target)
-	dayScores: { date: string; score: number | null; perfect: boolean; veryBad: boolean }[];
-	streak: number;
-	perfectDays: number;
-	veryBadDays: number;
+	bonusParts: BonusPart[];
+	goals: GoalResult[]; // each daily goal scored on its average over completed days
+	weeklyGoals: GoalResult[]; // strength + running
 };
 
-// Everything the /goals page needs for one (period, anchor).
-export async function buildGoalsView(
-	period: 'day' | 'week' | 'month',
-	anchor: string
-): Promise<GoalsView> {
-	const { from, to } = periodRange(period, anchor);
-	const days = await dayMetricsForRange(from, to);
-	const dayScores = days.map(scoreDay);
+export type GoalsView = {
+	date: string;
+	day: {
+		score: number | null;
+		grade: string;
+		base: number | null;
+		bonus: number;
+		bonusParts: BonusPart[];
+		goals: GoalResult[];
+		streak: number;
+	};
+	week: PeriodSummary;
+	month: PeriodSummary;
+};
 
-	// Weekly goals (strength + running) are the current CALENDAR week to date:
-	// this week's Sunday through `anchor`, against the full weekly target. So the
-	// totals are Sunday-based (not a trailing 7 days), and looking back at a past
-	// day shows the running/strength total accumulated up to that day.
-	const wk = weekToDate(anchor);
-	const weeklyGoals = scorePeriod(await dayMetricsForRange(wk.from, wk.to), {
-		...(await periodExtras(wk.from, wk.to)),
-		days: 7
-	}).weeklyGoals;
+// Score a calendar period [from, to]. Daily goals are averaged over COMPLETED days
+// only (date < today) — today/future would drag the average. Strength/running count
+// through today (or the period end if it's already past), against a target prorated
+// to `periodDays` (7 for a week, the month length for a month).
+async function periodSummary(from: string, to: string, periodDays: number): Promise<PeriodSummary> {
+	const today = todayLabel();
+	const completed = (await dayMetricsForRange(from, to)).filter((d) => d.date < today);
+	const extraTo = to < today ? to : today;
+	const extras =
+		extraTo >= from ? await periodExtras(from, extraTo) : { strengthCount: 0, runningMiles: 0 };
+	const ps = scorePeriod(completed, { ...extras, days: periodDays });
+	return {
+		from,
+		to,
+		completedDays: completed.length,
+		score: ps.score,
+		grade: grade(ps.score),
+		bonus: ps.bonus,
+		bonusParts: ps.bonusParts,
+		goals: ps.dailyGoals,
+		weeklyGoals: ps.weeklyGoals
+	};
+}
 
-	let score: number | null;
-	let base: number | null;
-	let bonus: number;
-	let goals: GoalResult[];
-	let perfectDays: number;
-
-	if (period === 'day') {
-		const d = dayScores[0];
-		score = d.score;
-		base = d.base;
-		bonus = d.bonus;
-		goals = d.goals;
-		perfectDays = d.perfect ? 1 : 0;
-	} else {
-		const extras = await periodExtras(from, to);
-		const ps = scorePeriod(days, { ...extras, days: days.length });
-		score = ps.score;
-		base = ps.base;
-		bonus = ps.bonus;
-		goals = aggregateDailyGoals(dayScores);
-		perfectDays = ps.perfectDays;
-	}
+// Everything the /goals page needs for the selected day, plus its week & month rollups.
+export async function buildGoalsView(anchor: string): Promise<GoalsView> {
+	const day = scoreDay((await dayMetricsForRange(anchor, anchor))[0]);
 
 	// Current streak ending on `anchor`: walk back in 60-day chunks until a
-	// non-perfect day, so a long run isn't truncated by a fixed window. As long as
-	// a whole chunk is perfect, keep going. The 20-iteration cap (~3 years) is just
-	// an infinite-loop backstop — the real stop is the breaking day.
+	// non-perfect day, so a long run isn't truncated by a fixed window. The
+	// 20-iteration cap (~3 years) is just an infinite-loop backstop.
 	let streak = 0;
 	for (let end = anchor, i = 0; i < 20; i++) {
 		const chunk = (await dayMetricsForRange(addDays(end, -59), end)).map(scoreDay);
 		const s = currentStreak(chunk);
 		streak += s;
-		if (s < chunk.length) break; // found the non-perfect day that ends the streak
+		if (s < chunk.length) break;
 		end = addDays(end, -60);
 	}
 
+	const weekStart = weekToDate(anchor).from; // Sunday
+	const ym = anchor.slice(0, 7);
+	const [y, mo] = anchor.split('-').map(Number);
+	const lastDom = new Date(Date.UTC(y, mo, 0)).getUTCDate(); // last day of anchor's month
+	const [week, month] = await Promise.all([
+		periodSummary(weekStart, addDays(weekStart, 6), 7),
+		periodSummary(`${ym}-01`, `${ym}-${String(lastDom).padStart(2, '0')}`, lastDom)
+	]);
+
 	return {
-		period,
-		from,
-		to,
-		score,
-		grade: grade(score),
-		base,
-		bonus,
-		goals,
-		weeklyGoals,
-		dayScores: dayScores.map((d) => ({
-			date: d.date,
-			score: d.score,
-			perfect: d.perfect,
-			veryBad: d.veryBad
-		})),
-		streak,
-		perfectDays,
-		veryBadDays: dayScores.filter((d) => d.veryBad).length
+		date: anchor,
+		day: {
+			score: day.score,
+			grade: grade(day.score),
+			base: day.base,
+			bonus: day.bonus,
+			bonusParts: day.bonusParts,
+			goals: day.goals,
+			streak
+		},
+		week,
+		month
 	};
 }

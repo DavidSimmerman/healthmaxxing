@@ -1,7 +1,7 @@
 import { sql, and, gte, lte, asc } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { dailyLog, activityDays, bodyComp, settings } from '$lib/server/db/schema';
-import { APP_TZ } from '$lib/server/day';
+import { APP_TZ, todayLabel } from '$lib/server/day';
 import { katchMcArdleBmr, mifflinBmr, tefKcal, ageOn } from '$lib/energy';
 
 // One day of the energy ledger. `burnedKcal`/`deficitKcal` are null when we
@@ -66,6 +66,13 @@ export async function deficitDays(fromDate: string, toDate: string): Promise<Day
 		...c
 	}));
 
+	// Today is still in progress: assume you'll eat up to your calorie target if you're
+	// under it, so the deficit goal reflects where the day will land — not a phantom
+	// huge deficit from a half-logged day. Already over target → use actual. Past days
+	// always use actual intake.
+	const today = todayLabel();
+	const calorieTarget = settingsRow?.calorieTarget ?? 2100;
+
 	const days: DayEnergy[] = [];
 	for (const date of dateRange(fromDate, toDate)) {
 		const intake = intakeByDate.get(date);
@@ -103,6 +110,8 @@ export async function deficitDays(fromDate: string, toDate: string): Promise<Day
 		}
 
 		const burned = bmr != null ? bmr + (activity?.activeKcal ?? 0) + tef : null;
+		// Predicted intake for the deficit: today, eat at least to target; else actual.
+		const effIntake = date === today ? Math.max(intakeKcal, calorieTarget) : intakeKcal;
 
 		days.push({
 			date,
@@ -113,7 +122,7 @@ export async function deficitDays(fromDate: string, toDate: string): Promise<Day
 			activeKcal: activity?.activeKcal ?? null,
 			tefKcal: Math.round(tef),
 			burnedKcal: burned != null ? Math.round(burned) : null,
-			deficitKcal: burned != null ? Math.round(burned - intakeKcal) : null,
+			deficitKcal: burned != null ? Math.round(burned - effIntake) : null,
 			weightKg: comp?.weightKg ?? null
 		});
 	}

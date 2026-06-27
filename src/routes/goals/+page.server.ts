@@ -21,7 +21,7 @@ export async function load({ url }) {
 	}
 	if (date > today) date = today;
 
-	const view = await buildGoalsView('day', date);
+	const view = await buildGoalsView(date);
 
 	// Week strip: the 7 calendar days (Sun–Sat) of the week containing `date`, each
 	// with its overall score for the day rings. Only fetch up to today; later days

@@ -208,6 +208,17 @@ assert.equal(currentStreak([{ perfect: true }, { perfect: true }]), 2);
 	approx(p.base!, 100); // daily-only
 }
 
+// ── period scores the AVERAGE value, not the average of pass/fail ──
+// 100 under one day + 100 over the next → the mean hits target exactly = met.
+{
+	const d1: DayMetrics = { ...perfectDay, date: '2026-06-10', deficit: 650 };
+	const d2: DayMetrics = { ...perfectDay, date: '2026-06-11', deficit: 850 };
+	const p = scorePeriod([d1, d2], { strengthCount: 5, runningMiles: 8, days: 7 });
+	const def = p.dailyGoals.find((g) => g.key === 'deficit')!;
+	approx(def.value!, 750); // averaged value
+	assert.equal(def.met, true); // avg hits target exactly, though one day was under
+}
+
 // ── grade boundaries ──
 assert.equal(grade(100), 'A+');
 assert.equal(grade(85), 'B');
