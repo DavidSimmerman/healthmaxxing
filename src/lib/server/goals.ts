@@ -1,10 +1,11 @@
 import { and, gte, lte, inArray, sql } from 'drizzle-orm';
 import { db } from '$lib/server/db';
-import { activityDays, dailyMetrics, glucoseReadings, workouts } from '$lib/server/db/schema';
+import { activityDays, dailyMetrics, glucoseReadings, pumpGlucose, workouts } from '$lib/server/db/schema';
 import { deficitDays } from '$lib/server/deficit';
 import { APP_TZ } from '$lib/server/day';
 import { addDays } from '$lib/energy';
-import { periodRange } from '$lib/period';
+import { periodRange, weekToDate } from '$lib/period';
+import { glucoseStats } from '$lib/glucose';
 import {
 	scoreDay,
 	scorePeriod,
@@ -22,7 +23,7 @@ const KM_TO_MI = 0.621371;
 // [from, to]. Missing data stays null so the engine can exclude it (a day with no
 // food logged isn't a "0g protein" day — it's unknown).
 export async function dayMetricsForRange(from: string, to: string): Promise<DayMetrics[]> {
-	const [energy, steps, metricRows, glucose] = await Promise.all([
+	const [energy, steps, metricRows, dexcomGlucose, pumpGlucoseRows] = await Promise.all([
 		deficitDays(from, to),
 		db
 			.select({ date: activityDays.date, steps: activityDays.steps })
@@ -52,12 +53,49 @@ export async function dayMetricsForRange(from: string, to: string): Promise<DayM
 			})
 			.from(glucoseReadings)
 			.where(and(gte(glucoseReadings.date, from), lte(glucoseReadings.date, to)))
-			.groupBy(glucoseReadings.date)
+			.groupBy(glucoseReadings.date),
+		// Tandem pump CGM (raw) — per-day fallback for days Dexcom couldn't be pulled.
+		db
+			.select({ date: pumpGlucose.date, mgdl: pumpGlucose.mgdl })
+			.from(pumpGlucose)
+			.where(and(gte(pumpGlucose.date, from), lte(pumpGlucose.date, to)))
 	]);
 
 	const energyBy = new Map(energy.map((e) => [e.date, e]));
 	const stepsBy = new Map(steps.map((s) => [s.date, s.steps]));
-	const glucoseBy = new Map(glucose.map((g) => [g.date, g]));
+
+	const dexcomBy = new Map(dexcomGlucose.map((g) => [g.date, g]));
+	const pumpByDate = new Map<string, number[]>();
+	for (const r of pumpGlucoseRows) {
+		const a = pumpByDate.get(r.date);
+		if (a) a.push(r.mgdl);
+		else pumpByDate.set(r.date, [r.mgdl]);
+	}
+
+	// Per-day glucose goal inputs. Prefer Dexcom; on a day Dexcom couldn't be pulled
+	// (no readings), fall back to the Tandem pump's CGM — same clinical stats (TIR
+	// 70–180, GMI). Hyperglycemia goal counts readings > 250.
+	const glucoseFor = (date: string, m: Record<string, number>) => {
+		const dex = dexcomBy.get(date);
+		if (dex && dex.total > 0) {
+			return {
+				over250: (dex.over250 / dex.total) * 100,
+				below70: (dex.below70 / dex.total) * 100,
+				tir: m['glucose_tir_pct'] ?? null,
+				gmi: m['glucose_gmi_pct'] ?? null
+			};
+		}
+		const vals = pumpByDate.get(date);
+		const s = vals ? glucoseStats(vals) : null;
+		if (!s) return { over250: null, below70: null, tir: null, gmi: null };
+		return {
+			over250: (vals!.filter((x) => x > 250).length / s.n) * 100,
+			below70: s.belowPct,
+			tir: s.tirPct,
+			gmi: s.gmiPct
+		};
+	};
+
 	const metricsBy = new Map<string, Record<string, number>>();
 	for (const r of metricRows) {
 		const m = metricsBy.get(r.date) ?? {};
@@ -69,15 +107,15 @@ export async function dayMetricsForRange(from: string, to: string): Promise<DayM
 	for (let date = from; date <= to; date = addDays(date, 1)) {
 		const e = energyBy.get(date);
 		const m = metricsBy.get(date) ?? {};
-		const g = glucoseBy.get(date);
+		const gl = glucoseFor(date, m);
 		// Protein/deficit are only meaningful when something was actually logged.
 		const logged = !!e && e.intakeKcal > 0;
 		out.push({
 			date,
-			gmi: m['glucose_gmi_pct'] ?? null,
-			tir: m['glucose_tir_pct'] ?? null,
-			over250: g && g.total > 0 ? (g.over250 / g.total) * 100 : null,
-			below70: g && g.total > 0 ? (g.below70 / g.total) * 100 : null,
+			gmi: gl.gmi,
+			tir: gl.tir,
+			over250: gl.over250,
+			below70: gl.below70,
 			steps: stepsBy.get(date) ?? null,
 			sleepMin: m['sleep_min'] ?? null,
 			deficit: logged ? (e!.deficitKcal ?? null) : null,
@@ -137,11 +175,20 @@ export async function buildGoalsView(
 	const days = await dayMetricsForRange(from, to);
 	const dayScores = days.map(scoreDay);
 
+	// Weekly goals (strength + running) are the current CALENDAR week to date:
+	// this week's Sunday through `anchor`, against the full weekly target. So the
+	// totals are Sunday-based (not a trailing 7 days), and looking back at a past
+	// day shows the running/strength total accumulated up to that day.
+	const wk = weekToDate(anchor);
+	const weeklyGoals = scorePeriod(await dayMetricsForRange(wk.from, wk.to), {
+		...(await periodExtras(wk.from, wk.to)),
+		days: 7
+	}).weeklyGoals;
+
 	let score: number | null;
 	let base: number | null;
 	let bonus: number;
 	let goals: GoalResult[];
-	let weeklyGoals: GoalResult[];
 	let perfectDays: number;
 
 	if (period === 'day') {
@@ -151,11 +198,6 @@ export async function buildGoalsView(
 		bonus = d.bonus;
 		goals = d.goals;
 		perfectDays = d.perfect ? 1 : 0;
-		// Weekly context: this trailing week's strength/running progress.
-		const wr = periodRange('week', anchor);
-		const wExtras = await periodExtras(wr.from, wr.to);
-		const wDays = await dayMetricsForRange(wr.from, wr.to);
-		weeklyGoals = scorePeriod(wDays, { ...wExtras, days: 7 }).weeklyGoals;
 	} else {
 		const extras = await periodExtras(from, to);
 		const ps = scorePeriod(days, { ...extras, days: days.length });
@@ -163,7 +205,6 @@ export async function buildGoalsView(
 		base = ps.base;
 		bonus = ps.bonus;
 		goals = aggregateDailyGoals(dayScores);
-		weeklyGoals = ps.weeklyGoals;
 		perfectDays = ps.perfectDays;
 	}
 

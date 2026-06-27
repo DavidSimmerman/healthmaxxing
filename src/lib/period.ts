@@ -16,3 +16,15 @@ export function periodRange(period: string, anchor: string): { from: string; to:
 	const span = period === 'day' ? 1 : period === 'month' ? 30 : 7; // default week
 	return { from: addDays(anchor, -(span - 1)), to: anchor };
 }
+
+// The current CALENDAR week up to `anchor`: from this week's Sunday through the
+// anchor day (inclusive). Drives the weekly strength/running totals so they're
+// Sunday-based (not a trailing 7 days) and a past day shows the total accumulated
+// up to that day — view Mon→2mi, Tue→5mi, Wed→6mi.
+export function weekToDate(anchor: string): { from: string; to: string } {
+	const d = new Date(`${anchor}T00:00:00Z`);
+	if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== anchor) {
+		throw new Error('invalid date');
+	}
+	return { from: addDays(anchor, -d.getUTCDay()), to: anchor }; // getUTCDay: 0 = Sunday
+}

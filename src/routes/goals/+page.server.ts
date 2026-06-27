@@ -1,23 +1,15 @@
-import { buildGoalsView } from '$lib/server/goals';
+import { buildGoalsView, dayMetricsForRange } from '$lib/server/goals';
 import { todayLabel } from '$lib/server/day';
+import { weekToDate } from '$lib/period';
+import { scoreDay } from '$lib/score';
 import { addDays } from '$lib/energy';
-
-const PERIODS = ['day', 'week', 'month'] as const;
-type Period = (typeof PERIODS)[number];
-
-// How far prev/next steps in days, by period (matches the trailing-window span
-// in periodRange: day=1, week=7, month=30).
-const STEP: Record<Period, number> = { day: 1, week: 7, month: 30 };
 
 export async function load({ url }) {
 	const today = todayLabel();
 
-	const rawPeriod = url.searchParams.get('period');
-	const period: Period = PERIODS.includes(rawPeriod as Period) ? (rawPeriod as Period) : 'day';
-
 	// Validate the date param; fall back to today, and clamp any future date down.
 	// Round-trip through Date so impossible-but-well-formed values (e.g. 2026-02-31,
-	// which would make periodRange throw → 500) fall back instead of erroring.
+	// which would make weekToDate throw → 500) fall back instead of erroring.
 	let date = url.searchParams.get('date') ?? today;
 	const d = new Date(`${date}T00:00:00Z`);
 	if (
@@ -29,13 +21,32 @@ export async function load({ url }) {
 	}
 	if (date > today) date = today;
 
-	const view = await buildGoalsView(period, date);
+	const view = await buildGoalsView('day', date);
 
-	const step = STEP[period];
-	const prevDate = addDays(date, -step);
-	// Never let "next" walk past today.
-	const nextRaw = addDays(date, step);
-	const nextDate = nextRaw > today ? today : nextRaw;
+	// Week strip: the 7 calendar days (Sun–Sat) of the week containing `date`, each
+	// with its overall score for the day rings. Only fetch up to today; later days
+	// render as empty/dimmed.
+	const weekStart = weekToDate(date).from; // Sunday
+	const fetchEnd = addDays(weekStart, 6) > today ? today : addDays(weekStart, 6);
+	const scored = new Map(
+		(await dayMetricsForRange(weekStart, fetchEnd)).map((m) => {
+			const s = scoreDay(m);
+			return [s.date, s.score];
+		})
+	);
+	const weekDays = Array.from({ length: 7 }, (_, i) => {
+		const dd = addDays(weekStart, i);
+		return { date: dd, score: scored.get(dd) ?? null, future: dd > today, selected: dd === date };
+	});
 
-	return { view, date, period, today, prevDate, nextDate };
+	// Week navigation: jump a week back/forward, preserving the weekday. Never past
+	// the week that contains today.
+	const todayWeekStart = weekToDate(today).from;
+	const nextWeekStart = addDays(weekStart, 7);
+	const nextWeekDate = nextWeekStart > todayWeekStart ? null : (() => {
+		const t = addDays(date, 7);
+		return t > today ? today : t;
+	})();
+
+	return { view, date, today, weekDays, prevWeekDate: addDays(date, -7), nextWeekDate };
 }
