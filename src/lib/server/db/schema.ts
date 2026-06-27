@@ -128,6 +128,9 @@ export const settings = pgTable('settings', {
 	id: integer('id').primaryKey().default(1),
 	calorieTarget: integer('calorie_target').notNull().default(2100),
 	proteinTargetG: integer('protein_target_g').notNull().default(180),
+	// Daily calorie-deficit target — drives the deficit ring on the home page.
+	// Null = no target set yet (ring shows the number but no fill).
+	deficitTargetKcal: integer('deficit_target_kcal'),
 	carbsTargetG: integer('carbs_target_g').notNull().default(220),
 	fatTargetG: integer('fat_target_g').notNull().default(70),
 

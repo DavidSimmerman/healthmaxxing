@@ -2,6 +2,9 @@
 	import './layout.css';
 	import favicon from '$lib/assets/favicon.png';
 	import { onMount } from 'svelte';
+	import BottomNav from '$lib/components/BottomNav.svelte';
+	import CaptureSheet from '$lib/components/CaptureSheet.svelte';
+	import { captureOpen } from '$lib/stores/capture';
 
 	let { children } = $props();
 
@@ -31,8 +34,14 @@
 
 <svelte:head><link rel="icon" href={favicon} /></svelte:head>
 
-<!-- Pad below the iOS status bar / Dynamic Island in standalone PWA mode.
-     env() resolves to 0 in a normal browser, so this is a no-op there. -->
-<div style="padding-top: env(safe-area-inset-top);">
+<!-- Pad below the iOS status bar / Dynamic Island in standalone PWA mode, and
+     above the fixed bottom nav, so page content never hides behind either.
+     env() resolves to 0 in a normal browser, so the insets are no-ops there. -->
+<div
+	style="padding-top: env(safe-area-inset-top); padding-bottom: calc(4.5rem + env(safe-area-inset-bottom));"
+>
 	{@render children()}
 </div>
+
+<BottomNav />
+<CaptureSheet bind:open={$captureOpen} />

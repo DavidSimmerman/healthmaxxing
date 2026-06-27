@@ -1,9 +1,12 @@
 import { db } from '$lib/server/db';
 import { dailyLog, foods, quickAdds, settings } from '$lib/server/db/schema';
 import { asc, eq } from 'drizzle-orm';
-import { loggedToday } from '$lib/server/day';
+import { loggedToday, todayLabel } from '$lib/server/day';
 import { bolusableForLoggedEntry } from '$lib/netCarbs';
 import { getFiberMode } from '$lib/server/prefs';
+import { deficitDays } from '$lib/server/deficit';
+import { dayMetricsForRange } from '$lib/server/goals';
+import { scoreDay } from '$lib/score';
 
 export async function load() {
 	const [settingsRow] = await db.select().from(settings).where(eq(settings.id, 1));
@@ -63,6 +66,16 @@ export async function load() {
 		.innerJoin(foods, eq(quickAdds.foodId, foods.id))
 		.orderBy(asc(quickAdds.sortOrder));
 
+	// Today's deficit (assumes you eat up to your calorie budget — see deficitDays)
+	// and today's goal score, for the two side rings on the home page. Both may be
+	// null when the inputs aren't there yet; the rings render a dash, not a zero.
+	const today = todayLabel();
+	const [[todayEnergy], dayMetrics] = await Promise.all([
+		deficitDays(today, today),
+		dayMetricsForRange(today, today)
+	]);
+	const goalScore = dayMetrics[0] ? scoreDay(dayMetrics[0]).score : null;
+
 	return {
 		settings: settingsRow ?? {
 			calorieTarget: 2100,
@@ -71,6 +84,9 @@ export async function load() {
 			fatTargetG: 70
 		},
 		todayEntries,
-		quickAddItems
+		quickAddItems,
+		deficit: todayEnergy?.deficitKcal ?? null,
+		deficitTarget: settingsRow?.deficitTargetKcal ?? null,
+		goalScore
 	};
 }

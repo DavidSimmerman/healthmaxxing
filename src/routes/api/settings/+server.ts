@@ -16,6 +16,14 @@ export async function PUT({ request }) {
 
 	// Optional profile fields (BMR inputs). Empty/absent → null, not an error.
 	const profile: Record<string, unknown> = {};
+	// Daily deficit target — optional; null clears it.
+	if ('deficitTargetKcal' in body) {
+		const d = body.deficitTargetKcal;
+		if (d !== null && (typeof d !== 'number' || !Number.isFinite(d) || d < 0 || d > 100000)) {
+			throw error(400, 'invalid deficitTargetKcal');
+		}
+		profile.deficitTargetKcal = d;
+	}
 	if ('heightCm' in body) {
 		const h = body.heightCm;
 		if (h !== null && (typeof h !== 'number' || !Number.isFinite(h) || h < 50 || h > 280)) {

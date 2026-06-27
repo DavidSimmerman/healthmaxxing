@@ -4,7 +4,7 @@
 	import MacroBar from '$lib/components/MacroBar.svelte';
 	import { sumMacros, pct, formatTime } from '$lib/macros';
 	import { entryDisplay } from '$lib/units';
-	import CaptureSheet from '$lib/components/CaptureSheet.svelte';
+	import StatRing from '$lib/components/StatRing.svelte';
 	import EditEntrySheet from '$lib/components/EditEntrySheet.svelte';
 	import { pullToRefresh } from '$lib/actions/pullToRefresh';
 
@@ -12,7 +12,6 @@
 
 	let totals = $derived(sumMacros(data.todayEntries));
 	let goalPct = $derived(pct(totals.calories, data.settings.calorieTarget));
-	let captureOpen = $state(false);
 	let editingEntry = $state<(typeof data.todayEntries)[number] | null>(null);
 
 	// Whether the calorie ring and protein bar lead with what's left vs. consumed.
@@ -34,11 +33,7 @@
 	const monthDay = today.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
 </script>
 
-<main
-	class="mx-auto max-w-md p-6 pb-32"
-	style="padding-bottom: calc(8rem + env(safe-area-inset-bottom));"
-	use:pullToRefresh
->
+<main class="mx-auto max-w-md p-6" use:pullToRefresh>
 	<header class="mb-1 flex items-center justify-between">
 		<div>
 			<p
@@ -50,104 +45,6 @@
 			<h1 class="text-2xl font-bold text-white">{monthDay}</h1>
 		</div>
 		<div class="flex items-center gap-2">
-			<a
-				href="/goals"
-				class="card-sm flex h-9 w-9 items-center justify-center text-white transition hover:brightness-125"
-				aria-label="Goals & score"
-			>
-				<svg
-					width="16"
-					height="16"
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="2"
-					stroke-linecap="round"
-					stroke-linejoin="round"
-				>
-					<circle cx="12" cy="12" r="10" />
-					<circle cx="12" cy="12" r="6" />
-					<circle cx="12" cy="12" r="2" />
-				</svg>
-			</a>
-			<a
-				href="/sleep"
-				class="card-sm flex h-9 w-9 items-center justify-center text-white transition hover:brightness-125"
-				aria-label="Sleep"
-			>
-				<svg
-					width="16"
-					height="16"
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="2"
-					stroke-linecap="round"
-					stroke-linejoin="round"
-				>
-					<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-				</svg>
-			</a>
-			<a
-				href="/trends"
-				class="card-sm flex h-9 w-9 items-center justify-center text-white transition hover:brightness-125"
-				aria-label="Trends"
-			>
-				<svg
-					width="16"
-					height="16"
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="2"
-					stroke-linecap="round"
-					stroke-linejoin="round"
-				>
-					<polyline points="3 17 9 11 13 15 21 7" />
-					<polyline points="15 7 21 7 21 13" />
-				</svg>
-			</a>
-			<a
-				href="/reports"
-				class="card-sm flex h-9 w-9 items-center justify-center text-white transition hover:brightness-125"
-				aria-label="Reports"
-			>
-				<svg
-					width="16"
-					height="16"
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="2"
-					stroke-linecap="round"
-					stroke-linejoin="round"
-				>
-					<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-					<polyline points="14 2 14 8 20 8" />
-					<line x1="8" y1="13" x2="16" y2="13" />
-					<line x1="8" y1="17" x2="16" y2="17" />
-				</svg>
-			</a>
-			<a
-				href="/deficit"
-				class="card-sm flex h-9 w-9 items-center justify-center text-white transition hover:brightness-125"
-				aria-label="Energy balance"
-			>
-				<svg
-					width="16"
-					height="16"
-					viewBox="0 0 24 24"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="2"
-					stroke-linecap="round"
-					stroke-linejoin="round"
-				>
-					<path
-						d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"
-					/>
-				</svg>
-			</a>
 			<a
 				href="/settings"
 				class="card-sm flex h-9 w-9 items-center justify-center text-white transition hover:brightness-125"
@@ -182,12 +79,29 @@
 				{goalPct}%
 			</span>
 		</div>
-		<div class="mb-4 flex justify-center">
+		<div class="mb-4 flex items-center justify-between gap-1">
+			<StatRing
+				value={data.goalScore}
+				target={100}
+				label="Goal"
+				href="/goals"
+				ariaLabel="Goal score — open goals"
+				color="#a78bfa"
+			/>
 			<MacroRing
 				value={totals.calories}
 				target={data.settings.calorieTarget}
 				{showRemaining}
 				ontoggle={toggleMode}
+			/>
+			<StatRing
+				value={data.deficit}
+				target={data.deficitTarget}
+				label="Deficit"
+				unit="kcal"
+				href="/deficit?today=1"
+				ariaLabel="Today's deficit — open energy balance"
+				color="#38bdf8"
 			/>
 		</div>
 		<div class="grid grid-cols-3 gap-3">
@@ -281,20 +195,6 @@
 		</p>
 	{/if}
 </main>
-
-<button
-	type="button"
-	onclick={() => (captureOpen = true)}
-	class="accent-gradient accent-shadow fixed flex h-20 w-20 items-center justify-center rounded-full text-white transition active:scale-95"
-	style="bottom: calc(2rem + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%);"
-	aria-label="Add food"
->
-	<svg class="h-8 w-8" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
-		<path stroke-linecap="round" d="M12 5v14m-7-7h14" />
-	</svg>
-</button>
-
-<CaptureSheet bind:open={captureOpen} />
 
 <EditEntrySheet
 	entry={editingEntry}

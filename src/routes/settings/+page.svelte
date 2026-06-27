@@ -44,6 +44,8 @@
 
 	let calorieTarget = $state(data.settings.calorieTarget);
 	let proteinTargetG = $state(data.settings.proteinTargetG);
+	// Daily deficit target (kcal). Blank clears it.
+	let deficitTarget = $state(data.settings.deficitTargetKcal ?? ('' as '' | number));
 
 	// Profile (BMR inputs). Height is entered as ft/in, stored as cm.
 	const initialHeightCm = data.settings.heightCm ?? null;
@@ -78,9 +80,12 @@
 	let items = $state(data.quickAddItems);
 	let busy = $state<string | null>(null);
 
+	let deficitTargetVal = $derived(blank(deficitTarget) ? null : Number(deficitTarget));
+
 	let dirty = $derived(
 		calorieTarget !== data.settings.calorieTarget ||
 			proteinTargetG !== data.settings.proteinTargetG ||
+			deficitTargetVal !== (data.settings.deficitTargetKcal ?? null) ||
 			heightCm !== (data.settings.heightCm ?? null) ||
 			birthDate !== (data.settings.birthDate ?? '') ||
 			sex !== (data.settings.sex ?? '') ||
@@ -101,6 +106,7 @@
 				body: JSON.stringify({
 					calorieTarget: Number(calorieTarget),
 					proteinTargetG: Number(proteinTargetG),
+					deficitTargetKcal: deficitTargetVal,
 					heightCm,
 					birthDate: birthDate || null,
 					sex: sex || null,
@@ -230,6 +236,22 @@
 					max="1000"
 					step="5"
 					bind:value={proteinTargetG}
+					class="rounded-lg border bg-transparent px-3 py-2 text-white outline-none focus:border-orange-400"
+					style="border-color: var(--color-border);"
+				/>
+			</label>
+
+			<label class="col-span-2 flex flex-col gap-1">
+				<span class="text-xs font-medium" style="color: var(--color-text-subtle);"
+					>Daily deficit target (kcal)</span
+				>
+				<input
+					type="number"
+					min="0"
+					max="10000"
+					step="50"
+					placeholder="e.g. 500 — leave blank for none"
+					bind:value={deficitTarget}
 					class="rounded-lg border bg-transparent px-3 py-2 text-white outline-none focus:border-orange-400"
 					style="border-color: var(--color-border);"
 				/>
