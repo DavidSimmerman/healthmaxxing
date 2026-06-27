@@ -86,7 +86,9 @@ export async function load() {
 		todayEntries,
 		quickAddItems,
 		deficit: todayEnergy?.deficitKcal ?? null,
-		deficitTarget: settingsRow?.deficitTargetKcal ?? null,
+		// ponytail: default 500 kcal so the ring isn't dead before a target is set;
+		// the Settings field overrides it.
+		deficitTarget: settingsRow?.deficitTargetKcal ?? 500,
 		goalScore
 	};
 }

@@ -7,6 +7,10 @@
 		label: string;
 		sublabel?: string;
 		unit?: string;
+		// Override the big centre text (e.g. a letter grade) and a small line under
+		// it. When unset the centre shows the rounded value + optional unit.
+		centerText?: string;
+		centerSub?: string;
 		color?: string;
 		size?: number;
 		href: string;
@@ -18,6 +22,8 @@
 		label,
 		sublabel,
 		unit,
+		centerText,
+		centerSub,
 		color = '#4ade80',
 		size = 92,
 		href,
@@ -30,7 +36,8 @@
 	// Clamp to 0..1; a surplus (negative deficit) just shows an empty ring.
 	let pct = $derived(hasTarget && value != null ? Math.max(0, Math.min(1, value / target!)) : 0);
 	let dashoffset = $derived(C * (1 - pct));
-	let big = $derived(value == null ? '–' : Math.round(value).toLocaleString());
+	let big = $derived(centerText ?? (value == null ? '–' : Math.round(value).toLocaleString()));
+	let sub = $derived(centerSub ?? (unit && value != null ? unit : null));
 </script>
 
 <a
@@ -53,12 +60,19 @@
 			transform="rotate(-90 50 50)"
 			style="transition: stroke-dashoffset 0.6s ease;"
 		/>
-		<text x="50" y="49" text-anchor="middle" font-size="20" font-weight="700" fill="#fff">
+		<text
+			x="50"
+			y={sub ? 47 : 49}
+			text-anchor="middle"
+			font-size="22"
+			font-weight="700"
+			fill="#fff"
+		>
 			{big}
 		</text>
-		{#if unit && value != null}
-			<text x="50" y="62" text-anchor="middle" font-size="8" font-weight="600" fill="#a1a1aa">
-				{unit}
+		{#if sub}
+			<text x="50" y="62" text-anchor="middle" font-size="9" font-weight="600" fill="#a1a1aa">
+				{sub}
 			</text>
 		{/if}
 	</svg>

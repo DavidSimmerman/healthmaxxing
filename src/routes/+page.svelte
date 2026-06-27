@@ -3,6 +3,16 @@
 	import MacroRing from '$lib/components/MacroRing.svelte';
 	import MacroBar from '$lib/components/MacroBar.svelte';
 	import { sumMacros, pct, formatTime } from '$lib/macros';
+	import { grade } from '$lib/score';
+
+	// Goal-ring colour by score — same thresholds as the /goals page rings.
+	function goalColor(s: number | null): string {
+		if (s == null) return '#3f3f46';
+		if (s >= 90) return '#4ade80'; // green
+		if (s >= 75) return '#fb923c'; // orange
+		if (s >= 50) return '#fbbf24'; // yellow
+		return '#fb7185'; // red
+	}
 	import { entryDisplay } from '$lib/units';
 	import StatRing from '$lib/components/StatRing.svelte';
 	import EditEntrySheet from '$lib/components/EditEntrySheet.svelte';
@@ -84,13 +94,17 @@
 				value={data.goalScore}
 				target={100}
 				label="Goal"
+				centerText={grade(data.goalScore)}
+				centerSub={data.goalScore == null ? undefined : String(Math.round(data.goalScore))}
 				href="/goals"
 				ariaLabel="Goal score — open goals"
-				color="#a78bfa"
+				color={goalColor(data.goalScore)}
+				size={84}
 			/>
 			<MacroRing
 				value={totals.calories}
 				target={data.settings.calorieTarget}
+				size={146}
 				{showRemaining}
 				ontoggle={toggleMode}
 			/>
@@ -102,6 +116,7 @@
 				href="/deficit?today=1"
 				ariaLabel="Today's deficit — open energy balance"
 				color="#38bdf8"
+				size={84}
 			/>
 		</div>
 		<div class="grid grid-cols-3 gap-3">
