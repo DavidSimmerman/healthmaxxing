@@ -10,7 +10,13 @@ struct ContentView: View {
     var body: some View {
         WebView(url: SyncConfig.serverURL)
             .ignoresSafeArea()
-            .onLongPressGesture(minimumDuration: 1.5) { showSettings = true } // hidden settings entry
+            // Hidden settings entry. simultaneousGesture so the WKWebView's own
+            // long-press (text selection) doesn't swallow it. ponytail: fires even on
+            // a text hold — harmless, it just opens the debug sheet; switch to a shake
+            // gesture if the false-trigger ever annoys.
+            .simultaneousGesture(
+                LongPressGesture(minimumDuration: 1.5).onEnded { _ in showSettings = true }
+            )
             .sheet(isPresented: $showSettings) { settingsSheet }
     }
 

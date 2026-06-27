@@ -324,9 +324,9 @@ final class HealthSync {
         // One-time backfill: distanceKm was added after some workouts already synced.
         // Clearing the anchor once re-POSTs every workout WITH distance (the server
         // upsert is idempotent, so re-sending is harmless). Versioned flag → runs once.
-        if !UserDefaults.standard.bool(forKey: "workoutDistanceBackfilled_v1") {
+        if !UserDefaults.standard.bool(forKey: "workoutDistanceBackfilled_v2") {
             UserDefaults.standard.removeObject(forKey: "workoutAnchor")
-            UserDefaults.standard.set(true, forKey: "workoutDistanceBackfilled_v1")
+            UserDefaults.standard.set(true, forKey: "workoutDistanceBackfilled_v2")
         }
         let anchor: HKQueryAnchor? = UserDefaults.standard.data(forKey: "workoutAnchor")
             .flatMap {
@@ -360,12 +360,14 @@ final class HealthSync {
             {
                 entry["kcal"] = energy.doubleValue(for: .kilocalorie())
             }
-            // Walking/running distance drives the running-mileage goal. Omit the
-            // field for workouts with no distance — never send 0.
-            if let distance = workout.statistics(for: HKQuantityType(.distanceWalkingRunning))?
-                .sumQuantity()
+            // Walking/running distance drives the running-mileage goal. Sum the
+            // distance SAMPLES in the workout window — workout.statistics(for:) is
+            // nil/partial for imported (third-party) workouts. Omit when there's no
+            // distance; never send 0.
+            if let km = try await walkRunDistanceKm(from: workout.startDate, to: workout.endDate),
+                km > 0
             {
-                entry["distanceKm"] = distance.doubleValue(for: .meterUnit(with: .kilo))
+                entry["distanceKm"] = km
             }
             if let stats = try await heartRateStats(from: workout.startDate, to: workout.endDate) {
                 if let avg = stats.averageQuantity() {
@@ -396,8 +398,36 @@ final class HealthSync {
                 quantityType: heartRate, quantitySamplePredicate: predicate,
                 options: [.discreteAverage, .discreteMax]
             ) { _, stats, error in
-                if let error { return cont.resume(throwing: error) }
+                // HKStatisticsQuery throws errorNoData when the workout window has no
+                // HR samples (phone-only strength, Watch-less walk). Benign — skip HR
+                // for that workout rather than sinking the whole sync. Surface the rest.
+                if let error {
+                    if (error as? HKError)?.code == .errorNoData {
+                        return cont.resume(returning: nil)
+                    }
+                    return cont.resume(throwing: error)
+                }
                 cont.resume(returning: stats)
+            }
+            store.execute(query)
+        }
+    }
+
+    /// Summed walking/running distance (km) over a workout window, straight from
+    /// the distance samples — authoritative even when the workout carries no
+    /// statistics. nil when there are no distance samples (errorNoData).
+    private func walkRunDistanceKm(from start: Date, to end: Date) async throws -> Double? {
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end)
+        return try await withCheckedThrowingContinuation { cont in
+            let query = HKStatisticsQuery(
+                quantityType: HKQuantityType(.distanceWalkingRunning),
+                quantitySamplePredicate: predicate, options: .cumulativeSum
+            ) { _, stats, error in
+                if let error {
+                    if (error as? HKError)?.code == .errorNoData { return cont.resume(returning: nil) }
+                    return cont.resume(throwing: error)
+                }
+                cont.resume(returning: stats?.sumQuantity()?.doubleValue(for: .meterUnit(with: .kilo)))
             }
             store.execute(query)
         }
