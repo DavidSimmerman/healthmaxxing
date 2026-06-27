@@ -6,6 +6,42 @@
 	let { data, form } = $props();
 	let tandemSaving = $state(false);
 
+	// Back-sync: pull the last 2 weeks from every connected source in one call.
+	let backfilling = $state(false);
+	let backfillMsg = $state<string | null>(null);
+	let backfillOk = $state(true);
+	async function backfill() {
+		backfilling = true;
+		backfillMsg = null;
+		try {
+			const res = await fetch('/api/integrations/backfill', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ days: 14 })
+			});
+			const r = await res.json();
+			backfillOk = res.ok;
+			if (!res.ok) {
+				backfillMsg = r?.message || 'Back-sync failed.';
+			} else {
+				const parts = ['dexcom', 'tandem', 'fitbit']
+					.map((k) => {
+						const v = r[k];
+						if (!v || v.skipped) return null;
+						return v.error ? `${k}: ${v.error}` : `${k} ✓`;
+					})
+					.filter(Boolean);
+				backfillMsg = `Synced ${r.days} days — ${parts.length ? parts.join(', ') : 'no sources connected'}.`;
+				await invalidateAll();
+			}
+		} catch {
+			backfillOk = false;
+			backfillMsg = 'Back-sync failed.';
+		} finally {
+			backfilling = false;
+		}
+	}
+
 	let calorieTarget = $state(data.settings.calorieTarget);
 	let proteinTargetG = $state(data.settings.proteinTargetG);
 
@@ -535,6 +571,33 @@
 					</form>
 				</article>
 			{/if}
+
+			<article class="card-sm mt-3 flex items-center gap-3 p-4">
+				<div class="min-w-0 flex-1">
+					<p class="text-sm font-medium text-white">Back-sync history</p>
+					<p class="mt-0.5 text-xs leading-relaxed" style="color: var(--color-text-subtle);">
+						Pull the last 2 weeks from every connected source at once.
+					</p>
+					{#if backfillMsg}
+						<p
+							class="mt-1 text-xs"
+							class:text-emerald-400={backfillOk}
+							class:text-rose-400={!backfillOk}
+						>
+							{backfillMsg}
+						</p>
+					{/if}
+				</div>
+				<button
+					type="button"
+					onclick={backfill}
+					disabled={backfilling}
+					class="shrink-0 rounded-lg px-4 py-2 text-sm font-semibold text-black transition hover:brightness-110 disabled:opacity-50"
+					style="background: #fb923c;"
+				>
+					{backfilling ? 'Syncing…' : 'Back-sync 2 weeks'}
+				</button>
+			</article>
 		</section>
 	{/if}
 </main>
