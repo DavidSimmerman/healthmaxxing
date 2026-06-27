@@ -63,15 +63,18 @@
 		{/if}
 	</svg>
 
-	<!-- Center label -->
+	<!-- Center label. Letter + gap scale with `size` (≈ the 132 hero's old fixed
+	     values) so smaller rings don't get an oversized letter shoving the number up. -->
 	<div class="pointer-events-none absolute inset-0 grid place-items-center text-center">
 		<div>
 			<div class="leading-none font-bold text-white" style="font-size: {Math.round(size * 0.3)}px;">
 				{score == null ? '—' : Math.round(score)}
 			</div>
 			<div
-				class="mt-1 text-sm font-semibold"
-				style="color: {score == null ? 'var(--color-text-subtle)' : arcColor};"
+				class="font-semibold leading-none"
+				style="font-size: {Math.round(size * 0.11)}px; margin-top: {Math.round(
+					size * 0.03
+				)}px; color: {score == null ? 'var(--color-text-subtle)' : arcColor};"
 			>
 				{letter}
 			</div>

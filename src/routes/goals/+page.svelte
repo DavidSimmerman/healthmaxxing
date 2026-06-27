@@ -7,6 +7,14 @@
 	const view = $derived(data.view);
 	const day = $derived(view.day);
 
+	// Week / month rollups shown as tabs — pick one to see its goals below.
+	const tabs = [
+		{ key: 'week', label: 'This week' },
+		{ key: 'month', label: 'This month' }
+	] as const;
+	let tab = $state<'week' | 'month'>('week');
+	const sum = $derived(tab === 'week' ? view.week : view.month);
+
 	function fmt(date: string, opts: Intl.DateTimeFormatOptions): string {
 		return new Date(`${date}T12:00:00Z`).toLocaleDateString('en-US', { timeZone: 'UTC', ...opts });
 	}
@@ -147,28 +155,38 @@
 		{/each}
 	</section>
 
-	<!-- Week / month summaries -->
-	{@render summary('This week', view.week)}
-	{@render summary('This month', view.month)}
-</main>
-
-{#snippet summary(title: string, sum: typeof view.week)}
+	<!-- Week / month rollups, as tabs -->
 	<section class="card mb-3 p-5">
-		<div class="mb-4 flex items-center gap-4">
-			<ScoreRing score={sum.score} size={72} />
-			<div class="min-w-0">
-				<p class="text-[10px] font-semibold tracking-widest uppercase" style="color: var(--color-carbs);">{title}</p>
-				<p class="text-base font-bold text-white">Grade {sum.grade}</p>
-				<p class="text-xs" style="color: var(--color-text-subtle);">
-					avg of {sum.completedDays} completed day{sum.completedDays === 1 ? '' : 's'}{#if sum.bonus > 0} · +{sum.bonus.toFixed(1)} bonus{/if}
-				</p>
-			</div>
+		<div class="mb-4 grid grid-cols-2 gap-3">
+			{#each tabs as t (t.key)}
+				{@const s = t.key === 'week' ? view.week : view.month}
+				<button
+					onclick={() => (tab = t.key)}
+					aria-pressed={tab === t.key}
+					class="flex flex-col items-center gap-2 rounded-xl p-3 transition"
+					style={tab === t.key ? 'background: rgba(255,255,255,0.08);' : ''}
+				>
+					<ScoreRing score={s.score} size={84} />
+					<span
+						class="text-[11px] font-semibold tracking-wide uppercase"
+						style="color: {tab === t.key ? '#fff' : 'var(--color-text-subtle)'};"
+					>
+						{t.label}
+					</span>
+				</button>
+			{/each}
 		</div>
+
+		<p class="mb-3 text-xs" style="color: var(--color-text-subtle);">
+			avg of {sum.completedDays} completed day{sum.completedDays === 1 ? '' : 's'}{#if sum.bonus > 0} · +{sum.bonus.toFixed(1)} bonus{/if}
+		</p>
 		{#if sum.completedDays === 0}
-			<p class="text-sm" style="color: var(--color-text-subtle);">No completed days yet this {title === 'This week' ? 'week' : 'month'}.</p>
+			<p class="text-sm" style="color: var(--color-text-subtle);">
+				No completed days yet this {tab === 'week' ? 'week' : 'month'}.
+			</p>
 		{:else}
 			{#each sum.goals as goal (goal.key)}<GoalRow {goal} />{/each}
 			{#each sum.weeklyGoals as goal (goal.key)}<GoalRow {goal} />{/each}
 		{/if}
 	</section>
-{/snippet}
+</main>
