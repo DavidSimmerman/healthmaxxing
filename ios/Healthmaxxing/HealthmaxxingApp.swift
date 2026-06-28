@@ -25,10 +25,16 @@ struct HealthmaxxingApp: App {
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
-                // Sync first, THEN tell the WebView to reload — reloading before the
-                // metrics POST lands would just re-show the stale page (the bug this
-                // fixes). reload() keeps the current page, only re-fetching its data.
                 Task {
+                    // Re-request first: a reinstall/rebuild resets HealthKit auth to
+                    // "not determined", which makes every query (and thus the whole
+                    // sync) throw. requestAuthorization is idempotent — it only shows
+                    // the prompt when auth is actually undetermined, otherwise it's a
+                    // silent no-op — so doing it each foreground self-heals that case.
+                    try? await HealthSync.shared.requestAuthorization()
+                    // Sync, THEN reload the WebView — reloading before the metrics POST
+                    // lands would just re-show the stale page. reload() keeps the
+                    // current page, only re-fetching its data.
                     await HealthSync.shared.syncNow()
                     NotificationCenter.default.post(name: .healthSyncDidFinish, object: nil)
                 }
