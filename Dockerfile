@@ -37,7 +37,7 @@ COPY package.json ./
 # works in this image when enabled. tandem.ts spawns it via these env paths.
 COPY --from=build /app/scripts ./scripts
 RUN apt-get update \
-	&& apt-get install -y --no-install-recommends python3 python3-venv \
+	&& apt-get install -y --no-install-recommends curl python3 python3-venv \
 	&& rm -rf /var/lib/apt/lists/* \
 	&& python3 -m venv /opt/tandem-venv \
 	&& /opt/tandem-venv/bin/pip install --no-cache-dir -r scripts/requirements-tandem.txt
