@@ -5,13 +5,14 @@
 
 	const att = $derived(goal.attainment);
 	const hasData = $derived(att != null);
-	// Fraction of the bar to fill (0..1).
-	const fill = $derived(att == null ? 0 : Math.max(0, Math.min(1, att)));
+	// Fraction of the bar to fill (0..1). A met goal fills fully so it doesn't read
+	// as a near-miss (e.g. 159.6/160 rounds to met → full bar, not 99%).
+	const fill = $derived(att == null ? 0 : goal.met ? 1 : Math.max(0, Math.min(1, att)));
 
-	// Color ramp mirrors the score ring / page bars; numeric value carries meaning
-	// independent of color for accessibility.
+	// Green once met (rounded value reaches target); else orange/red by attainment.
+	// Numeric value carries meaning independent of color for accessibility.
 	const barColor = $derived(
-		att == null ? 'transparent' : att >= 1 ? '#4ade80' : att >= 0.6 ? '#fb923c' : '#f87171'
+		att == null ? 'transparent' : goal.met ? '#4ade80' : att >= 0.6 ? '#fb923c' : '#f87171'
 	);
 
 	const pctLabel = $derived(att == null ? 'no data' : `${Math.round(fill * 100)}% of target`);

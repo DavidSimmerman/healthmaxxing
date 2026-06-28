@@ -184,6 +184,17 @@ export function attainment(spec: GoalSpec, value: number | null): number | null 
 	return clamp01((value - spec.floor) / span);
 }
 
+// Whether a goal is "met" — i.e. the check + green bar show. Compares the value
+// ROUNDED to the precision the UI displays (integer target → whole number, a
+// fractional target like 6.5 → one decimal) against the target, so a row that
+// reads "160 g" (from a 159.6 average) counts as met instead of looking 0.4 g
+// short. Distinct from attainment, which stays exact and drives the score.
+export function isMet(spec: GoalSpec, value: number | null): boolean {
+	if (value == null || !Number.isFinite(value)) return false;
+	const rounded = Number(value.toFixed(Number.isInteger(spec.target) ? 0 : 1));
+	return spec.dir === '>=' ? rounded >= spec.target : rounded <= spec.target;
+}
+
 // Overshoot ∈ [0,1] beyond target, for bonus goals (0 when no bonus / no data).
 export function overshoot(spec: GoalSpec, value: number | null): number {
 	if (value == null || spec.bonusTo == null || !Number.isFinite(value)) return 0;
@@ -223,7 +234,7 @@ export type GoalResult = {
 	label: string;
 	value: number | null;
 	attainment: number | null; // null = no data
-	met: boolean; // attainment === 1
+	met: boolean; // rounded value reaches target (see isMet)
 	display: string; // formatted value or '—'
 };
 
@@ -250,7 +261,7 @@ export function scoreDay(m: DayMetrics): DayScore {
 			label: spec.label,
 			value,
 			attainment: att,
-			met: att === 1,
+			met: isMet(spec, value),
 			display: value == null ? '—' : (spec.fmt?.(value) ?? String(value))
 		};
 	});
@@ -381,7 +392,7 @@ function buildGoal(spec: GoalSpec, value: number | null): GoalResult {
 		label: spec.label,
 		value,
 		attainment: att,
-		met: att === 1,
+		met: isMet(spec, value),
 		display: value == null ? '—' : (spec.fmt?.(value) ?? String(value))
 	};
 }
@@ -417,7 +428,7 @@ export function aggregateDailyGoals(dayScores: DayScore[]): GoalResult[] {
 			label: spec.label,
 			value,
 			attainment: att,
-			met: att === 1,
+			met: isMet(spec, value),
 			display: spec.fmt?.(value) ?? String(value)
 		};
 	});
