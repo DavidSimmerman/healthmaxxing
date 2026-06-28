@@ -1,5 +1,11 @@
 import SwiftUI
 
+extension Notification.Name {
+    // Posted after a foreground sync finishes so the WebView reloads and shows
+    // freshly-pushed metrics (e.g. today's water) instead of pre-sync data.
+    static let healthSyncDidFinish = Notification.Name("healthSyncDidFinish")
+}
+
 @main
 struct HealthmaxxingApp: App {
     @Environment(\.scenePhase) private var scenePhase
@@ -19,7 +25,13 @@ struct HealthmaxxingApp: App {
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
-                Task { await HealthSync.shared.syncNow() }
+                // Sync first, THEN tell the WebView to reload — reloading before the
+                // metrics POST lands would just re-show the stale page (the bug this
+                // fixes). reload() keeps the current page, only re-fetching its data.
+                Task {
+                    await HealthSync.shared.syncNow()
+                    NotificationCenter.default.post(name: .healthSyncDidFinish, object: nil)
+                }
             }
         }
     }

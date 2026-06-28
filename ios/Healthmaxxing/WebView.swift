@@ -20,6 +20,9 @@ struct WebView: UIViewRepresentable {
         webView.isInspectable = true
         webView.uiDelegate = context.coordinator
         webView.load(URLRequest(url: url))
+        // Reload the current page after each foreground sync so freshly-pushed
+        // metrics (today's water, HR, …) appear without a manual pull-to-refresh.
+        context.coordinator.observeSyncReload(webView)
         return webView
     }
 
@@ -32,6 +35,15 @@ struct WebView: UIViewRepresentable {
     // WKWebView prompt on top of it. Anything else is denied — this web view
     // only ever loads the dashboard.
     final class Coordinator: NSObject, WKUIDelegate, WKScriptMessageHandler {
+        // Reload the page whenever a foreground sync finishes. Weak ref so the
+        // observer (lives for the app's lifetime, like the single WebView) can't
+        // keep a dead web view alive.
+        func observeSyncReload(_ webView: WKWebView) {
+            NotificationCenter.default.addObserver(
+                forName: .healthSyncDidFinish, object: nil, queue: .main
+            ) { [weak webView] _ in webView?.reload() }
+        }
+
         // Web → native: a food was logged/edited/deleted. Refresh the widget.
         func userContentController(
             _ controller: WKUserContentController, didReceive message: WKScriptMessage
