@@ -5,17 +5,52 @@
 
 	const att = $derived(goal.attainment);
 	const hasData = $derived(att != null);
-	// Fraction of the bar to fill (0..1). A met goal fills fully so it doesn't read
-	// as a near-miss (e.g. 159.6/160 rounds to met → full bar, not 99%).
-	const fill = $derived(att == null ? 0 : goal.met ? 1 : Math.max(0, Math.min(1, att)));
 
-	// Green once met (rounded value reaches target); else orange/red by attainment.
-	// Numeric value carries meaning independent of color for accessibility.
-	const barColor = $derived(
+	// Bankable goal carrying weekly bank(+)/debt(−). The bar then spans the real
+	// target plus any debt, with a gold (bank) or red (debt) zone capping the right.
+	const bankable = $derived(goal.target != null && goal.balance != null);
+	const T = $derived(goal.target ?? 0);
+	const bal = $derived(goal.balance ?? 0);
+	const bank = $derived(bal > 0 ? bal : 0);
+	const debt = $derived(bal < 0 ? -bal : 0);
+	const barMax = $derived(T + debt); // = T for bank or zero balance
+	const V = $derived(goal.value ?? 0);
+
+	// Value fill: along the (possibly debt-extended) bar for bankable goals, else
+	// the usual attainment fill (full when met so it doesn't read as a near-miss).
+	const fill = $derived(
+		!hasData
+			? 0
+			: bankable
+				? Math.max(0, Math.min(1, V / barMax))
+				: goal.met
+					? 1
+					: Math.max(0, Math.min(1, att ?? 0))
+	);
+
+	// Green once met; otherwise orange/red by attainment. Value carries meaning
+	// independent of colour for accessibility.
+	const fillColor = $derived(
 		att == null ? 'transparent' : goal.met ? '#4ade80' : att >= 0.6 ? '#fb923c' : '#f87171'
 	);
 
-	const pctLabel = $derived(att == null ? 'no data' : `${Math.round(fill * 100)}% of target`);
+	// Carry-over zone always runs to the right end of the bar; its left edge is the
+	// bank-lowered threshold (gold) or the target marker (red, debt beyond it).
+	const showZone = $derived(bankable && (bank > 0 || debt > 0));
+	const zoneLeftPct = $derived(((bank > 0 ? T - bank : T) / barMax) * 100);
+	const zoneColor = $derived(bank > 0 ? 'rgba(245,196,75,0.45)' : 'rgba(248,113,113,0.45)');
+
+	const showBadge = $derived(bankable && Math.round(Math.abs(bal)) >= 1);
+	const badgeColor = $derived(bank > 0 ? '#f5c44b' : '#f87171');
+	const badgeText = $derived(`${bank > 0 ? '+' : '−'}${Math.round(Math.abs(bal))}`);
+
+	const pctLabel = $derived(
+		!hasData
+			? 'no data'
+			: showBadge
+				? `${goal.display}, ${bank > 0 ? `${Math.round(bank)} banked` : `${Math.round(debt)} debt`}`
+				: `${Math.round(fill * 100)}% of target`
+	);
 </script>
 
 <div class="py-1.5">
@@ -28,6 +63,9 @@
 		</span>
 		<span class="shrink-0 font-semibold text-white tabular-nums">
 			{goal.display}
+			{#if showBadge}
+				<span style="color: {badgeColor};">({badgeText})</span>
+			{/if}
 			{#if !hasData}
 				<span class="ml-1 font-normal" style="color: var(--color-text-subtle);">no data</span>
 			{/if}
@@ -35,18 +73,24 @@
 	</div>
 
 	<div
-		class="mt-1.5 h-1.5 w-full overflow-hidden rounded-full"
+		class="relative mt-1.5 h-1.5 w-full overflow-hidden rounded-full"
 		style="background: rgba(255,255,255,0.06);"
 		role="progressbar"
 		aria-valuemin="0"
 		aria-valuemax="100"
 		aria-valuenow={hasData ? Math.round(fill * 100) : undefined}
-		aria-label="{goal.label}: {goal.display} — {pctLabel}"
+		aria-label="{goal.label}: {pctLabel}"
 	>
+		{#if showZone}
+			<div
+				class="absolute inset-y-0 right-0"
+				style="left: {zoneLeftPct}%; background: {zoneColor};"
+			></div>
+		{/if}
 		{#if hasData}
 			<div
-				class="h-full rounded-full"
-				style="width: {fill * 100}%; background: {barColor}; transition: width 500ms ease;"
+				class="absolute inset-y-0 left-0 rounded-full"
+				style="width: {fill * 100}%; background: {fillColor}; transition: width 500ms ease;"
 			></div>
 		{/if}
 	</div>

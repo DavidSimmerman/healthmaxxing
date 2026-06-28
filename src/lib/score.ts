@@ -236,7 +236,46 @@ export type GoalResult = {
 	attainment: number | null; // null = no data
 	met: boolean; // rounded value reaches target (see isMet)
 	display: string; // formatted value or '—'
+	// Present only on a bankable day-goal that has prior-week data: the goal's real
+	// daily target, and the running weekly bank(+)/debt(−). Used to draw the gold/red
+	// carry-over zone and badge. Undefined elsewhere (blood-sugar, weekly, or fresh week).
+	target?: number;
+	balance?: number;
 };
+
+// Day-goals that carry a weekly bank/debt: surplus over (or shortfall under) the
+// daily target accumulates across the week and can be redeemed/owed on later days.
+// Excludes blood-sugar goals (medical — not bankable) and the weekly strength/
+// running goals. All of these are dir '>=', which keeps the math a plain subtraction.
+export const BANKABLE_GOALS: GoalKey[] = ['steps', 'sleep', 'deficit', 'protein', 'water'];
+
+// Running bank(+)/debt(−) per bankable goal: Σ(value − dailyTarget) over the given
+// days (the caller passes the current week's days BEFORE the day being scored). A
+// day missing a goal's data is skipped, not counted as a full day of debt.
+export function weekBalances(priorDays: DayMetrics[]): Partial<Record<GoalKey, number>> {
+	const out: Partial<Record<GoalKey, number>> = {};
+	for (const key of BANKABLE_GOALS) {
+		const spec = SPEC[key];
+		let sum = 0;
+		let any = false;
+		for (const d of priorDays) {
+			const v = DAY_VALUE[key](d);
+			if (v == null || !Number.isFinite(v)) continue;
+			sum += v - spec.target;
+			any = true;
+		}
+		if (any) out[key] = sum;
+	}
+	return out;
+}
+
+// Attainment of a '>=' goal against an arbitrary (bank-adjusted) target.
+function attainmentTo(floor: number, target: number, value: number | null): number | null {
+	if (value == null || !Number.isFinite(value)) return null;
+	const span = target - floor;
+	if (span <= 0) return value >= target ? 1 : 0;
+	return clamp01((value - floor) / span);
+}
 
 export type BonusPart = { key: GoalKey; label: string; points: number };
 
@@ -251,10 +290,32 @@ export type DayScore = {
 	veryBad: boolean; // protein < VERY_BAD_PROTEIN_G
 };
 
-export function scoreDay(m: DayMetrics): DayScore {
+export function scoreDay(
+	m: DayMetrics,
+	balances: Partial<Record<GoalKey, number>> = {}
+): DayScore {
 	const goals: GoalResult[] = DAY_GOALS.map((key) => {
 		const spec = SPEC[key];
 		const value = DAY_VALUE[key](m);
+		const bal = BANKABLE_GOALS.includes(key) ? balances[key] : undefined;
+
+		// Bankable goal with prior-week data: a bank lowers today's 100% threshold by
+		// the banked amount (never below the goal's floor); debt leaves it at target.
+		if (bal != null) {
+			const bank = bal > 0 ? bal : 0;
+			const effTarget = bank > 0 ? Math.max(spec.floor, spec.target - bank) : spec.target;
+			return {
+				key,
+				label: spec.label,
+				value,
+				attainment: attainmentTo(spec.floor, effTarget, value),
+				met: value != null && Number.isFinite(value) && Math.round(value) >= Math.round(effTarget),
+				display: value == null ? '—' : (spec.fmt?.(value) ?? String(value)),
+				target: spec.target,
+				balance: bal
+			};
+		}
+
 		const att = attainment(spec, value);
 		return {
 			key,
@@ -320,7 +381,7 @@ function proratedSpec(spec: GoalSpec, days: number): GoalSpec {
 }
 
 export function scorePeriod(days: DayMetrics[], extras: PeriodExtras): PeriodScore {
-	const dayScores = days.map(scoreDay);
+	const dayScores = days.map((d) => scoreDay(d));
 
 	// Daily goals scored on their period-AVERAGE value (a day under and a day over
 	// cancel out), not the mean of daily scores. `days` should be COMPLETED days only.

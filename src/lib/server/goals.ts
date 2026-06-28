@@ -11,6 +11,7 @@ import {
 	scorePeriod,
 	currentStreak,
 	grade,
+	weekBalances,
 	type DayMetrics,
 	type GoalResult,
 	type BonusPart
@@ -203,14 +204,19 @@ async function periodSummary(from: string, to: string, periodDays: number): Prom
 
 // Everything the /goals page needs for the selected day, plus its week & month rollups.
 export async function buildGoalsView(anchor: string): Promise<GoalsView> {
-	const day = scoreDay((await dayMetricsForRange(anchor, anchor))[0]);
+	// Bank/debt entering `anchor`: the running surplus/shortfall over this week's
+	// days BEFORE it. Sunday (week start) → no prior days → no carry-over.
+	const balWeekStart = weekToDate(anchor).from;
+	const priorDays =
+		anchor > balWeekStart ? await dayMetricsForRange(balWeekStart, addDays(anchor, -1)) : [];
+	const day = scoreDay((await dayMetricsForRange(anchor, anchor))[0], weekBalances(priorDays));
 
 	// Current streak ending on `anchor`: walk back in 60-day chunks until a
 	// non-perfect day, so a long run isn't truncated by a fixed window. The
 	// 20-iteration cap (~3 years) is just an infinite-loop backstop.
 	let streak = 0;
 	for (let end = anchor, i = 0; i < 20; i++) {
-		const chunk = (await dayMetricsForRange(addDays(end, -59), end)).map(scoreDay);
+		const chunk = (await dayMetricsForRange(addDays(end, -59), end)).map((d) => scoreDay(d));
 		const s = currentStreak(chunk);
 		streak += s;
 		if (s < chunk.length) break;

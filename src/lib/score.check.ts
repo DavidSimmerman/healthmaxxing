@@ -8,6 +8,7 @@ import {
 	attainment,
 	overshoot,
 	grade,
+	weekBalances,
 	SPEC,
 	BONUS_CAP_DAY,
 	type DayMetrics
@@ -224,5 +225,44 @@ assert.equal(grade(100), 'A+');
 assert.equal(grade(85), 'B');
 assert.equal(grade(50), 'F');
 assert.equal(grade(null), '—');
+
+// ── bank / debt carry-over ──
+{
+	// Balance = Σ(value − target) over prior days; blood sugar is not bankable.
+	const prior: DayMetrics[] = [
+		{ ...perfectDay, date: '2026-06-21', protein: 180, waterOz: 80 },
+		{ ...perfectDay, date: '2026-06-22', protein: 150, waterOz: 97 }
+	];
+	const bal = weekBalances(prior);
+	approx(bal.protein!, 10); // (180−160)+(150−160)
+	approx(bal.water!, 3); // (80−87)+(97−87)
+	assert.equal('gmi' in bal, false);
+
+	const protein = (m: DayMetrics, b: Record<string, number>) =>
+		scoreDay(m, b).goals.find((g) => g.key === 'protein')!;
+
+	// Bank lowers today's 100% threshold: +20 banked → 140 g is met.
+	const banked = protein({ ...perfectDay, protein: 140 }, { protein: 20 });
+	assert.equal(banked.met, true);
+	approx(banked.attainment!, 1);
+	assert.equal(banked.target, 160);
+	approx(banked.balance!, 20);
+
+	// One under the lowered threshold → not met.
+	assert.equal(protein({ ...perfectDay, protein: 139 }, { protein: 20 }).met, false);
+
+	// Debt keeps the threshold at target; hitting target is still 100%.
+	const owed = protein({ ...perfectDay, protein: 160 }, { protein: -30 });
+	assert.equal(owed.met, true);
+	approx(owed.balance!, -30);
+
+	// Bank can't drop the threshold below the goal's floor (100 g).
+	assert.equal(protein({ ...perfectDay, protein: 100 }, { protein: 999 }).met, true);
+
+	// Non-bankable goals carry no target/balance even if a stray balance is passed.
+	const gmi = scoreDay(perfectDay, {}).goals.find((g) => g.key === 'gmi')!;
+	assert.equal(gmi.target, undefined);
+	assert.equal(gmi.balance, undefined);
+}
 
 console.log('score.check.ts OK');
