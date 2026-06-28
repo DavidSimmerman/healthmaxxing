@@ -94,8 +94,8 @@
 				value={data.goalScore}
 				target={100}
 				label="Goal"
-				centerText={grade(data.goalScore)}
-				centerSub={data.goalScore == null ? undefined : String(Math.round(data.goalScore))}
+				centerText={data.goalScore == null ? undefined : String(Math.round(data.goalScore))}
+				centerSub={data.goalScore == null ? undefined : grade(data.goalScore)}
 				href="/goals"
 				ariaLabel="Goal score — open goals"
 				color={goalColor(data.goalScore)}
