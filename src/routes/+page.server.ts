@@ -1,7 +1,7 @@
 import { db } from '$lib/server/db';
-import { dailyLog, foods, quickAdds, settings } from '$lib/server/db/schema';
-import { asc, eq } from 'drizzle-orm';
-import { loggedToday, todayLabel } from '$lib/server/day';
+import { dailyLog, foods, plannedMeals, quickAdds, settings } from '$lib/server/db/schema';
+import { asc, eq, sql } from 'drizzle-orm';
+import { loggedToday, todayLabel, APP_TZ } from '$lib/server/day';
 import { bolusableForLoggedEntry } from '$lib/netCarbs';
 import { getFiberMode } from '$lib/server/prefs';
 import { deficitDays } from '$lib/server/deficit';
@@ -54,6 +54,29 @@ export async function load() {
 		return { ...e, bolusableCarbsG: b.bolusableCarbsG, bolusableLowConfidence: b.lowConfidence };
 	});
 
+	// Meals scheduled for later today (not yet confirmed → not in daily_log). They
+	// fold into the calorie/protein "remaining" so it reads as room left for snacks.
+	const plannedToday = await db
+		.select({
+			id: plannedMeals.id,
+			servings: plannedMeals.servings,
+			amount: plannedMeals.amount,
+			unit: plannedMeals.unit,
+			scheduledAt: plannedMeals.scheduledAt,
+			calories: plannedMeals.calories,
+			proteinG: plannedMeals.proteinG,
+			carbsG: plannedMeals.carbsG,
+			fatG: plannedMeals.fatG,
+			foodName: foods.name,
+			foodServingSize: foods.servingSize
+		})
+		.from(plannedMeals)
+		.innerJoin(foods, eq(plannedMeals.foodId, foods.id))
+		.where(
+			sql`(${plannedMeals.scheduledAt} at time zone 'UTC' at time zone ${APP_TZ})::date = (now() at time zone ${APP_TZ})::date`
+		)
+		.orderBy(asc(plannedMeals.scheduledAt));
+
 	const quickAddItems = await db
 		.select({
 			id: quickAdds.id,
@@ -84,6 +107,7 @@ export async function load() {
 			fatTargetG: 70
 		},
 		todayEntries,
+		plannedMeals: plannedToday,
 		quickAddItems,
 		deficit: todayEnergy?.deficitKcal ?? null,
 		// ponytail: default 500 kcal so the ring isn't dead before a target is set;

@@ -26,7 +26,8 @@
 			const url =
 				typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
 			const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
-			if (res.ok && method !== 'GET' && url.includes('/api/log')) widget.postMessage('reload');
+			if (res.ok && method !== 'GET' && (url.includes('/api/log') || url.includes('/api/planned')))
+				widget.postMessage('reload');
 			return res;
 		};
 	});

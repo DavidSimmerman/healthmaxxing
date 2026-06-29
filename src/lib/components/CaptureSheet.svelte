@@ -69,6 +69,9 @@
 	let logging = $state(false);
 	let deletingId = $state<string | null>(null);
 
+	// Optional "schedule for later" time (HH:MM, local today). Empty = log now.
+	let scheduleAt = $state('');
+
 	// Items staged into the current meal (T1D bolus: log several foods, see the
 	// combined carb + bolusable total, then confirm once). Nothing is written until
 	// confirmMeal(); closing the sheet discards an unconfirmed meal.
@@ -421,6 +424,44 @@
 			reload();
 		} catch {
 			mealError = 'Network error while logging. Tap to retry.';
+		} finally {
+			logging = false;
+		}
+	}
+
+	// Schedule the staged meal for later today instead of logging now — one
+	// planned_meals row per item at the chosen time. Same retry-safe drain as
+	// confirmMeal. The items stay counted against "remaining" until confirmed.
+	async function scheduleMeal() {
+		if (meal.length === 0 || logging || !scheduleAt) return;
+		const [h, m] = scheduleAt.split(':').map(Number);
+		const when = new Date();
+		when.setHours(h, m, 0, 0);
+		const scheduledAt = when.toISOString();
+		logging = true;
+		mealError = null;
+		try {
+			while (meal.length > 0) {
+				const item = meal[0];
+				const res = await fetch('/api/planned', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({
+						foodId: item.foodId,
+						amount: item.amount,
+						unit: item.unit,
+						scheduledAt
+					})
+				});
+				if (!res.ok) {
+					mealError = `Couldn't schedule "${item.name}". ${meal.length} item(s) left — tap to retry.`;
+					return;
+				}
+				meal.shift();
+			}
+			reload();
+		} catch {
+			mealError = 'Network error while scheduling. Tap to retry.';
 		} finally {
 			logging = false;
 		}
@@ -944,6 +985,24 @@
 				>
 					{logging ? 'Logging…' : `Log ${meal.length} item${meal.length === 1 ? '' : 's'} to today`}
 				</button>
+
+				<!-- Or schedule it for later today; it counts against remaining until confirmed. -->
+				<div class="mt-2 flex items-center gap-2 rounded-2xl border p-2" style="border-color: var(--color-border);">
+					<input
+						type="time"
+						bind:value={scheduleAt}
+						class="rounded-xl bg-white/10 px-3 py-2 text-sm text-white"
+						aria-label="Schedule time"
+					/>
+					<button
+						class="flex-1 rounded-xl py-2 text-sm font-semibold text-white transition hover:bg-white/10 disabled:opacity-40"
+						style="border: 1px solid var(--color-border);"
+						disabled={logging || meal.length === 0 || !scheduleAt}
+						onclick={scheduleMeal}
+					>
+						Schedule for later
+					</button>
+				</div>
 			</div>
 		{:else if mode === 'barcode'}
 			<div class="p-5" style="padding-bottom: calc(1.25rem + env(safe-area-inset-bottom));">

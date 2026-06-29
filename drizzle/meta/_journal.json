@@ -134,6 +134,13 @@
       "when": 1782597443567,
       "tag": "0018_deficit_target",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1782755196290,
+      "tag": "0019_square_loners",
+      "breakpoints": true
     }
   ]
 }

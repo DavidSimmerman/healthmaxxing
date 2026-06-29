@@ -20,9 +20,53 @@
 
 	let { data } = $props();
 
-	let totals = $derived(sumMacros(data.todayEntries));
+	// Planned (scheduled-but-unconfirmed) meals fold into the totals so the calorie
+	// ring / protein bar "remaining" reads as what's left for snacks after dinner.
+	let totals = $derived(sumMacros([...data.todayEntries, ...data.plannedMeals]));
 	let goalPct = $derived(pct(totals.calories, data.settings.calorieTarget));
 	let editingEntry = $state<(typeof data.todayEntries)[number] | null>(null);
+
+	// Default a new schedule to the next round hour (HH:00, local) so the time field
+	// starts somewhere sensible for a "dinner later" plan.
+	function defaultTime(): string {
+		const d = new Date();
+		d.setHours(d.getHours() + 1, 0, 0, 0);
+		return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+	}
+	// "HH:MM" (local, today) → ISO instant for the API.
+	function timeToISO(hhmm: string): string {
+		const [h, m] = hhmm.split(':').map(Number);
+		const d = new Date();
+		d.setHours(h, m, 0, 0);
+		return d.toISOString();
+	}
+
+	// Quick-add scheduling: tapping a tile's clock opens one shared time row.
+	let schedulingQuick = $state<{ foodId: string; name: string } | null>(null);
+	let quickTime = $state('');
+	async function scheduleQuick() {
+		if (!schedulingQuick) return;
+		await fetch('/api/planned', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				foodId: schedulingQuick.foodId,
+				servings: 1,
+				scheduledAt: timeToISO(quickTime)
+			})
+		});
+		schedulingQuick = null;
+		location.reload();
+	}
+
+	async function confirmPlanned(id: string) {
+		await fetch(`/api/planned/${id}`, { method: 'POST' });
+		location.reload();
+	}
+	async function removePlanned(id: string) {
+		await fetch(`/api/planned/${id}`, { method: 'DELETE' });
+		location.reload();
+	}
 
 	// Whether the calorie ring and protein bar lead with what's left vs. consumed.
 	// Shared across both so a tap on either keeps them consistent; persisted locally.
@@ -142,24 +186,89 @@
 		</h3>
 		<div class="no-scrollbar flex gap-2 overflow-x-auto pb-1">
 			{#each data.quickAddItems as q (q.id)}
-				<button
-					class="card-sm shrink-0 px-4 py-3 text-left transition hover:bg-white/10 active:scale-95"
-					onclick={async () => {
-						await fetch('/api/log', {
-							method: 'POST',
-							headers: { 'Content-Type': 'application/json' },
-							body: JSON.stringify({ foodId: q.foodId, servings: 1 })
-						});
-						location.reload();
-					}}
-				>
-					<div class="text-sm font-semibold text-white">{q.name}</div>
-					<div class="text-xs" style="color: var(--color-text-subtle);">
-						{Math.round(q.calories)} · {Math.round(q.proteinG)}p
-					</div>
-				</button>
+				<div class="card-sm relative shrink-0 transition hover:bg-white/10">
+					<button
+						class="px-4 py-3 pr-9 text-left active:scale-95"
+						onclick={async () => {
+							await fetch('/api/log', {
+								method: 'POST',
+								headers: { 'Content-Type': 'application/json' },
+								body: JSON.stringify({ foodId: q.foodId, servings: 1 })
+							});
+							location.reload();
+						}}
+					>
+						<div class="text-sm font-semibold text-white">{q.name}</div>
+						<div class="text-xs" style="color: var(--color-text-subtle);">
+							{Math.round(q.calories)} · {Math.round(q.proteinG)}p
+						</div>
+					</button>
+					<button
+						class="absolute top-1.5 right-1.5 flex h-6 w-6 items-center justify-center rounded-md text-white/60 transition hover:bg-white/10 hover:text-white"
+						aria-label="Schedule {q.name} for later"
+						onclick={() => {
+							quickTime = defaultTime();
+							schedulingQuick = { foodId: q.foodId, name: q.name };
+						}}
+					>
+						<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
+					</button>
+				</div>
 			{/each}
 		</div>
+		{#if schedulingQuick}
+			<div class="card-sm mt-2 flex items-center gap-2 p-3">
+				<span class="flex-1 truncate text-sm text-white">Schedule <b>{schedulingQuick.name}</b></span>
+				<input
+					type="time"
+					bind:value={quickTime}
+					class="rounded-md bg-white/10 px-2 py-1 text-sm text-white"
+					aria-label="Scheduled time"
+				/>
+				<button class="rounded-md bg-white/10 px-3 py-1 text-sm font-semibold text-white hover:bg-white/20" onclick={scheduleQuick}>Schedule</button>
+				<button class="px-2 py-1 text-sm text-white/60 hover:text-white" onclick={() => (schedulingQuick = null)} aria-label="Cancel">✕</button>
+			</div>
+		{/if}
+	{/if}
+
+	{#if data.plannedMeals.length > 0}
+		<h3
+			class="mt-6 mb-3 text-xs font-semibold tracking-wider uppercase"
+			style="color: var(--color-text-subtle);"
+		>
+			Planned later
+		</h3>
+		<div class="card divide-y" style="border-color: var(--color-border);">
+			{#each data.plannedMeals as p (p.id)}
+				<div class="flex items-center gap-3 p-4">
+					<div class="min-w-0 flex-1">
+						<div class="truncate font-medium text-white">{p.foodName}</div>
+						<div class="text-xs" style="color: var(--color-text-subtle);">
+							{formatTime(new Date(p.scheduledAt))} · {Math.round(p.calories)} kcal · {Math.round(
+								p.proteinG
+							)}p
+						</div>
+					</div>
+					<button
+						class="rounded-lg px-3 py-1.5 text-sm font-semibold text-white transition hover:brightness-125"
+						style="background: rgba(74,222,128,0.18); color: #4ade80;"
+						onclick={() => confirmPlanned(p.id)}
+					>
+						Confirm
+					</button>
+					<button
+						class="rounded-lg px-2.5 py-1.5 text-sm text-white/60 transition hover:text-white"
+						aria-label="Remove planned {p.foodName}"
+						onclick={() => removePlanned(p.id)}
+					>
+						✕
+					</button>
+				</div>
+			{/each}
+		</div>
+		<p class="mt-2 text-center text-xs" style="color: var(--color-text-subtle);">
+			Planned meals count against your remaining — confirm to log at the set time.
+		</p>
 	{/if}
 
 	<h3
