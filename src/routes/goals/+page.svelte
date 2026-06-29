@@ -1,9 +1,24 @@
 <script lang="ts">
+	import { invalidateAll } from '$app/navigation';
 	import { pullToRefresh } from '$lib/actions/pullToRefresh';
 	import ScoreRing from '$lib/components/ScoreRing.svelte';
 	import GoalRow from '$lib/components/GoalRow.svelte';
 
 	let { data } = $props();
+
+	// Pull-to-refresh re-pulls every external source the goals draw from — Fitbit
+	// (sleep + steps), Dexcom & Tandem (glucose) — then reloads. Deficit/protein/water
+	// are logged in-app, so there's nothing to re-fetch for them. Per-source failures
+	// are non-fatal (an unconfigured source 503s): we still reload with whatever synced.
+	// ponytail: swallow per-source errors — best-effort refresh, not a data-loss path.
+	async function syncThenReload() {
+		await Promise.allSettled(
+			['fitbit', 'dexcom', 'tandem'].map((s) =>
+				fetch(`/api/integrations/${s}/sync`, { method: 'POST' })
+			)
+		);
+		await invalidateAll();
+	}
 	const view = $derived(data.view);
 	const day = $derived(view.day);
 
@@ -45,7 +60,7 @@
 <main
 	class="mx-auto max-w-md p-6 pb-12"
 	style="padding-bottom: calc(3rem + env(safe-area-inset-bottom));"
-	use:pullToRefresh
+	use:pullToRefresh={{ onRefresh: syncThenReload }}
 >
 	<!-- Header -->
 	<header class="mb-5 flex items-center gap-3">

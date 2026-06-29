@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { GoalResult } from '$lib/score';
+	import { fmtHM, type GoalResult } from '$lib/score';
 
 	let { goal }: { goal: GoalResult } = $props();
 
@@ -40,15 +40,33 @@
 	const zoneLeftPct = $derived(((bank > 0 ? T - bank : T) / barMax) * 100);
 	const zoneColor = $derived(bank > 0 ? 'rgba(245,196,75,0.45)' : 'rgba(248,113,113,0.45)');
 
-	const showBadge = $derived(bankable && Math.round(Math.abs(bal)) >= 1);
-	const badgeColor = $derived(bank > 0 ? '#f5c44b' : '#f87171');
-	const badgeText = $derived(`${bank > 0 ? '+' : '−'}${Math.round(Math.abs(bal))}`);
+	// The badge number is LIVE: prior carry-over plus today's surplus/shortfall vs the
+	// daily target. So going over target grows the bank / pays down debt, and a deficit
+	// that drops later in the day undoes it — recomputed every load. The bar geometry
+	// above stays on the prior carry-over (the day's challenge), which keeps the red
+	// debt zone the full amount owed with the value bar eating into it.
+	const liveBal = $derived(goal.value != null ? bal + (goal.value - T) : bal);
+	const liveBank = $derived(liveBal > 0 ? liveBal : 0);
+	const liveDebt = $derived(liveBal < 0 ? -liveBal : 0);
+
+	// Bank/debt amounts: sleep as "Xh Ym", everything else as a plain int — or "X.Xk"
+	// once it's ≥ 1000 (e.g. 2800 steps → "2.8k").
+	const fmtAmt = (amt: number) =>
+		goal.key === 'sleep'
+			? fmtHM(amt)
+			: amt >= 1000
+				? `${(amt / 1000).toFixed(1)}k`
+				: `${Math.round(amt)}`;
+
+	const showBadge = $derived(bankable && Math.round(Math.abs(liveBal)) >= 1);
+	const badgeColor = $derived(liveBal > 0 ? '#f5c44b' : '#f87171');
+	const badgeText = $derived(`${liveBal > 0 ? '+' : '−'}${fmtAmt(Math.abs(liveBal))}`);
 
 	const pctLabel = $derived(
 		!hasData
 			? 'no data'
 			: showBadge
-				? `${goal.display}, ${bank > 0 ? `${Math.round(bank)} banked` : `${Math.round(debt)} debt`}`
+				? `${goal.display}, ${liveBank > 0 ? `${fmtAmt(liveBank)} banked` : `${fmtAmt(liveDebt)} debt`}`
 				: `${Math.round(fill * 100)}% of target`
 	);
 </script>

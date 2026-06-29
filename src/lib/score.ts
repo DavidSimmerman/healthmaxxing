@@ -46,6 +46,15 @@ export type GoalSpec = {
 	fmt?: (v: number) => string;
 };
 
+// Minutes → "7h 28m" (drops to "28m" under an hour, "7h" on the hour). Shared by
+// the sleep goal's display and the bank/debt badge so both read the same way.
+export function fmtHM(min: number): string {
+	const m = Math.round(min);
+	const h = Math.floor(m / 60);
+	const r = m % 60;
+	return h ? (r ? `${h}h ${r}m` : `${h}h`) : `${r}m`;
+}
+
 // Canonical units: gmi %, tir %, over250/below %, steps count, sleep MINUTES,
 // deficit kcal, protein g, water OUNCES, strength count, running MILES.
 export const GOAL_SPECS: GoalSpec[] = [
@@ -109,7 +118,7 @@ export const GOAL_SPECS: GoalSpec[] = [
 		target: 420,
 		floor: 0,
 		scope: 'day',
-		fmt: (v) => `${(v / 60).toFixed(1)} h`
+		fmt: (v) => fmtHM(v)
 	},
 	{
 		key: 'deficit',
