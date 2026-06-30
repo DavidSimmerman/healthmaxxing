@@ -188,7 +188,15 @@ async function periodSummary(from: string, to: string, periodDays: number): Prom
 	const extraTo = to < today ? to : today;
 	const extras =
 		extraTo >= from ? await periodExtras(from, extraTo) : { strengthCount: 0, runningMiles: 0 };
-	const ps = scorePeriod(completed, { ...extras, days: periodDays });
+	// Prorate the weekly strength/running targets to the days ELAPSED so far (not the
+	// full period), so mid-week the score reflects the pace you're on: 1 workout by
+	// Tuesday scores against ~2 expected by Tuesday, not 5 for the whole week. A
+	// finished period elapses fully → unchanged; a fully-future one keeps the full target.
+	const elapsedDays =
+		extraTo >= from
+			? Math.min(periodDays, Math.round((Date.parse(extraTo) - Date.parse(from)) / 86_400_000) + 1)
+			: periodDays;
+	const ps = scorePeriod(completed, { ...extras, days: elapsedDays });
 	return {
 		from,
 		to,

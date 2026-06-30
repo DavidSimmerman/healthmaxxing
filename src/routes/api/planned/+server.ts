@@ -1,13 +1,14 @@
 import { json, error } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
-import { foods, plannedMeals } from '$lib/server/db/schema';
+import { foods, dailyLog } from '$lib/server/db/schema';
 import { eq } from 'drizzle-orm';
 import { toServings, type Unit } from '$lib/units';
 import { todayLabel, APP_TZ } from '$lib/server/day';
 
 // Schedule a meal for later today. Same food/serving resolution as POST /api/log,
-// plus a `scheduledAt` (ISO) the meal is planned for — it lands in planned_meals,
-// NOT daily_log, so it never counts as eaten until confirmed.
+// but the row lands in daily_log with pending=true and loggedAt = scheduledAt — so
+// it already counts toward deficit / goals / macros. Confirming it later clears
+// pending (and stamps the real eaten time); cancelling deletes the row.
 export async function POST({ request }) {
 	const body = await request.json();
 	const { foodId, amount, unit, scheduledAt } = body as {
@@ -51,13 +52,14 @@ export async function POST({ request }) {
 	}
 
 	const [entry] = await db
-		.insert(plannedMeals)
+		.insert(dailyLog)
 		.values({
 			foodId,
 			servings,
 			amount: storedAmount,
 			unit: storedUnit,
-			scheduledAt: when,
+			loggedAt: when,
+			pending: true,
 			calories: food.calories * servings,
 			proteinG: food.proteinG * servings,
 			carbsG: food.carbsG * servings,

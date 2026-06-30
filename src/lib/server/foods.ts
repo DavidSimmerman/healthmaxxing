@@ -249,7 +249,19 @@ export type CreateAndLogInput = PrepFoodInput & {
 	amount?: number | null;
 	unit?: Unit | null;
 	date?: string | null; // YYYY-MM-DD to log a missed food to a PAST day (default today)
+	scheduleAt?: string | null; // ISO instant (later today) to SCHEDULE the meal as pending
 };
+
+// An ISO instant to schedule a meal for → a Date, validated to land on today
+// (APP_TZ). Scheduled meals are pending log rows for later *today*, not arbitrary
+// dates. Returns undefined when nothing was passed.
+function parseScheduleAt(at: string | null | undefined): Date | undefined {
+	if (at == null || at === '') return undefined;
+	const d = new Date(at);
+	if (Number.isNaN(d.getTime())) throw new FoodInputError(`scheduleAt must be an ISO datetime (got "${at}").`);
+	if (ymd(d) !== ymd(new Date())) throw new FoodInputError('scheduleAt must be later today.');
+	return d;
+}
 
 // A YYYY-MM-DD date → the UTC instant that buckets to that calendar day in APP_TZ
 // (loggedAt is a UTC wall-clock column reinterpreted as APP_TZ for day-bucketing).
@@ -300,7 +312,10 @@ export async function createAndLogFood(
 			throw new FoodInputError('Could not resolve a positive amount to log.');
 		}
 
-		const loggedAt = parseLogDate(input.date); // undefined → DB default now()
+		// A scheduled meal lands at its planned time as pending; otherwise an optional
+		// backfill date, else the DB default now().
+		const scheduled = parseScheduleAt(input.scheduleAt);
+		const loggedAt = scheduled ?? parseLogDate(input.date);
 		[logEntry] = await db
 			.insert(dailyLog)
 			.values({
@@ -309,6 +324,7 @@ export async function createAndLogFood(
 				amount: hasAmount ? (input.amount as number) : null,
 				unit: hasAmount ? unit : null,
 				...(loggedAt ? { loggedAt } : {}),
+				pending: scheduled != null,
 				calories: food.calories * servings,
 				proteinG: food.proteinG * servings,
 				carbsG: food.carbsG * servings,

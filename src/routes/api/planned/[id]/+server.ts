@@ -1,45 +1,28 @@
 import { json, error } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
-import { foods, plannedMeals, dailyLog } from '$lib/server/db/schema';
-import { eq } from 'drizzle-orm';
+import { dailyLog } from '$lib/server/db/schema';
+import { and, eq } from 'drizzle-orm';
 
-// Remove a scheduled meal.
+// Cancel a scheduled meal — delete the pending row. Guarded to pending rows so this
+// can never remove an already-eaten entry (those go through /api/log/[id]).
 export async function DELETE({ params }) {
-	const [gone] = await db.delete(plannedMeals).where(eq(plannedMeals.id, params.id)).returning();
+	const [gone] = await db
+		.delete(dailyLog)
+		.where(and(eq(dailyLog.id, params.id), eq(dailyLog.pending, true)))
+		.returning();
 	if (!gone) throw error(404, 'planned meal not found');
 	return json({ ok: true });
 }
 
-// Confirm a scheduled meal: write it into daily_log at its scheduled time (so the
-// entry keeps the dinner time, not "now"), then drop the planned row. One transaction
-// so a crash can't both log it and leave the plan. Macros are recomputed from the
-// current food — the single source of truth — matching POST /api/log.
+// Confirm a scheduled meal: clear pending and stamp the time it was actually eaten
+// (now), so the day's metrics already counting it stay put and the entry reads as a
+// normal logged meal.
 export async function POST({ params }) {
-	const [plan] = await db.select().from(plannedMeals).where(eq(plannedMeals.id, params.id));
-	if (!plan) throw error(404, 'planned meal not found');
-
-	const [food] = await db.select().from(foods).where(eq(foods.id, plan.foodId));
-	if (!food) throw error(404, 'food not found');
-
-	const s = plan.servings;
-	const entry = await db.transaction(async (tx) => {
-		const [logged] = await tx
-			.insert(dailyLog)
-			.values({
-				foodId: plan.foodId,
-				servings: s,
-				amount: plan.amount,
-				unit: plan.unit,
-				loggedAt: plan.scheduledAt,
-				calories: food.calories * s,
-				proteinG: food.proteinG * s,
-				carbsG: food.carbsG * s,
-				fatG: food.fatG * s
-			})
-			.returning();
-		await tx.delete(plannedMeals).where(eq(plannedMeals.id, params.id));
-		return logged;
-	});
-
-	return json({ entry, foodName: food.name });
+	const [entry] = await db
+		.update(dailyLog)
+		.set({ pending: false, loggedAt: new Date() })
+		.where(and(eq(dailyLog.id, params.id), eq(dailyLog.pending, true)))
+		.returning();
+	if (!entry) throw error(404, 'planned meal not found');
+	return json({ entry });
 }

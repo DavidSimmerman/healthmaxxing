@@ -1,7 +1,7 @@
 import { buildGoalsView, dayMetricsForRange } from '$lib/server/goals';
 import { todayLabel } from '$lib/server/day';
 import { weekToDate } from '$lib/period';
-import { scoreDay } from '$lib/score';
+import { scoreDay, weekBalances } from '$lib/score';
 import { addDays } from '$lib/energy';
 
 export async function load({ url }) {
@@ -28,11 +28,12 @@ export async function load({ url }) {
 	// render as empty/dimmed.
 	const weekStart = weekToDate(date).from; // Sunday
 	const fetchEnd = addDays(weekStart, 6) > today ? today : addDays(weekStart, 6);
+	// Score each day with its bank/debt balance from the earlier days of the same week
+	// — exactly as the day-detail card does — so a ring in the strip matches the big
+	// number when you select that day (they used to disagree: strip plain, card banked).
+	const weekMetrics = await dayMetricsForRange(weekStart, fetchEnd);
 	const scored = new Map(
-		(await dayMetricsForRange(weekStart, fetchEnd)).map((m) => {
-			const s = scoreDay(m);
-			return [s.date, s.score];
-		})
+		weekMetrics.map((m, i) => [m.date, scoreDay(m, weekBalances(weekMetrics.slice(0, i))).score])
 	);
 	const weekDays = Array.from({ length: 7 }, (_, i) => {
 		const dd = addDays(weekStart, i);

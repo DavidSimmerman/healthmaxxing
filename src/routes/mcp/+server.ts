@@ -20,7 +20,7 @@ import {
 } from '$lib/server/foods';
 import { deficitDays } from '$lib/server/deficit';
 import { fillBmrGaps, bodyInsights } from '$lib/server/projections';
-import { todayLabel } from '$lib/server/day';
+import { todayLabel, APP_TZ } from '$lib/server/day';
 import { addDays } from '$lib/energy';
 import { nutritionReport, logEntries } from '$lib/server/nutrition';
 import { sanitizeNutrients } from '$lib/nutrients';
@@ -108,6 +108,14 @@ const LOG_FOOD_TOOL = {
 				type: 'string',
 				description:
 					'YYYY-MM-DD to log a MISSED food to a past day instead of today. Omit for today.'
+			},
+			scheduleAt: {
+				type: 'string',
+				description:
+					'ISO datetime (later TODAY) to SCHEDULE this meal instead of logging it as eaten now, ' +
+					'e.g. "2026-06-30T18:30:00-04:00". It counts toward the day’s goals/deficit immediately ' +
+					'but shows under "Planned later" for the user to confirm (stamps the real eaten time) or ' +
+					'cancel. Mutually exclusive with `date`.'
 			},
 			servings: { type: 'number', description: 'Servings actually eaten (default 1)' },
 			amount: {
@@ -363,6 +371,14 @@ async function callLogFood(id: Id, args: Record<string, unknown>) {
 		// correction workflow can confirm the entry landed where intended.
 		const day = logEntry ? todayLabel(logEntry.loggedAt) : todayLabel();
 		const dayLabel = day === todayLabel() ? 'today' : day;
+		// A scheduled meal reads "Scheduled for 6:30 PM" instead of "Logged to today".
+		const verb = logEntry?.pending
+			? `Scheduled for ${new Intl.DateTimeFormat('en-US', {
+					timeZone: APP_TZ,
+					hour: 'numeric',
+					minute: '2-digit'
+				}).format(logEntry.loggedAt)}`
+			: `Logged to ${dayLabel}`;
 		const entryBolus = logEntry
 			? bolusableForLoggedEntry(logEntry.carbsG, food, servings, { fiberMode })
 			: null;
@@ -372,7 +388,7 @@ async function callLogFood(id: Id, args: Record<string, unknown>) {
 		const lines = [
 			`Saved "${food.name}"${food.brand ? ` (${food.brand})` : ''}.`,
 			logEntry
-				? `Logged to ${dayLabel}${servings !== 1 ? ` ×${servings}` : ''}: ${Math.round(
+				? `${verb}${servings !== 1 ? ` ×${servings}` : ''}: ${Math.round(
 						logEntry.calories
 					)} kcal, ${round1(logEntry.proteinG)}g protein, ${carbsBit(
 						logEntry.carbsG,

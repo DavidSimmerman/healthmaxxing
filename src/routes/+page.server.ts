@@ -1,12 +1,14 @@
 import { db } from '$lib/server/db';
-import { dailyLog, foods, plannedMeals, quickAdds, settings } from '$lib/server/db/schema';
-import { asc, eq, sql } from 'drizzle-orm';
-import { loggedToday, todayLabel, APP_TZ } from '$lib/server/day';
+import { dailyLog, foods, quickAdds, settings } from '$lib/server/db/schema';
+import { and, asc, eq } from 'drizzle-orm';
+import { loggedToday, todayLabel } from '$lib/server/day';
 import { bolusableForLoggedEntry } from '$lib/netCarbs';
 import { getFiberMode } from '$lib/server/prefs';
 import { deficitDays } from '$lib/server/deficit';
 import { dayMetricsForRange } from '$lib/server/goals';
-import { scoreDay } from '$lib/score';
+import { scoreDay, weekBalances } from '$lib/score';
+import { weekToDate } from '$lib/period';
+import { addDays } from '$lib/energy';
 
 export async function load() {
 	const [settingsRow] = await db.select().from(settings).where(eq(settings.id, 1));
@@ -37,7 +39,7 @@ export async function load() {
 		})
 		.from(dailyLog)
 		.innerJoin(foods, eq(dailyLog.foodId, foods.id))
-		.where(loggedToday())
+		.where(and(loggedToday(), eq(dailyLog.pending, false)))
 		.orderBy(asc(dailyLog.loggedAt));
 
 	const todayEntries = rawEntries.map((e) => {
@@ -54,28 +56,27 @@ export async function load() {
 		return { ...e, bolusableCarbsG: b.bolusableCarbsG, bolusableLowConfidence: b.lowConfidence };
 	});
 
-	// Meals scheduled for later today (not yet confirmed → not in daily_log). They
-	// fold into the calorie/protein "remaining" so it reads as room left for snacks.
+	// Meals scheduled for later today: pending daily_log rows. They already count
+	// toward the day's metrics; here they're surfaced separately so the eaten list
+	// stays clean and each can be confirmed (stamp the real time) or cancelled.
 	const plannedToday = await db
 		.select({
-			id: plannedMeals.id,
-			servings: plannedMeals.servings,
-			amount: plannedMeals.amount,
-			unit: plannedMeals.unit,
-			scheduledAt: plannedMeals.scheduledAt,
-			calories: plannedMeals.calories,
-			proteinG: plannedMeals.proteinG,
-			carbsG: plannedMeals.carbsG,
-			fatG: plannedMeals.fatG,
+			id: dailyLog.id,
+			servings: dailyLog.servings,
+			amount: dailyLog.amount,
+			unit: dailyLog.unit,
+			scheduledAt: dailyLog.loggedAt,
+			calories: dailyLog.calories,
+			proteinG: dailyLog.proteinG,
+			carbsG: dailyLog.carbsG,
+			fatG: dailyLog.fatG,
 			foodName: foods.name,
 			foodServingSize: foods.servingSize
 		})
-		.from(plannedMeals)
-		.innerJoin(foods, eq(plannedMeals.foodId, foods.id))
-		.where(
-			sql`(${plannedMeals.scheduledAt} at time zone 'UTC' at time zone ${APP_TZ})::date = (now() at time zone ${APP_TZ})::date`
-		)
-		.orderBy(asc(plannedMeals.scheduledAt));
+		.from(dailyLog)
+		.innerJoin(foods, eq(dailyLog.foodId, foods.id))
+		.where(and(loggedToday(), eq(dailyLog.pending, true)))
+		.orderBy(asc(dailyLog.loggedAt));
 
 	const quickAddItems = await db
 		.select({
@@ -93,11 +94,15 @@ export async function load() {
 	// and today's goal score, for the two side rings on the home page. Both may be
 	// null when the inputs aren't there yet; the rings render a dash, not a zero.
 	const today = todayLabel();
-	const [[todayEnergy], dayMetrics] = await Promise.all([
+	const weekStart = weekToDate(today).from;
+	const [[todayEnergy], dayMetrics, priorDays] = await Promise.all([
 		deficitDays(today, today),
-		dayMetricsForRange(today, today)
+		dayMetricsForRange(today, today),
+		// Earlier days of this week, for today's bank/debt — so the home ring matches
+		// the goals page's day-detail score (both bank-adjusted) instead of trailing it.
+		today > weekStart ? dayMetricsForRange(weekStart, addDays(today, -1)) : Promise.resolve([])
 	]);
-	const goalScore = dayMetrics[0] ? scoreDay(dayMetrics[0]).score : null;
+	const goalScore = dayMetrics[0] ? scoreDay(dayMetrics[0], weekBalances(priorDays)).score : null;
 
 	return {
 		settings: settingsRow ?? {

@@ -104,6 +104,12 @@ export const dailyLog = pgTable(
 		unit: text('unit'), // 'serving' | 'gram' | 'cup' | 'tbsp' | 'tsp'
 		loggedAt: timestamp('logged_at').notNull().defaultNow(),
 
+		// A meal scheduled for later is just a log row with pending=true and loggedAt
+		// set to the planned time — so it counts toward deficit / goals / macros like
+		// any entry. The UI surfaces pending rows under "Planned later" with confirm
+		// (clears pending, stamps the actual eaten time) or cancel (deletes the row).
+		pending: boolean('pending').notNull().default(false),
+
 		// Cached macros (so historical entries don't change if the food's macros are edited later)
 		calories: real('calories').notNull(),
 		proteinG: real('protein_g').notNull(),
@@ -111,30 +117,6 @@ export const dailyLog = pgTable(
 		fatG: real('fat_g').notNull()
 	},
 	(t) => [index('daily_log_logged_at_idx').on(t.loggedAt)]
-);
-
-// A meal scheduled for later today: same shape as a daily_log row plus the time
-// it's planned for. Kept OUT of daily_log so it never counts toward deficit / goals
-// / glucose until confirmed — on confirm it's materialised into daily_log with
-// logged_at = scheduledAt, then deleted. Removing one just deletes the row.
-export const plannedMeals = pgTable(
-	'planned_meals',
-	{
-		id: uuid('id').primaryKey().defaultRandom(),
-		foodId: uuid('food_id')
-			.notNull()
-			.references(() => foods.id),
-		servings: real('servings').notNull().default(1),
-		amount: real('amount'),
-		unit: text('unit'),
-		scheduledAt: timestamp('scheduled_at').notNull(),
-		// Cached macros at schedule time (display only; confirm recomputes from the food).
-		calories: real('calories').notNull(),
-		proteinG: real('protein_g').notNull(),
-		carbsG: real('carbs_g').notNull(),
-		fatG: real('fat_g').notNull()
-	},
-	(t) => [index('planned_meals_scheduled_at_idx').on(t.scheduledAt)]
 );
 
 // Foods you want surfaced as quick-add tiles on the today view.

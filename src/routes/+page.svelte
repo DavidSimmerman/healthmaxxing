@@ -267,7 +267,7 @@
 			{/each}
 		</div>
 		<p class="mt-2 text-center text-xs" style="color: var(--color-text-subtle);">
-			Planned meals count against your remaining — confirm to log at the set time.
+			Planned meals already count toward your day — confirm when you eat (stamps the time) or remove.
 		</p>
 	{/if}
 

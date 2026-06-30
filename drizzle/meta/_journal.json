@@ -141,6 +141,13 @@
       "when": 1782755196290,
       "tag": "0019_square_loners",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1782851365641,
+      "tag": "0020_simple_mandarin",
+      "breakpoints": true
     }
   ]
 }
