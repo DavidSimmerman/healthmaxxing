@@ -259,7 +259,9 @@ function parseScheduleAt(at: string | null | undefined): Date | undefined {
 	if (at == null || at === '') return undefined;
 	const d = new Date(at);
 	if (Number.isNaN(d.getTime())) throw new FoodInputError(`scheduleAt must be an ISO datetime (got "${at}").`);
-	if (ymd(d) !== ymd(new Date())) throw new FoodInputError('scheduleAt must be later today.');
+	const now = new Date();
+	if (ymd(d) !== ymd(now)) throw new FoodInputError('scheduleAt must be later today.');
+	if (d <= now) throw new FoodInputError('scheduleAt must be in the future (a time later today).');
 	return d;
 }
 
@@ -313,7 +315,10 @@ export async function createAndLogFood(
 		}
 
 		// A scheduled meal lands at its planned time as pending; otherwise an optional
-		// backfill date, else the DB default now().
+		// backfill date, else the DB default now(). scheduleAt (future) and date (past)
+		// are opposite intents — reject both at once rather than silently picking one.
+		if (input.scheduleAt && input.date)
+			throw new FoodInputError('Pass either scheduleAt or date, not both.');
 		const scheduled = parseScheduleAt(input.scheduleAt);
 		const loggedAt = scheduled ?? parseLogDate(input.date);
 		[logEntry] = await db
