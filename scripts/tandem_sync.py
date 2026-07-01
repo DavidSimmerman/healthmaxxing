@@ -29,6 +29,7 @@ if os.environ.get('TIMEZONE_NAME'):
 
 from tconnectsync.api import TConnectApi  # noqa: E402
 from tconnectsync.eventparser import events as ev  # noqa: E402
+from tconnectsync.eventparser.generic import Events  # noqa: E402
 from tconnectsync.sync.tandemsource.helpers import (  # noqa: E402
     insulin_float_round,
     insulin_milliunits_to_real,
@@ -53,10 +54,12 @@ def die(msg):
 
 
 def pick_device(pumps):
-    """Most recently active pump on the account (matches tconnectsync default)."""
+    """Most recently active pump on the account (matches tconnectsync default).
+
+    BFF pumps that never uploaded omit maxDateOfEvents, so sort None-safe."""
     if not pumps:
         die('No pumps found on this Tandem account.')
-    return max(pumps, key=lambda p: p['maxDateWithEvents'])
+    return max(pumps, key=lambda p: p.get('maxDateOfEvents') or '')
 
 
 def build_trace(events):
@@ -73,8 +76,8 @@ def build_trace(events):
         if isinstance(e, CGM_CLASSES):
             # Only real numeric readings (status 0 = Precise Value); skip
             # Special High/Low/Do-Not-Show sentinels.
-            v = e.currentglucosedisplayvalue
-            if e.glucosevaluestatusRaw == 0 and 10 <= v <= 600:
+            v = e.currentGlucoseDisplayValue
+            if e.glucoseValueStatusRaw == 0 and v is not None and 10 <= v <= 600:
                 ts = e.eventTimestamp
                 out.append({
                     'at': ts.to('UTC').isoformat(),
@@ -91,24 +94,25 @@ def build_trace(events):
                 'units': insulin_milliunits_to_real(e.commandedRate),  # U/hr
             })
         elif isinstance(e, ev.LidBolusRequestedMsg1):
-            requests[e.bolusid] = e
+            requests[e.bolusId] = e
         elif isinstance(e, ev.LidBolusCompleted):
             completed.append(e)
 
     for c in completed:
-        req = requests.get(c.bolusid)
+        req = requests.get(c.bolusId)
         ts = c.eventTimestamp
         bolus_type = carbs = bg = None
         if req is not None:
-            bolus_type = BOLUS_TYPE.get(str(req.bolustypeRaw))
-            carbs = req.carbamount if req.carbamount > 0 else None
-            bg = req.BG if req.BG > 0 else None
+            # BFF JSON may omit a property (-> None); guard before comparing.
+            bolus_type = BOLUS_TYPE.get(str(req.bolusTypeRaw))
+            carbs = req.carbAmount if req.carbAmount else None
+            bg = req.bg if req.bg else None
         out.append({
             'at': ts.to('UTC').isoformat(),
             'date': ts.format('YYYY-MM-DD'),
             'kind': 'bolus',
-            'units': insulin_float_round(c.insulindelivered),
-            'requested': insulin_float_round(c.insulinrequested),
+            'units': insulin_float_round(c.insulinDelivered),
+            'requested': insulin_float_round(c.insulinRequested),
             'bolusType': bolus_type,
             'carbs': carbs,
             'bg': bg,
@@ -117,20 +121,44 @@ def build_trace(events):
 
 
 def selftest():
-    """Feed real fixture bytes (from tconnectsync's own tests) through build_trace."""
-    from tconnectsync.eventparser.generic import Event
-    os.environ['TZ'] = 'America/New_York'  # fixture timestamps are -05:00
-    # LidBasalDelivery id=279 @ 2025-11-18 13:12:40-05:00, commandedRate=800 mU → 0.8 U/hr
-    BASAL = b'\x01\x17!\xa2\xeeH\x00\x01\x86\xa1\x00\x00\x00\x03\x03 \x03 \x00\x00\x03 \x00\x00\x00\x00'
-    trace = build_trace([Event(bytearray(BASAL))])
-    assert len(trace) == 1, trace
-    b = trace[0]
-    assert b['kind'] == 'basal', b
-    assert b['units'] == 0.8, b['units']
-    assert b['date'] == '2025-11-18', b['date']
-    assert b['at'] == '2025-11-18T18:12:40+00:00', b['at']  # 13:12:40-05:00 → UTC
-    # boluses with no completion row produce no output
-    assert build_trace([]) == []
+    """Feed pump-logs JSON events (the Tandem Source BFF shape) through
+    build_trace — the same path production now takes. Covers basal, the
+    bolus request→completion join, and a CGM reading."""
+    os.environ['TZ'] = 'America/New_York'  # naive pump times are local (-05:00)
+
+    def ev_json(code, seq, props):
+        return {'eventCode': code, 'sequenceNumber': seq, 'sequenceGroup': 0,
+                'pumpDateTime': '2025-11-18T13:12:40', 'eventProperties': props}
+
+    fixtures = [
+        ev_json(279, 1, {'commandedrate': 800}),                       # basal 0.8 U/hr
+        ev_json(64, 2, {'bolusid': 7, 'bolustype': 0,                  # request: carbs/BG/type
+                        'carbamount': 30, 'bg': 120}),
+        ev_json(20, 3, {'bolusid': 7, 'insulindelivered': 2.5,         # completion
+                        'insulinrequested': 2.5}),
+        ev_json(399, 4, {'currentglucosedisplayvalue': 105,            # CGM (G7)
+                         'glucosevaluestatus': 0}),
+    ]
+    trace = build_trace(Events(fixtures))
+    by = {e['kind']: e for e in trace}
+    assert set(by) == {'basal', 'bolus', 'cgm'}, [e['kind'] for e in trace]
+
+    assert by['basal']['units'] == 0.8, by['basal']
+    # all events share the fixture timestamp: 13:12:40-05:00 → 18:12:40 UTC
+    assert by['basal']['at'] == '2025-11-18T18:12:40+00:00', by['basal']['at']
+    assert by['basal']['date'] == '2025-11-18', by['basal']['date']
+
+    b = by['bolus']
+    assert b['units'] == 2.5 and b['requested'] == 2.5, b
+    assert b['bolusType'] == 'Insulin' and b['carbs'] == 30 and b['bg'] == 120, b
+
+    assert by['cgm']['mgdl'] == 105, by['cgm']
+
+    # a completion with no matching request still emits, with null carb/BG/type
+    lone = build_trace(Events([ev_json(20, 5, {'bolusid': 9, 'insulindelivered': 1.0,
+                                               'insulinrequested': 1.0})]))
+    assert len(lone) == 1 and lone[0]['carbs'] is None and lone[0]['bolusType'] is None, lone
+    assert build_trace(Events([])) == []
     print('selftest ok')
 
 
@@ -144,16 +172,18 @@ def main():
         die('Missing TANDEM_EMAIL/PASSWORD/START/END.')
 
     tconnect = TConnectApi(email, password, region=region)
-    device = pick_device(tconnect.tandemsource.pump_event_metadata())
+    # Tandem retired the reportsfacade endpoints; 3.x uses the BFF API. Device
+    # list is get_pumper().pumps; the log path key is assignmentId (UUID).
+    device = pick_device(tconnect.tandemsource.get_pumper().get('pumps'))
 
-    events = tconnect.tandemsource.pump_events(device['tconnectDeviceId'], start, end)
+    events = tconnect.tandemsource.pump_events(device['assignmentId'], start, end)
     out = build_trace(events)
 
     json.dump({
         'device': {
             'serialNumber': device.get('serialNumber'),
             'modelNumber': device.get('modelNumber'),
-            'lastUpload': device.get('lastUpload'),
+            'lastUpload': device.get('lastUploadDate'),
         },
         'range': {'start': start, 'end': end},
         'events': out,

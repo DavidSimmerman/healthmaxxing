@@ -7,5 +7,5 @@
 #   python3 -m venv ~/.venvs/tandem
 #   ~/.venvs/tandem/bin/pip install -r scripts/requirements-tandem.txt
 # Point the app at it with TANDEM_PYTHON=~/.venvs/tandem/bin/python
-tconnectsync==2.3.4
+tconnectsync==3.0.0
 setuptools<81  # tconnectsync imports pkg_resources, removed from setuptools 81+
