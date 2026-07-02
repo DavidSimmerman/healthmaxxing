@@ -1,9 +1,10 @@
 import { db } from '$lib/server/db';
-import { settings, quickAdds, foods, dexcomAuth } from '$lib/server/db/schema';
+import { settings, quickAdds, foods, dexcomAuth, fitbitAuth } from '$lib/server/db/schema';
 import { asc, eq } from 'drizzle-orm';
 import { fail } from '@sveltejs/kit';
 import { authEnabled } from '$lib/server/session';
 import { dexcomEnabled } from '$lib/server/dexcom';
+import { googleHealthEnabled } from '$lib/server/fitbit';
 import { tandemEnabled, tandemConnected, connectAndVerify } from '$lib/server/tandem';
 
 export async function load() {
@@ -13,6 +14,11 @@ export async function load() {
 		.select({ id: dexcomAuth.id })
 		.from(dexcomAuth)
 		.where(eq(dexcomAuth.id, 1));
+
+	const [fitbitRow] = await db
+		.select({ id: fitbitAuth.id })
+		.from(fitbitAuth)
+		.where(eq(fitbitAuth.id, 1));
 
 	const quickAddItems = await db
 		.select({
@@ -41,6 +47,8 @@ export async function load() {
 		authEnabled: authEnabled(),
 		dexcomConfigured: dexcomEnabled(),
 		dexcomConnected: !!dexcomRow,
+		fitbitConfigured: googleHealthEnabled(),
+		fitbitConnected: !!fitbitRow,
 		tandemConfigured: tandemEnabled(),
 		tandemConnected: await tandemConnected()
 	};

@@ -496,7 +496,7 @@
 		{/if}
 	</section>
 
-	{#if data.dexcomConfigured || data.tandemConfigured}
+	{#if data.dexcomConfigured || data.fitbitConfigured || data.tandemConfigured}
 		<section class="mt-6">
 			<h2 class="mb-3 text-sm font-semibold tracking-wide text-white uppercase">Integrations</h2>
 			{#if data.dexcomConfigured}
@@ -520,6 +520,32 @@
 						style="background: #fb923c;"
 					>
 						{data.dexcomConnected ? 'Reconnect' : 'Connect'}
+					</a>
+				</article>
+			{/if}
+
+			{#if data.fitbitConfigured}
+				<article class="card-sm mt-3 flex items-center gap-3 p-4">
+					<div class="min-w-0 flex-1">
+						<p class="flex items-center gap-2 text-sm font-medium text-white">
+							Fitbit
+							{#if data.fitbitConnected}
+								<span class="text-xs font-normal text-emerald-400">● Connected</span>
+							{/if}
+						</p>
+						<p class="mt-0.5 text-xs leading-relaxed" style="color: var(--color-text-subtle);">
+							Syncs steps, sleep and resting heart rate via the Google Health API. Reconnect
+							if the token expires or is revoked.
+						</p>
+					</div>
+					<!-- Full-page redirect to Google's consent screen (offline + prompt=consent
+					     mints a fresh refresh token; being logged in is the owner check). -->
+					<a
+						href="/api/integrations/fitbit/authorize"
+						class="shrink-0 rounded-lg px-4 py-2 text-sm font-semibold text-black transition hover:brightness-110"
+						style="background: #fb923c;"
+					>
+						{data.fitbitConnected ? 'Reconnect' : 'Connect'}
 					</a>
 				</article>
 			{/if}
