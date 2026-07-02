@@ -538,10 +538,16 @@
 							if the token expires or is revoked.
 						</p>
 					</div>
-					<!-- Full-page redirect to Google's consent screen (offline + prompt=consent
-					     mints a fresh refresh token; being logged in is the owner check). -->
+					<!-- Redirect to Google's consent screen (offline + prompt=consent mints a
+					     fresh refresh token; being logged in is the owner check). Opens in a
+					     new tab so the flow runs in the system browser, not the installed
+					     PWA's webview — Google rejects embedded webviews (disallowed_useragent).
+					     The callback stores the token server-side, so finishing in that tab is
+					     all that's needed. -->
 					<a
 						href="/api/integrations/fitbit/authorize"
+						target="_blank"
+						rel="noopener"
 						class="shrink-0 rounded-lg px-4 py-2 text-sm font-semibold text-black transition hover:brightness-110"
 						style="background: #fb923c;"
 					>
