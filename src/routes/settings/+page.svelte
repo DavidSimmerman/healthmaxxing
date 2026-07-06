@@ -398,6 +398,71 @@
 		</div>
 	</form>
 
+	<section class="card mt-6 p-5">
+		<h2 class="mb-1 text-sm font-semibold tracking-wide text-white uppercase">Vacation mode</h2>
+		<p class="mb-4 text-xs" style="color: var(--color-text-subtle);">
+			Days inside a trip are scored against easier goals — blood sugar targets loosen upward (running
+			higher to avoid lows won't hurt your score), and steps, sleep, deficit, protein &amp; water all
+			relax.
+		</p>
+
+		{#if data.vacations.length}
+			<ul class="mb-4 flex flex-col gap-2">
+				{#each data.vacations as v (v.id)}
+					<li class="card-sm flex items-center gap-3 p-3">
+						<span class="text-sm text-white">{v.from} → {v.to}</span>
+						<form method="POST" action="?/deleteVacation" class="ml-auto" use:enhance>
+							<input type="hidden" name="id" value={v.id} />
+							<button
+								type="submit"
+								class="rounded-lg border px-3 py-1.5 text-xs font-medium text-white transition hover:bg-white/5"
+								style="border-color: var(--color-border);"
+							>
+								Remove
+							</button>
+						</form>
+					</li>
+				{/each}
+			</ul>
+		{:else}
+			<p class="mb-4 text-sm" style="color: var(--color-text-subtle);">No trips scheduled.</p>
+		{/if}
+
+		<form method="POST" action="?/addVacation" class="flex flex-wrap items-end gap-3" use:enhance>
+			<label class="flex flex-col gap-1">
+				<span class="text-xs font-medium" style="color: var(--color-text-subtle);">Start</span>
+				<input
+					type="date"
+					name="from"
+					required
+					class="rounded-lg border bg-transparent px-3 py-2 text-white outline-none focus:border-orange-400"
+					style="border-color: var(--color-border); color-scheme: dark;"
+				/>
+			</label>
+			<label class="flex flex-col gap-1">
+				<span class="text-xs font-medium" style="color: var(--color-text-subtle);">End</span>
+				<input
+					type="date"
+					name="to"
+					required
+					class="rounded-lg border bg-transparent px-3 py-2 text-white outline-none focus:border-orange-400"
+					style="border-color: var(--color-border); color-scheme: dark;"
+				/>
+			</label>
+			<button
+				type="submit"
+				class="rounded-lg px-4 py-2 text-sm font-semibold text-black transition"
+				style="background: #fb923c;"
+			>
+				Add trip
+			</button>
+		</form>
+
+		{#if form?.vacationError}
+			<p class="mt-3 text-sm text-red-400">{form.vacationError}</p>
+		{/if}
+	</section>
+
 	<section class="mt-6">
 		<h2
 			class="mb-3 flex items-center gap-2 text-sm font-semibold tracking-wide text-white uppercase"

@@ -148,6 +148,11 @@
 						🔥 {day.streak}-day streak
 					</div>
 				{/if}
+				{#if day.vacation}
+					<div class="mt-2 ml-2 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold" style="background: rgba(56,189,248,0.15); color: #38bdf8;">
+						🏝️ Vacation goals
+					</div>
+				{/if}
 				<p class="mt-2 text-xs" style="color: var(--color-text-subtle);">
 					{Math.round(day.base ?? 0)} base{#if day.bonus > 0} · +{day.bonus.toFixed(1)} bonus{/if}
 				</p>

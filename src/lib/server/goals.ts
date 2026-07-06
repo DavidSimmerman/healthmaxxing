@@ -6,12 +6,16 @@ import { APP_TZ, todayLabel } from '$lib/server/day';
 import { addDays } from '$lib/energy';
 import { weekToDate } from '$lib/period';
 import { glucoseStats } from '$lib/glucose';
+import { loadSpecsFor } from '$lib/server/vacations';
 import {
 	scoreDay,
 	scorePeriod,
 	currentStreak,
 	grade,
 	weekBalances,
+	SPEC,
+	VACATION_SPECS,
+	type SpecMap,
 	type DayMetrics,
 	type GoalResult,
 	type BonusPart
@@ -173,6 +177,7 @@ export type GoalsView = {
 		bonusParts: BonusPart[];
 		goals: GoalResult[];
 		streak: number;
+		vacation: boolean; // this day falls inside a trip → relaxed targets applied
 	};
 	week: PeriodSummary;
 	month: PeriodSummary;
@@ -182,7 +187,12 @@ export type GoalsView = {
 // only (date < today) — today/future would drag the average. Strength/running count
 // through today (or the period end if it's already past), against a target prorated
 // to `periodDays` (7 for a week, the month length for a month).
-async function periodSummary(from: string, to: string, periodDays: number): Promise<PeriodSummary> {
+async function periodSummary(
+	from: string,
+	to: string,
+	periodDays: number,
+	specsFor: (date: string) => SpecMap
+): Promise<PeriodSummary> {
 	const today = todayLabel();
 	const completed = (await dayMetricsForRange(from, to)).filter((d) => d.date < today);
 	const extraTo = to < today ? to : today;
@@ -196,7 +206,19 @@ async function periodSummary(from: string, to: string, periodDays: number): Prom
 		extraTo >= from
 			? Math.min(periodDays, Math.round((Date.parse(extraTo) - Date.parse(from)) / 86_400_000) + 1)
 			: periodDays;
-	const ps = scorePeriod(completed, { ...extras, days: elapsedDays });
+	// Rollup regime is a property of the CALENDAR period, not of how much has elapsed:
+	// count vacation days across the whole [from, to] so an in-progress week/month
+	// doesn't flip targets as days complete.
+	let vacDays = 0;
+	let totalDays = 0;
+	for (let d = from; d <= to; d = addDays(d, 1)) {
+		totalDays++;
+		if (specsFor(d) === VACATION_SPECS) vacDays++;
+		if (d === to) break;
+	}
+	const rollupSpecs = vacDays * 2 > totalDays ? VACATION_SPECS : SPEC;
+
+	const ps = scorePeriod(completed, { ...extras, days: elapsedDays }, specsFor, rollupSpecs);
 	return {
 		from,
 		to,
@@ -212,19 +234,28 @@ async function periodSummary(from: string, to: string, periodDays: number): Prom
 
 // Everything the /goals page needs for the selected day, plus its week & month rollups.
 export async function buildGoalsView(anchor: string): Promise<GoalsView> {
+	// Per-day targets: normal, or relaxed for days inside a trip window.
+	const specsFor = await loadSpecsFor();
+
 	// Bank/debt entering `anchor`: the running surplus/shortfall over this week's
 	// days BEFORE it. Sunday (week start) → no prior days → no carry-over.
 	const balWeekStart = weekToDate(anchor).from;
 	const priorDays =
 		anchor > balWeekStart ? await dayMetricsForRange(balWeekStart, addDays(anchor, -1)) : [];
-	const day = scoreDay((await dayMetricsForRange(anchor, anchor))[0], weekBalances(priorDays));
+	const day = scoreDay(
+		(await dayMetricsForRange(anchor, anchor))[0],
+		weekBalances(priorDays, specsFor),
+		specsFor(anchor)
+	);
 
 	// Current streak ending on `anchor`: walk back in 60-day chunks until a
 	// non-perfect day, so a long run isn't truncated by a fixed window. The
 	// 20-iteration cap (~3 years) is just an infinite-loop backstop.
 	let streak = 0;
 	for (let end = anchor, i = 0; i < 20; i++) {
-		const chunk = (await dayMetricsForRange(addDays(end, -59), end)).map((d) => scoreDay(d));
+		const chunk = (await dayMetricsForRange(addDays(end, -59), end)).map((d) =>
+			scoreDay(d, {}, specsFor(d.date))
+		);
 		const s = currentStreak(chunk);
 		streak += s;
 		if (s < chunk.length) break;
@@ -236,8 +267,8 @@ export async function buildGoalsView(anchor: string): Promise<GoalsView> {
 	const [y, mo] = anchor.split('-').map(Number);
 	const lastDom = new Date(Date.UTC(y, mo, 0)).getUTCDate(); // last day of anchor's month
 	const [week, month] = await Promise.all([
-		periodSummary(weekStart, addDays(weekStart, 6), 7),
-		periodSummary(`${ym}-01`, `${ym}-${String(lastDom).padStart(2, '0')}`, lastDom)
+		periodSummary(weekStart, addDays(weekStart, 6), 7, specsFor),
+		periodSummary(`${ym}-01`, `${ym}-${String(lastDom).padStart(2, '0')}`, lastDom, specsFor)
 	]);
 
 	return {
@@ -249,7 +280,8 @@ export async function buildGoalsView(anchor: string): Promise<GoalsView> {
 			bonus: day.bonus,
 			bonusParts: day.bonusParts,
 			goals: day.goals,
-			streak
+			streak,
+			vacation: specsFor(anchor) === VACATION_SPECS
 		},
 		week,
 		month

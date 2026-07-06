@@ -2,6 +2,7 @@ import { buildGoalsView, dayMetricsForRange } from '$lib/server/goals';
 import { todayLabel } from '$lib/server/day';
 import { weekToDate } from '$lib/period';
 import { scoreDay, weekBalances } from '$lib/score';
+import { loadSpecsFor } from '$lib/server/vacations';
 import { addDays } from '$lib/energy';
 
 export async function load({ url }) {
@@ -32,8 +33,12 @@ export async function load({ url }) {
 	// — exactly as the day-detail card does — so a ring in the strip matches the big
 	// number when you select that day (they used to disagree: strip plain, card banked).
 	const weekMetrics = await dayMetricsForRange(weekStart, fetchEnd);
+	const specsFor = await loadSpecsFor();
 	const scored = new Map(
-		weekMetrics.map((m, i) => [m.date, scoreDay(m, weekBalances(weekMetrics.slice(0, i))).score])
+		weekMetrics.map((m, i) => [
+			m.date,
+			scoreDay(m, weekBalances(weekMetrics.slice(0, i), specsFor), specsFor(m.date)).score
+		])
 	);
 	const weekDays = Array.from({ length: 7 }, (_, i) => {
 		const dd = addDays(weekStart, i);

@@ -417,3 +417,14 @@ export const pumpGlucose = pgTable(
 	},
 	(t) => [index('pump_glucose_date_idx').on(t.date)]
 );
+
+// A travel window where goal targets relax (see VACATION_SPECS in score.ts). Any
+// local (APP_TZ) day within [from, to] inclusive is scored against the easier
+// vacation targets. Ranges may overlap harmlessly — a day in ANY range is a
+// vacation day. Dates are 'YYYY-MM-DD', so plain string comparison orders them.
+export const vacations = pgTable('vacations', {
+	id: uuid('id').primaryKey().defaultRandom(),
+	from: text('from').notNull(), // inclusive start, 'YYYY-MM-DD'
+	to: text('to').notNull(), // inclusive end, 'YYYY-MM-DD'
+	createdAt: timestamp('created_at').notNull().defaultNow()
+});

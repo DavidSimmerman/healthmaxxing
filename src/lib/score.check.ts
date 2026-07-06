@@ -10,6 +10,7 @@ import {
 	grade,
 	weekBalances,
 	SPEC,
+	VACATION_SPECS,
 	BONUS_CAP_DAY,
 	type DayMetrics
 } from './score.ts';
@@ -263,6 +264,62 @@ assert.equal(grade(null), '—');
 	const gmi = scoreDay(perfectDay, {}).goals.find((g) => g.key === 'gmi')!;
 	assert.equal(gmi.target, undefined);
 	assert.equal(gmi.balance, undefined);
+}
+
+// ── vacation targets ──
+{
+	// A realistic travel day: fine for the road, mediocre against normal goals.
+	const travelDay: DayMetrics = {
+		date: '2026-07-04',
+		gmi: 7.0,
+		tir: 70,
+		over250: 3,
+		below70: 2,
+		steps: 7000,
+		sleepMin: 360,
+		deficit: 0,
+		protein: 80,
+		waterOz: 50
+	};
+
+	// Under vacation specs every target is met → a perfect day.
+	const vac = scoreDay(travelDay, {}, VACATION_SPECS);
+	approx(vac.base!, 100);
+	assert.equal(vac.perfect, true);
+	assert.equal(
+		vac.goals.every((g) => g.met),
+		true
+	);
+
+	// The very same day scores far worse against the normal targets.
+	const normal = scoreDay(travelDay);
+	assert.equal(normal.perfect, false);
+	assert(normal.base! < 80, `expected < 80, got ${normal.base}`);
+
+	// Deficit goal of 0: maintenance = full marks, a surplus scores proportionally
+	// down to −750 (a 750-kcal surplus) = zero.
+	approx(attainment(VACATION_SPECS.deficit, 0)!, 1);
+	approx(attainment(VACATION_SPECS.deficit, -375)!, 0.5);
+	approx(attainment(VACATION_SPECS.deficit, -750)!, 0);
+
+	// Blood-sugar targets loosen upward: GMI 7.0 fails normal (6.5) but meets vacation (7.2).
+	assert.equal(SPEC.gmi.target, 6.5);
+	assert.equal(VACATION_SPECS.gmi.target, 7.2);
+	assert.equal(vac.goals.find((g) => g.key === 'gmi')!.met, true);
+
+	// Regression: the zero-target deficit goal must NOT go through the banking path
+	// (its bar divides by the target → NaN). Even with a prior-week deficit balance it
+	// stays a plain row: no target/balance fields, met at maintenance, finite fill.
+	const banked = scoreDay(travelDay, { deficit: 500 }, VACATION_SPECS).goals.find(
+		(g) => g.key === 'deficit'
+	)!;
+	assert.equal(banked.target, undefined, 'vacation deficit must not be bankable');
+	assert.equal(banked.balance, undefined);
+	assert.equal(banked.met, true); // deficit 0 hits the maintenance target
+	// A normal-mode deficit with a balance still banks (positive target).
+	const nBanked = scoreDay(perfectDay, { deficit: 500 }).goals.find((g) => g.key === 'deficit')!;
+	assert.equal(nBanked.target, 750);
+	approx(nBanked.balance!, 500);
 }
 
 console.log('score.check.ts OK');

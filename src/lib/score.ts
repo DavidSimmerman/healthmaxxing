@@ -175,9 +175,34 @@ export const GOAL_SPECS: GoalSpec[] = [
 	}
 ];
 
-export const SPEC: Record<GoalKey, GoalSpec> = Object.fromEntries(
-	GOAL_SPECS.map((s) => [s.key, s])
-) as Record<GoalKey, GoalSpec>;
+export type SpecMap = Record<GoalKey, GoalSpec>;
+
+export const SPEC: SpecMap = Object.fromEntries(GOAL_SPECS.map((s) => [s.key, s])) as SpecMap;
+
+// ── Vacation targets ──────────────────────────────────────────────────────────
+// While travelling, goals relax so a good-for-the-road day still scores well. The
+// blood-sugar goals loosen UPWARD on purpose: running higher to avoid lows must not
+// tank the score. Only the fields listed here change; everything else (labels, dirs,
+// fmt) is inherited from the normal spec. Applied per-day for dates inside a trip
+// window — see server/vacations.ts. Deficit target 0 = hitting maintenance is full
+// marks; a surplus (down to −750, a 750-kcal surplus) scores proportionally less.
+const VACATION_OVERRIDES: Partial<Record<GoalKey, Partial<GoalSpec>>> = {
+	gmi: { target: 7.2, floor: 8.5, bonusTo: 6.0 },
+	no_over_250: { target: 5, floor: 15 },
+	tir: { target: 65 },
+	// time_below unchanged — running higher makes it easier anyway.
+	steps: { target: 7000 },
+	sleep: { target: 360 },
+	deficit: { target: 0, floor: -750, bonusTo: 500 },
+	protein: { target: 80, floor: 60 },
+	water: { target: 50 },
+	strength: { target: 2, bonusTo: 5 },
+	running: { target: 4, bonusTo: 8 }
+};
+
+export const VACATION_SPECS: SpecMap = Object.fromEntries(
+	GOAL_SPECS.map((s) => [s.key, { ...s, ...VACATION_OVERRIDES[s.key] }])
+) as SpecMap;
 
 export const DAY_GOALS = GOAL_SPECS.filter((s) => s.scope === 'day').map((s) => s.key);
 export const WEEK_GOALS = GOAL_SPECS.filter((s) => s.scope === 'week').map((s) => s.key);
@@ -261,16 +286,18 @@ export const BANKABLE_GOALS: GoalKey[] = ['steps', 'sleep', 'deficit', 'protein'
 // Running bank(+)/debt(−) per bankable goal: Σ(value − dailyTarget) over the given
 // days (the caller passes the current week's days BEFORE the day being scored). A
 // day missing a goal's data is skipped, not counted as a full day of debt.
-export function weekBalances(priorDays: DayMetrics[]): Partial<Record<GoalKey, number>> {
+export function weekBalances(
+	priorDays: DayMetrics[],
+	specsFor: (date: string) => SpecMap = () => SPEC
+): Partial<Record<GoalKey, number>> {
 	const out: Partial<Record<GoalKey, number>> = {};
 	for (const key of BANKABLE_GOALS) {
-		const spec = SPEC[key];
 		let sum = 0;
 		let any = false;
 		for (const d of priorDays) {
 			const v = DAY_VALUE[key](d);
 			if (v == null || !Number.isFinite(v)) continue;
-			sum += v - spec.target;
+			sum += v - specsFor(d.date)[key].target; // each day banks against ITS own target
 			any = true;
 		}
 		if (any) out[key] = sum;
@@ -301,16 +328,20 @@ export type DayScore = {
 
 export function scoreDay(
 	m: DayMetrics,
-	balances: Partial<Record<GoalKey, number>> = {}
+	balances: Partial<Record<GoalKey, number>> = {},
+	specs: SpecMap = SPEC
 ): DayScore {
 	const goals: GoalResult[] = DAY_GOALS.map((key) => {
-		const spec = SPEC[key];
+		const spec = specs[key];
 		const value = DAY_VALUE[key](m);
 		const bal = BANKABLE_GOALS.includes(key) ? balances[key] : undefined;
 
 		// Bankable goal with prior-week data: a bank lowers today's 100% threshold by
 		// the banked amount (never below the goal's floor); debt leaves it at target.
-		if (bal != null) {
+		// Banking needs a positive '>=' target — the bar geometry divides by it. The
+		// vacation deficit goal (target 0) doesn't qualify, so it falls through to the
+		// plain attainment path below (hitting maintenance = met, surplus scores down).
+		if (bal != null && spec.target > 0) {
 			const bank = bal > 0 ? bal : 0;
 			const effTarget = bank > 0 ? Math.max(spec.floor, spec.target - bank) : spec.target;
 			return {
@@ -344,7 +375,7 @@ export function scoreDay(
 	// Only the bonus goals that HAVE data count toward the divisor — a missing
 	// sensor (e.g. no Dexcom → null GMI/TIR) must not dilute the bonus, same as it's
 	// excluded from the base. Each contributes BONUS_CAP_DAY × overshoot ÷ that count.
-	const bonusData = DAY_BONUS_GOALS.map((k) => ({ spec: SPEC[k], v: DAY_VALUE[k](m) })).filter(
+	const bonusData = DAY_BONUS_GOALS.map((k) => ({ spec: specs[k], v: DAY_VALUE[k](m) })).filter(
 		(x) => x.v != null
 	);
 	const per = base == null || bonusData.length === 0 ? 0 : BONUS_CAP_DAY / bonusData.length;
@@ -389,19 +420,34 @@ function proratedSpec(spec: GoalSpec, days: number): GoalSpec {
 	};
 }
 
-export function scorePeriod(days: DayMetrics[], extras: PeriodExtras): PeriodScore {
-	const dayScores = days.map((d) => scoreDay(d));
+export function scorePeriod(
+	days: DayMetrics[],
+	extras: PeriodExtras,
+	specsFor: (date: string) => SpecMap = () => SPEC,
+	rollupSpecs?: SpecMap
+): PeriodScore {
+	const dayScores = days.map((d) => scoreDay(d, {}, specsFor(d.date)));
+
+	// The averaged rollup (daily goals, weekly proration) is scored against ONE spec
+	// set — whichever regime covers most of the period. A week that's mostly a trip is
+	// judged on vacation targets; a mostly-home week on normal. Per-DAY scores above
+	// already use each day's own targets; this only affects the period average. The
+	// caller SHOULD pass `rollupSpecs` computed over the full calendar range so an
+	// in-progress period doesn't flip as days complete; we fall back to the majority
+	// of the rows we were handed (fine for a finished period or a bare call).
+	const vac = days.filter((d) => specsFor(d.date) === VACATION_SPECS).length;
+	const specs = rollupSpecs ?? (vac * 2 > days.length ? VACATION_SPECS : SPEC);
 
 	// Daily goals scored on their period-AVERAGE value (a day under and a day over
 	// cancel out), not the mean of daily scores. `days` should be COMPLETED days only.
-	const dailyGoals = aggregateDailyGoals(dayScores);
+	const dailyGoals = aggregateDailyGoals(dayScores, specs);
 	const dailyData = dailyGoals.filter((g) => g.attainment != null);
 	const dailyMean = dailyData.length
 		? (dailyData.reduce((s, g) => s + (g.attainment as number), 0) / dailyData.length) * 100
 		: null;
 
-	const strengthSpec = proratedSpec(SPEC.strength, extras.days);
-	const runningSpec = proratedSpec(SPEC.running, extras.days);
+	const strengthSpec = proratedSpec(specs.strength, extras.days);
+	const runningSpec = proratedSpec(specs.running, extras.days);
 	const weeklyGoals: GoalResult[] = [
 		buildGoal(strengthSpec, extras.strengthCount),
 		buildGoal(runningSpec, extras.runningMiles)
@@ -431,7 +477,7 @@ export function scorePeriod(days: DayMetrics[], extras: PeriodExtras): PeriodSco
 		...dailyBonusGoals.map((g) => ({
 			key: g.key,
 			label: g.label,
-			points: n ? (BONUS_CAP_WEEK * overshoot(SPEC[g.key], g.value)) / (3 * n) : 0
+			points: n ? (BONUS_CAP_WEEK * overshoot(specs[g.key], g.value)) / (3 * n) : 0
 		})),
 		{ key: 'strength', label: SPEC.strength.label, points: (BONUS_CAP_WEEK * overshoot(strengthSpec, extras.strengthCount)) / 3 },
 		{ key: 'running', label: SPEC.running.label, points: (BONUS_CAP_WEEK * overshoot(runningSpec, extras.runningMiles)) / 3 }
@@ -482,9 +528,9 @@ export function currentStreak(dayScores: { perfect: boolean }[]): number {
 // and a day 100 over cancel to "hit exactly" — the period is judged on the mean, not
 // the mean of daily pass/fail. A goal with no data on any day → null, display '—'.
 // (Pass COMPLETED days only — exclude today/future, which would drag the average.)
-export function aggregateDailyGoals(dayScores: DayScore[]): GoalResult[] {
+export function aggregateDailyGoals(dayScores: DayScore[], specs: SpecMap = SPEC): GoalResult[] {
 	return DAY_GOALS.map((key) => {
-		const spec = SPEC[key];
+		const spec = specs[key];
 		const vals = dayScores
 			.map((d) => d.goals.find((g) => g.key === key)?.value)
 			.filter((v): v is number => v != null && Number.isFinite(v));

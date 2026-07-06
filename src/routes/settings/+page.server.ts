@@ -1,7 +1,8 @@
 import { db } from '$lib/server/db';
-import { settings, quickAdds, foods, dexcomAuth, fitbitAuth } from '$lib/server/db/schema';
+import { settings, quickAdds, foods, dexcomAuth, fitbitAuth, vacations } from '$lib/server/db/schema';
 import { asc, eq } from 'drizzle-orm';
 import { fail } from '@sveltejs/kit';
+import { listVacations } from '$lib/server/vacations';
 import { authEnabled } from '$lib/server/session';
 import { dexcomEnabled } from '$lib/server/dexcom';
 import { googleHealthEnabled } from '$lib/server/fitbit';
@@ -43,6 +44,7 @@ export async function load() {
 			fatTargetG: 70,
 			fiberMode: 'full' as const
 		},
+		vacations: await listVacations(),
 		quickAddItems,
 		authEnabled: authEnabled(),
 		dexcomConfigured: dexcomEnabled(),
@@ -56,7 +58,34 @@ export async function load() {
 
 // The settings page is owner-gated by hooks.server.ts (valid session when app
 // auth is enabled), so this action inherits that protection.
+// A well-formed AND real calendar date (rejects 2026-02-31, 2026-13-01, etc.).
+const validDate = (s: string) => {
+	if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+	const d = new Date(`${s}T00:00:00Z`);
+	return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+};
+
 export const actions = {
+	// Add a trip window; days inside [from, to] score against the relaxed vacation goals.
+	addVacation: async ({ request }) => {
+		const form = await request.formData();
+		const from = String(form.get('from') ?? '').trim();
+		const to = String(form.get('to') ?? '').trim();
+		if (!validDate(from) || !validDate(to))
+			return fail(400, { vacationError: 'Enter valid start and end dates.' });
+		if (from > to) return fail(400, { vacationError: 'End date must be on or after the start date.' });
+		await db.insert(vacations).values({ from, to });
+		return { vacationAdded: true };
+	},
+
+	deleteVacation: async ({ request }) => {
+		const form = await request.formData();
+		const id = String(form.get('id') ?? '');
+		if (!id) return fail(400, { vacationError: 'Missing trip id.' });
+		await db.delete(vacations).where(eq(vacations.id, id));
+		return { vacationDeleted: true };
+	},
+
 	connectTandem: async ({ request }) => {
 		if (!tandemEnabled()) return fail(503, { tandemError: 'Not configured (set TANDEM_ENC_KEY).' });
 		const form = await request.formData();

@@ -7,6 +7,7 @@ import { getFiberMode } from '$lib/server/prefs';
 import { deficitDays } from '$lib/server/deficit';
 import { dayMetricsForRange } from '$lib/server/goals';
 import { scoreDay, weekBalances } from '$lib/score';
+import { loadSpecsFor } from '$lib/server/vacations';
 import { weekToDate } from '$lib/period';
 import { addDays } from '$lib/energy';
 
@@ -102,7 +103,10 @@ export async function load() {
 		// the goals page's day-detail score (both bank-adjusted) instead of trailing it.
 		today > weekStart ? dayMetricsForRange(weekStart, addDays(today, -1)) : Promise.resolve([])
 	]);
-	const goalScore = dayMetrics[0] ? scoreDay(dayMetrics[0], weekBalances(priorDays)).score : null;
+	const specsFor = await loadSpecsFor();
+	const goalScore = dayMetrics[0]
+		? scoreDay(dayMetrics[0], weekBalances(priorDays, specsFor), specsFor(today)).score
+		: null;
 
 	return {
 		settings: settingsRow ?? {
