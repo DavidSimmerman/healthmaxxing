@@ -215,9 +215,15 @@ async function chat(req, res, { message, images, sessionId }) {
 		yield { type: 'user', message: { role: 'user', content }, parent_tool_use_id: null };
 	}
 
+	// Stop the Claude run if the client hangs up (Stop/close) — otherwise it keeps
+	// doing MCP reads and burning rate limit with nobody listening.
+	const abortController = new AbortController();
+	res.on('close', () => abortController.abort());
+
 	const options = {
 		systemPrompt: CHAT_SYS,
 		includePartialMessages: true,
+		abortController,
 		tools: [], // no built-ins (Bash/Write/etc.)
 		mcpServers: {
 			health: { type: 'http', url: MCP_URL, headers: { Authorization: `Bearer ${MCP_TOKEN}` } },
@@ -246,10 +252,13 @@ async function chat(req, res, { message, images, sessionId }) {
 		}
 		sse(res, 'done', {});
 	} catch (e) {
-		console.error(e);
-		sse(res, 'error', { message: e?.message ?? 'chat error' });
+		// Client hung up (abort) → res is already closed; nothing to report.
+		if (!res.writableEnded && !abortController.signal.aborted) {
+			console.error(e);
+			sse(res, 'error', { message: e?.message ?? 'chat error' });
+		}
 	} finally {
-		res.end();
+		if (!res.writableEnded) res.end();
 	}
 }
 

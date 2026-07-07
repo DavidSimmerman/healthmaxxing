@@ -8,11 +8,15 @@ import { getFiberMode } from '$lib/server/prefs';
 // action commits — the sidecar has no write tools, so nothing mutates until Confirm.
 //
 // track/schedule commit EXACTLY the macros shown on the card, as a single serving, so the
-// logged entry always equals what the user saw (we never trust arbitrary payload macros or
-// a servings multiplier). recipe is ingredient-derived (the card relabels to the authoritative
-// per-serving macros after it's saved). Session-gated by hooks.
+// logged entry always equals what the user saw (never trusting arbitrary payload macros or
+// a servings multiplier). recipe is ingredient-derived. All macros are validated non-negative
+// so a bad/tampered proposal can't corrupt daily totals. Session-gated by hooks.
 const r1 = (n: number) => Math.round(n * 10) / 10;
-const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+const nn = (v: unknown, field: string): number => {
+	const n = typeof v === 'number' && Number.isFinite(v) ? v : 0;
+	if (n < 0) throw new FoodInputError(`${field} cannot be negative`);
+	return n;
+};
 
 export async function POST({ request }) {
 	const body = await request.json().catch(() => null);
@@ -24,16 +28,37 @@ export async function POST({ request }) {
 	if (kind !== 'track' && kind !== 'recipe' && kind !== 'schedule') {
 		throw error(400, 'kind must be track, recipe, or schedule');
 	}
+	// A "Schedule" card must actually schedule — without a time it would silently log now.
+	if (kind === 'schedule') {
+		const at = p.payload?.scheduleAt;
+		if (!(typeof at === 'string' && at.trim()))
+			throw error(400, 'a scheduled meal needs a scheduleAt time');
+	}
 
 	try {
 		const fiberMode = await getFiberMode();
 
 		if (kind === 'recipe') {
 			const payload = (p.payload ?? {}) as Record<string, unknown>;
+			const ingredients = payload.ingredients;
+			if (!Array.isArray(ingredients) || ingredients.length === 0) {
+				throw new FoodInputError('a recipe needs at least one ingredient');
+			}
+			for (const ing of ingredients) {
+				const i = (ing ?? {}) as Record<string, unknown>;
+				nn(i.calories, 'ingredient calories');
+				nn(i.proteinG, 'ingredient protein');
+				nn(i.carbsG, 'ingredient carbs');
+				nn(i.fatG, 'ingredient fat');
+			}
+			const makesServings = payload.makesServings;
+			if (typeof makesServings !== 'number' || !(makesServings > 0)) {
+				throw new FoodInputError('makesServings must be a number greater than 0');
+			}
 			const food = await prepFood({
 				name: p.name,
-				ingredients: (payload.ingredients as never) ?? null,
-				makesServings: (payload.makesServings as number) ?? null,
+				ingredients: ingredients as never,
+				makesServings,
 				totalGrams: (payload.totalGrams as number) ?? null,
 				source: 'ai_chat'
 			});
@@ -55,13 +80,13 @@ export async function POST({ request }) {
 		}
 
 		// track / schedule — log the card's macros verbatim, as one serving.
-		const scheduleAt = kind === 'schedule' ? ((p.payload?.scheduleAt as string) ?? null) : null;
+		const scheduleAt = kind === 'schedule' ? (p.payload.scheduleAt as string) : null;
 		const { food, logEntry } = await createAndLogFood({
 			name: p.name,
-			calories: num(p.calories),
-			proteinG: num(p.proteinG),
-			carbsG: num(p.carbsG),
-			fatG: num(p.fatG),
+			calories: nn(p.calories, 'calories'),
+			proteinG: nn(p.proteinG, 'protein'),
+			carbsG: nn(p.carbsG, 'carbs'),
+			fatG: nn(p.fatG, 'fat'),
 			source: 'ai_chat',
 			logToday: true,
 			servings: 1,

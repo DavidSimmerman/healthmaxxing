@@ -196,6 +196,28 @@
 
 	const KIND_LABEL = { track: 'Track now', recipe: 'Save recipe', schedule: 'Schedule' } as const;
 	const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
+
+	// Macros to preview on a card BEFORE confirm. For recipes the server derives per-serving
+	// macros from ingredients ÷ makesServings, so preview the same thing (not the model's
+	// top-level numbers, which can differ) — the user approves what will actually be saved.
+	function previewMacros(pr: Proposal) {
+		if (pr.kind === 'recipe') {
+			const pl = pr.payload as { ingredients?: unknown[]; makesServings?: number };
+			const ings = Array.isArray(pl?.ingredients)
+				? (pl.ingredients as Record<string, number>[])
+				: [];
+			const ms =
+				typeof pl?.makesServings === 'number' && pl.makesServings > 0 ? pl.makesServings : 1;
+			const sum = (k: string) => ings.reduce((t, i) => t + (Number(i?.[k]) || 0), 0);
+			return {
+				calories: sum('calories') / ms,
+				proteinG: sum('proteinG') / ms,
+				carbsG: sum('carbsG') / ms,
+				fatG: sum('fatG') / ms
+			};
+		}
+		return { calories: pr.calories, proteinG: pr.proteinG, carbsG: pr.carbsG, fatG: pr.fatG };
+	}
 </script>
 
 {#if open}
@@ -251,7 +273,8 @@
 						</div>
 					</div>
 				{:else if m.type === 'action'}
-					{@const mac = m.status === 'done' && m.result ? m.result.macros : m.proposal}
+					{@const mac =
+						m.status === 'done' && m.result ? m.result.macros : previewMacros(m.proposal)}
 					<!-- Action confirmation card -->
 					<div
 						class="mx-auto max-w-[95%] rounded-2xl border p-4"

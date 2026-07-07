@@ -36,7 +36,15 @@ Plus standing rule captured: **all Coolify config must be zero-downtime** (see M
 - [x] Chat UI (`ChatSheet.svelte`) + streaming + image attach + confirmation cards + floating launcher
 - [x] Verify: typecheck (0 err) + build ✓ + Playwright against mock sidecar + REAL Postgres write ✓
 - [x] Update DEPLOY.md / agent README for zero-downtime + /chat env
-- [ ] codex review (in progress) + address findings
+- [x] codex review + addressed all 4 findings (re-verified); final re-review running
+
+## Codex findings — all addressed
+- P1 (commit ≠ card): confirm now logs the **displayed** proposal macros as 1 serving. Proved with
+  a divergent-payload test (payload said BOGUS/999cal/servings:2 → logged row was 150/5/27/3, srv=1).
+- P1 (servings double-count): same fix — servings forced to 1, macros are the shown totals.
+- P2 (stale dashboard): `invalidateAll()` after track/schedule + `/api/chat/confirm` added to the
+  iOS widget reload hook.
+- P2 (zod peer): bumped agent `zod` to ^4 (SDK peer-deps zod@^4); tool constructs verified.
 
 ## Verification evidence
 - Playwright drove: open chat → send → streaming assistant text → `Track now` card → Confirm →
