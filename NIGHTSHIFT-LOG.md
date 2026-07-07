@@ -36,7 +36,17 @@ Plus standing rule captured: **all Coolify config must be zero-downtime** (see M
 - [x] Chat UI (`ChatSheet.svelte`) + streaming + image attach + confirmation cards + floating launcher
 - [x] Verify: typecheck (0 err) + build ✓ + Playwright against mock sidecar + REAL Postgres write ✓
 - [x] Update DEPLOY.md / agent README for zero-downtime + /chat env
-- [x] codex review + addressed all 4 findings (re-verified); final re-review running
+- [x] codex review — 4 rounds, 11 findings (2 correctness + 9 hardening), ALL fixed + verified
+
+## ✅ DONE. Final state
+8 commits on `feat/ai-chat`. typecheck 0 errors, prod build ✓, streaming/actions/validation all
+verified against real Postgres + mock sidecar. Review converged (round 4 = deep recipe edge cases,
+handled). Not pushed/merged — morning task.
+
+## Codex round 4 — addressed + verified
+- confirm rejects non-numeric/missing ingredient macros (`reqNum`) instead of zeroing → a recipe
+  can't be saved with macros differing from the approved card (verified: string/missing → 400).
+- recipes attach fiber per-ingredient (recipe nutrients sum from ingredients) — verified persist.
 
 ## Codex findings — all addressed
 - P1 (commit ≠ card): confirm now logs the **displayed** proposal macros as 1 serving. Proved with
