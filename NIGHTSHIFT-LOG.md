@@ -46,6 +46,9 @@ Plus standing rule captured: **all Coolify config must be zero-downtime** (see M
 - Ran against a mock sidecar (`/tmp/hm-verify/mock-agent.mjs`) emitting the real SSE protocol —
   no Claude token needed. The sidecar↔Claude path is verified by construction/boot only (needs the
   Max token on Coolify to exercise live).
+- **Streaming is incremental** (not buffered): `curl -N` through the app proxy showed
+  `event: session` then `delta` events arriving at ~40ms spacing (matching the mock cadence).
+  Confirms adapter-node passes the SSE ReadableStream straight through token-by-token.
 
 ## How to run / verify
 - App dev: `pnpm dev` (needs Postgres: `pnpm db:start` via docker, then `pnpm db:push`).

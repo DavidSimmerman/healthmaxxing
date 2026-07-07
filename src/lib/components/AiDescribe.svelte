@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { UNIT_LABEL, type Unit } from '$lib/units';
+	import { downscaleToDataUrl } from '$lib/image';
 
 	// Mirrors BarcodeScan's staged-item contract so a described food joins the meal
 	// the same way a scanned one does.
@@ -45,25 +46,6 @@
 
 	const canIdentify = $derived(!busy && (text.trim().length > 0 || !!imageDataUrl));
 
-	// Downscale to ~1568px (Claude's optimal vision edge) as JPEG. A raw phone photo
-	// is multi-MB; the app's body limit (adapter-node default 512KB) would reject it,
-	// and the smaller image is cheaper + faster to analyze with no readability loss.
-	// `imageOrientation: 'from-image'` bakes in EXIF rotation so sideways shots read upright.
-	async function downscale(file: File, maxDim = 1568): Promise<string> {
-		const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
-		const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
-		const w = Math.round(bitmap.width * scale);
-		const h = Math.round(bitmap.height * scale);
-		const canvas = document.createElement('canvas');
-		canvas.width = w;
-		canvas.height = h;
-		const ctx = canvas.getContext('2d');
-		if (!ctx) throw new Error('canvas unavailable');
-		ctx.drawImage(bitmap, 0, 0, w, h);
-		bitmap.close();
-		return canvas.toDataURL('image/jpeg', 0.82);
-	}
-
 	async function onPick(e: Event) {
 		const file = (e.currentTarget as HTMLInputElement).files?.[0];
 		if (!file) return;
@@ -73,7 +55,7 @@
 		}
 		error = null;
 		try {
-			imageDataUrl = await downscale(file);
+			imageDataUrl = await downscaleToDataUrl(file);
 		} catch {
 			error = 'Could not read that image.';
 		}

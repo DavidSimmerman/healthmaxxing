@@ -52,7 +52,8 @@ export async function POST({ request }) {
 			ok: true,
 			kind,
 			name: food.name,
-			scheduled: kind === 'schedule',
+			// Reflect what actually happened: pending == scheduled for later.
+			scheduled: !!logEntry.pending,
 			// logEntry.{calories,…} are the exact totals written to the day log.
 			macros: {
 				calories: r1(logEntry.calories),
