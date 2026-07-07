@@ -255,10 +255,11 @@ export type CreateAndLogInput = PrepFoodInput & {
 // An ISO instant to schedule a meal for → a Date, validated to land on today
 // (APP_TZ). Scheduled meals are pending log rows for later *today*, not arbitrary
 // dates. Returns undefined when nothing was passed.
-function parseScheduleAt(at: string | null | undefined): Date | undefined {
+export function parseScheduleAt(at: string | null | undefined): Date | undefined {
 	if (at == null || at === '') return undefined;
 	const d = new Date(at);
-	if (Number.isNaN(d.getTime())) throw new FoodInputError(`scheduleAt must be an ISO datetime (got "${at}").`);
+	if (Number.isNaN(d.getTime()))
+		throw new FoodInputError(`scheduleAt must be an ISO datetime (got "${at}").`);
 	const now = new Date();
 	if (ymd(d) !== ymd(now)) throw new FoodInputError('scheduleAt must be later today.');
 	if (d <= now) throw new FoodInputError('scheduleAt must be in the future (a time later today).');

@@ -150,7 +150,7 @@ YOU CANNOT log, edit, or schedule anything yourself. When — and only when — 
 
 When the user sends photos of barcodes or nutrition labels, read them (look up barcodes for known data) and keep a running tally — e.g. build up a recipe across several photos, then propose it.
 
-ALWAYS set propose_action top-level "name" and calories/proteinG/carbsG/fatG to the EXACT totals to log and show on the card — for track & schedule these numbers are logged verbatim (as one entry), so make them the full portion, not per-serving. Then by kind:
+ALWAYS set propose_action top-level "name" and calories/proteinG/carbsG/fatG to the EXACT totals to log and show on the card — for track & schedule these numbers are logged verbatim (as one entry), so make them the full portion, not per-serving. Whenever you can read them from a label, also include a top-level "nutrients" object (e.g. {"fiberG": 6, "sugarAlcoholG": 3}) — fiber and sugar alcohols are needed for accurate insulin (net-carb) dosing. Then by kind:
 - "track"    → no extra payload needed (top-level macros are logged as-is). payload: {}
 - "recipe"   → payload: { ingredients: [{ name, amount?, calories, proteinG, carbsG, fatG }], makesServings, totalGrams? }  (ingredient macros are WHOLE-recipe contributions, not per serving; per-serving is derived on save)
 - "schedule" → payload: { scheduleAt }  (ISO-8601 instant later TODAY, with timezone offset)`;
@@ -189,6 +189,7 @@ async function chat(req, res, { message, images, sessionId }) {
 					proteinG: z.number(),
 					carbsG: z.number(),
 					fatG: z.number(),
+					nutrients: z.record(z.string(), z.number()).optional(),
 					payload: z.any()
 				},
 				async (args) => {

@@ -46,6 +46,21 @@ Plus standing rule captured: **all Coolify config must be zero-downtime** (see M
   iOS widget reload hook.
 - P2 (zod peer): bumped agent `zod` to ^4 (SDK peer-deps zod@^4); tool constructs verified.
 
+## Codex round 2 — all addressed + verified (400s/200 via curl)
+- schedule w/o `scheduleAt` → 400 (was: silently logged now).
+- negative macros → 400; recipe requires ingredients + `makesServings > 0`.
+- recipe card previews per-serving macros (ingredients ÷ makesServings) = what's saved.
+- sidecar aborts the Claude run on SSE client disconnect (AbortController on `res` close).
+
+## Deploy status (for morning)
+- Chat is on `feat/ai-chat`, NOT pushed/merged. The live app is still the describe/report build
+  the user was mid-deploying. Morning path: (1) finish sidecar Coolify setup using the NEW
+  zero-downtime approach (give sidecar a **domain**, set app `AGENT_URL` to it — no custom
+  container name); (2) merge `feat/ai-chat` → main to ship chat too; (3) set `BODY_SIZE_LIMIT=10M`
+  on the app for photo uploads.
+- The sidecar↔Claude live path needs the real `CLAUDE_CODE_OAUTH_TOKEN` on Coolify to exercise;
+  everything app-side is verified here against a mock sidecar + real Postgres.
+
 ## Verification evidence
 - Playwright drove: open chat → send → streaming assistant text → `Track now` card → Confirm →
   `✓ Logged` + authoritative macros. Screenshots in `/tmp/hm-verify/*.png` (ephemeral).

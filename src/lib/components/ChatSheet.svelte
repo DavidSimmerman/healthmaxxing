@@ -11,6 +11,7 @@
 		proteinG: number;
 		carbsG: number;
 		fatG: number;
+		nutrients?: Record<string, number>;
 		payload: unknown;
 	};
 	type Result = {
@@ -197,6 +198,17 @@
 	const KIND_LABEL = { track: 'Track now', recipe: 'Save recipe', schedule: 'Schedule' } as const;
 	const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
 
+	// The exact time a schedule proposal will land at — shown on the card so the user can
+	// catch a wrong time before confirming.
+	function schedTime(pr: Proposal): string {
+		const at = (pr.payload as { scheduleAt?: string })?.scheduleAt;
+		if (!at) return 'no time set';
+		const d = new Date(at);
+		return Number.isNaN(d.getTime())
+			? 'invalid time'
+			: `Today at ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+	}
+
 	// Macros to preview on a card BEFORE confirm. For recipes the server derives per-serving
 	// macros from ingredients ÷ makesServings, so preview the same thing (not the model's
 	// top-level numbers, which can differ) — the user approves what will actually be saved.
@@ -301,6 +313,11 @@
 						{#if m.proposal.summary}<p class="text-xs" style="color: var(--color-text-subtle);">
 								{m.proposal.summary}
 							</p>{/if}
+						{#if m.proposal.kind === 'schedule'}
+							<p class="mt-1 text-xs font-medium" style="color: var(--color-accent-to, #fb923c);">
+								⏰ {schedTime(m.proposal)}
+							</p>
+						{/if}
 
 						<div class="mt-3 grid grid-cols-4 gap-2 text-center">
 							{#each [['kcal', mac.calories], ['P', mac.proteinG], ['C', mac.carbsG], ['F', mac.fatG]] as [label, val] (label)}

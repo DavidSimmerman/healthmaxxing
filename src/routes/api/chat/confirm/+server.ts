@@ -1,5 +1,5 @@
 import { json, error } from '@sveltejs/kit';
-import { createAndLogFood, prepFood, FoodInputError } from '$lib/server/foods';
+import { createAndLogFood, prepFood, parseScheduleAt, FoodInputError } from '$lib/server/foods';
 import { bolusableCarbsPerServing } from '$lib/netCarbs';
 import { getFiberMode } from '$lib/server/prefs';
 
@@ -81,12 +81,18 @@ export async function POST({ request }) {
 
 		// track / schedule — log the card's macros verbatim, as one serving.
 		const scheduleAt = kind === 'schedule' ? (p.payload.scheduleAt as string) : null;
+		// Validate the time BEFORE any write, so an invalid/past time can't leave an orphan
+		// food row (createAndLogFood inserts the food before it parses scheduleAt).
+		if (scheduleAt) parseScheduleAt(scheduleAt);
 		const { food, logEntry } = await createAndLogFood({
 			name: p.name,
 			calories: nn(p.calories, 'calories'),
 			proteinG: nn(p.proteinG, 'protein'),
 			carbsG: nn(p.carbsG, 'carbs'),
 			fatG: nn(p.fatG, 'fat'),
+			// prepFood runs sanitizeNutrients (the app's canonical nutrient whitelist) on this,
+			// same as the describe/barcode flows — so fiber etc. survive for net-carb accuracy.
+			nutrients: p.nutrients ?? undefined,
 			source: 'ai_chat',
 			logToday: true,
 			servings: 1,
