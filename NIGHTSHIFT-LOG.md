@@ -28,14 +28,24 @@ Plus standing rule captured: **all Coolify config must be zero-downtime** (see M
 
 ## Status
 - [x] Workspace + memory rule + log
-- [ ] Research: Agent SDK streaming (partial messages, custom tool, multi-turn input)
-- [ ] Explore: app internals for track/recipe/schedule shapes + entry point
-- [ ] Sidecar `POST /chat` — SSE stream (text deltas + action_proposed), read tools + propose_action
-- [ ] App `POST /api/chat` — SSE proxy (session-gated), passes history+images
-- [ ] App `POST /api/chat/confirm` — execute confirmed proposal, return final macros
-- [ ] Chat UI route + streaming + image attach + confirmation cards
-- [ ] Verify: typecheck, build, unit self-checks, Playwright (mock sidecar SSE), codex review
-- [ ] Update DEPLOY.md / agent README for zero-downtime + /chat env
+- [x] Research: Agent SDK streaming (partial messages, custom tool, multi-turn via `resume`)
+- [x] Explore: app internals for track/recipe/schedule shapes + entry point
+- [x] Sidecar `POST /chat` — SSE stream (session/delta/action/done/error), read tools + propose_action
+- [x] App `POST /api/chat` — SSE proxy (session-gated, forwards client abort)
+- [x] App `POST /api/chat/confirm` — execute confirmed proposal, return authoritative macros
+- [x] Chat UI (`ChatSheet.svelte`) + streaming + image attach + confirmation cards + floating launcher
+- [x] Verify: typecheck (0 err) + build ✓ + Playwright against mock sidecar + REAL Postgres write ✓
+- [x] Update DEPLOY.md / agent README for zero-downtime + /chat env
+- [ ] codex review (in progress) + address findings
+
+## Verification evidence
+- Playwright drove: open chat → send → streaming assistant text → `Track now` card → Confirm →
+  `✓ Logged` + authoritative macros. Screenshots in `/tmp/hm-verify/*.png` (ephemeral).
+- Real DB writes confirmed via psql: track (pending=f), schedule (pending=t), recipe (per-serving
+  = sum/makesServings = 125/6.5/19.5/2.5). Bad kind → 400.
+- Ran against a mock sidecar (`/tmp/hm-verify/mock-agent.mjs`) emitting the real SSE protocol —
+  no Claude token needed. The sidecar↔Claude path is verified by construction/boot only (needs the
+  Max token on Coolify to exercise live).
 
 ## How to run / verify
 - App dev: `pnpm dev` (needs Postgres: `pnpm db:start` via docker, then `pnpm db:push`).
