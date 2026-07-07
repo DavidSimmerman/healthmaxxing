@@ -29,7 +29,13 @@
 			const method = (
 				init?.method ?? (input instanceof Request ? input.method : 'GET')
 			).toUpperCase();
-			if (res.ok && method !== 'GET' && (url.includes('/api/log') || url.includes('/api/planned')))
+			if (
+				res.ok &&
+				method !== 'GET' &&
+				(url.includes('/api/log') ||
+					url.includes('/api/planned') ||
+					url.includes('/api/chat/confirm'))
+			)
 				widget.postMessage('reload');
 			return res;
 		};

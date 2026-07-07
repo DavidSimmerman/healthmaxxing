@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { tick } from 'svelte';
+	import { invalidateAll } from '$app/navigation';
 	import { downscaleToDataUrl } from '$lib/image';
 
 	type Proposal = {
@@ -150,11 +151,15 @@
 			const res = await fetch('/api/chat/confirm', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ kind: item.proposal.kind, payload: item.proposal.payload })
+				// Send the whole displayed proposal so the server logs exactly what the user saw.
+				body: JSON.stringify({ kind: item.proposal.kind, proposal: item.proposal })
 			});
 			if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
 			item.result = (await res.json()) as Result;
 			item.status = 'done';
+			// Logged/scheduled entries change the day totals — refresh page data (and the iOS
+			// widget, via the /api/chat/confirm hook in the layout).
+			if (item.proposal.kind !== 'recipe') await invalidateAll();
 		} catch (e) {
 			item.status = 'error';
 			item.error = (e as Error).message || 'failed';

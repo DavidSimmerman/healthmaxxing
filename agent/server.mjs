@@ -150,10 +150,10 @@ YOU CANNOT log, edit, or schedule anything yourself. When — and only when — 
 
 When the user sends photos of barcodes or nutrition labels, read them (look up barcodes for known data) and keep a running tally — e.g. build up a recipe across several photos, then propose it.
 
-propose_action payload by kind (put the whole thing in "payload", and also set top-level calories/proteinG/carbsG/fatG to the TOTALS shown on the card):
-- "track"    → payload: { name, calories, proteinG, carbsG, fatG, servings? }  (totals being logged now)
-- "recipe"   → payload: { name, ingredients: [{ name, amount?, calories, proteinG, carbsG, fatG }], makesServings, totalGrams? }  (ingredient macros are whole-recipe contributions, NOT per serving)
-- "schedule" → payload: { name, calories, proteinG, carbsG, fatG, scheduleAt }  (scheduleAt = ISO-8601 instant later TODAY, with timezone offset)`;
+ALWAYS set propose_action top-level "name" and calories/proteinG/carbsG/fatG to the EXACT totals to log and show on the card — for track & schedule these numbers are logged verbatim (as one entry), so make them the full portion, not per-serving. Then by kind:
+- "track"    → no extra payload needed (top-level macros are logged as-is). payload: {}
+- "recipe"   → payload: { ingredients: [{ name, amount?, calories, proteinG, carbsG, fatG }], makesServings, totalGrams? }  (ingredient macros are WHOLE-recipe contributions, not per serving; per-serving is derived on save)
+- "schedule" → payload: { scheduleAt }  (ISO-8601 instant later TODAY, with timezone offset)`;
 
 function sse(res, event, data) {
 	res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
