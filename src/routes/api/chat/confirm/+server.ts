@@ -12,10 +12,14 @@ import { getFiberMode } from '$lib/server/prefs';
 // a servings multiplier). recipe is ingredient-derived. All macros are validated non-negative
 // so a bad/tampered proposal can't corrupt daily totals. Session-gated by hooks.
 const r1 = (n: number) => Math.round(n * 10) / 10;
-const nn = (v: unknown, field: string): number => {
-	const n = typeof v === 'number' && Number.isFinite(v) ? v : 0;
-	if (n < 0) throw new FoodInputError(`${field} cannot be negative`);
-	return n;
+// Require an actual non-negative number. Rejects strings/missing/NaN rather than coercing to 0
+// — otherwise a malformed ingredient macro (e.g. "150") would be silently zeroed by prepFood,
+// saving a recipe whose macros differ from the card the user approved.
+const reqNum = (v: unknown, field: string): number => {
+	if (typeof v !== 'number' || !Number.isFinite(v))
+		throw new FoodInputError(`${field} must be a number`);
+	if (v < 0) throw new FoodInputError(`${field} cannot be negative`);
+	return v;
 };
 
 export async function POST({ request }) {
@@ -46,10 +50,10 @@ export async function POST({ request }) {
 			}
 			for (const ing of ingredients) {
 				const i = (ing ?? {}) as Record<string, unknown>;
-				nn(i.calories, 'ingredient calories');
-				nn(i.proteinG, 'ingredient protein');
-				nn(i.carbsG, 'ingredient carbs');
-				nn(i.fatG, 'ingredient fat');
+				reqNum(i.calories, 'ingredient calories');
+				reqNum(i.proteinG, 'ingredient protein');
+				reqNum(i.carbsG, 'ingredient carbs');
+				reqNum(i.fatG, 'ingredient fat');
 			}
 			const makesServings = payload.makesServings;
 			if (typeof makesServings !== 'number' || !(makesServings > 0)) {
@@ -86,10 +90,10 @@ export async function POST({ request }) {
 		if (scheduleAt) parseScheduleAt(scheduleAt);
 		const { food, logEntry } = await createAndLogFood({
 			name: p.name,
-			calories: nn(p.calories, 'calories'),
-			proteinG: nn(p.proteinG, 'protein'),
-			carbsG: nn(p.carbsG, 'carbs'),
-			fatG: nn(p.fatG, 'fat'),
+			calories: reqNum(p.calories, 'calories'),
+			proteinG: reqNum(p.proteinG, 'protein'),
+			carbsG: reqNum(p.carbsG, 'carbs'),
+			fatG: reqNum(p.fatG, 'fat'),
 			// prepFood runs sanitizeNutrients (the app's canonical nutrient whitelist) on this,
 			// same as the describe/barcode flows — so fiber etc. survive for net-carb accuracy.
 			nutrients: p.nutrients ?? undefined,

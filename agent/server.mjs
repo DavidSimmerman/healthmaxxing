@@ -152,7 +152,7 @@ When the user sends photos of barcodes or nutrition labels, read them (look up b
 
 ALWAYS set propose_action top-level "name" and calories/proteinG/carbsG/fatG to the EXACT totals to log and show on the card — for track & schedule these numbers are logged verbatim (as one entry), so make them the full portion, not per-serving. Whenever you can read them from a label, also include a top-level "nutrients" object (e.g. {"fiberG": 6, "sugarAlcoholG": 3}) — fiber and sugar alcohols are needed for accurate insulin (net-carb) dosing. Then by kind:
 - "track"    → no extra payload needed (top-level macros are logged as-is). payload: {}
-- "recipe"   → payload: { ingredients: [{ name, amount?, calories, proteinG, carbsG, fatG }], makesServings, totalGrams? }  (ingredient macros are WHOLE-recipe contributions, not per serving; per-serving is derived on save)
+- "recipe"   → payload: { ingredients: [{ name, amount?, calories, proteinG, carbsG, fatG, nutrients? }], makesServings, totalGrams? }  (ingredient macros are WHOLE-recipe contributions, not per serving; per-serving is derived on save. For recipes, attach fiber/sugar-alcohol to EACH ingredient's own "nutrients" bag — recipe nutrients are summed from ingredients, NOT the top-level bag. All ingredient macros must be numbers.)
 - "schedule" → payload: { scheduleAt }  (ISO-8601 instant later TODAY, with timezone offset)`;
 
 function sse(res, event, data) {
