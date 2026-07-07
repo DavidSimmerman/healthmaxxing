@@ -45,30 +45,28 @@ is **denied** by a `canUseTool` gate — the container plus that allowlist is th
 3. **Pick an agent secret** the same way and set it as **both** the app's `AGENT_SECRET`
    and the sidecar's `AGENT_SECRET`.
 
-## Deploy on Coolify
+## Deploy on Coolify (bundled in the app container)
 
-Add a second **Application** in the same Coolify project as the app:
+The sidecar runs as a **second process inside the app's own container** — the root
+`Dockerfile` copies `agent/`, `npm ci`s its deps, and `scripts/start.sh` launches it on
+`127.0.0.1:8787` alongside the app. So there is **no separate Coolify resource, no domain,
+and no cross-service networking**, and it inherits the app's zero-downtime rolling deploy.
+Nothing here is reachable from outside the container.
 
-- Build pack: **Dockerfile**, base directory `/agent`, pointed at this repo.
-- **Ports Exposes: `8787`.** Healthcheck: `GET /health` (the image ships `curl` for it).
-- **Give it a domain** (General → Generate Domain). The app reaches it at that
-  `https://…` URL; `AGENT_SECRET` gates every request, so proxy-exposed is safe.
-  Prefer this over an internal container-name hostname: a custom container name would
-  disable Coolify's zero-downtime rolling deploys (see `DEPLOY.md` §3a).
-- **Don't** set a Custom Container Name or host Port Mappings (both kill rolling updates).
-- Env:
+Everything is configured with **env vars on the app resource**:
 
-| Variable                  | Required     | Notes                                                           |
-| ------------------------- | ------------ | --------------------------------------------------------------- |
-| `CLAUDE_CODE_OAUTH_TOKEN` | ✅           | From `claude setup-token`. Your Max subscription — no API cost. |
-| `AGENT_SECRET`            | ✅           | Shared secret; must match the app's `AGENT_SECRET`.             |
-| `APP_MCP_URL`             | reports/chat | The app's MCP URL, e.g. `https://health.example.com/mcp`.       |
-| `MCP_TOKEN`               | reports/chat | Must equal the app's `MCP_SERVICE_TOKEN`.                       |
-| `PORT`                    |              | Defaults to `8787`.                                             |
+| Variable                  | Required     | Notes                                                             |
+| ------------------------- | ------------ | ----------------------------------------------------------------- |
+| `AGENT_URL`               | ✅           | `http://127.0.0.1:8787` — the in-container sidecar.               |
+| `AGENT_SECRET`            | ✅           | Any strong random string; app + sidecar share the container env.  |
+| `CLAUDE_CODE_OAUTH_TOKEN` | ✅           | From `claude setup-token`. Your Max subscription — no API cost.   |
+| `MCP_SERVICE_TOKEN`       | reports/chat | Static bearer for `/mcp` (see `DEPLOY.md`).                       |
+| `MCP_TOKEN`               | reports/chat | Same value as `MCP_SERVICE_TOKEN` (the sidecar reads this name).  |
+| `APP_MCP_URL`             | reports/chat | `http://127.0.0.1:3000/mcp` — the app's own MCP over loopback.    |
+| `BODY_SIZE_LIMIT`         | for photos   | e.g. `10M` — adapter-node default 512KB; photo uploads exceed it. |
 
-Then set on the **app**: `AGENT_URL` = the sidecar's `https://…` domain, plus
-`AGENT_SECRET` and `MCP_SERVICE_TOKEN` as above. If `AGENT_URL` is unset the feature is
-simply off (the ✨ chat + buttons return a clear "not configured" error).
+If `AGENT_URL` is unset the AI features are simply off (the ✨ chat + buttons return a clear
+"not configured" error).
 
 ## Local check
 

@@ -44,7 +44,12 @@ RUN apt-get update \
 ENV TANDEM_PYTHON=/opt/tandem-venv/bin/python
 ENV TANDEM_SCRIPT=/app/scripts/tandem_sync.py
 
-# Run pending migrations, then start the server. If migration fails the
-# container exits non-zero (Coolify will surface it) rather than serving on a
-# stale schema.
-CMD ["sh", "-c", "node migrate.mjs && node build"]
+# Claude sandbox sidecar — runs as a SEPARATE process inside this same container
+# (127.0.0.1:8787), reached by the app at AGENT_URL=http://127.0.0.1:8787. Bundled here
+# (like the Tandem sidecar above) so there's no cross-service networking and it inherits the
+# app's zero-downtime deploy. Its deps live in agent/node_modules, isolated from the app's.
+COPY --from=build /app/agent ./agent
+RUN cd agent && npm ci --omit=dev
+
+# Run migrations, then start the sidecar (background) + the app (foreground). See scripts/start.sh.
+CMD ["sh", "scripts/start.sh"]
