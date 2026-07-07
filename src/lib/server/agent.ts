@@ -48,3 +48,26 @@ export const generateReport = (input: {
 	to?: string;
 	instruction?: string;
 }) => call('/report', input, 240_000).then((r) => r.result as string);
+
+export type ChatImage = { data: string; mediaType?: string };
+
+/**
+ * Open a streaming chat turn against the sidecar and return the raw upstream Response so the
+ * caller can pipe its SSE body straight through. `signal` forwards client-abort to the sidecar.
+ * No JSON timeout here — chat streams are long-lived; the client aborts to stop.
+ */
+export async function chatStream(
+	body: { message?: string; images?: ChatImage[]; sessionId?: string },
+	signal?: AbortSignal
+): Promise<Response> {
+	const url = env.AGENT_URL;
+	const secret = env.AGENT_SECRET;
+	if (!url || !secret)
+		throw new Error('agent sandbox not configured (set AGENT_URL and AGENT_SECRET)');
+	return fetch(`${url.replace(/\/+$/, '')}/chat`, {
+		method: 'POST',
+		headers: { 'content-type': 'application/json', authorization: `Bearer ${secret}` },
+		body: JSON.stringify(body),
+		signal
+	});
+}
