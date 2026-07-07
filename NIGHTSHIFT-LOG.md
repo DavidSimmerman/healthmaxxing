@@ -52,6 +52,16 @@ Plus standing rule captured: **all Coolify config must be zero-downtime** (see M
 - recipe card previews per-serving macros (ingredients ÷ makesServings) = what's saved.
 - sidecar aborts the Claude run on SSE client disconnect (AbortController on `res` close).
 
+## Codex round 3 — all addressed + verified
+- Proposals carry a `nutrients` bag (fiber etc.); confirm → prepFood's sanitizeNutrients keeps
+  net-carb/bolus accuracy. Verified: fiberG 6 → bolusable 21 of 27 carbs; food row stores it.
+- scheduleAt validated (exported `parseScheduleAt`) BEFORE any write → invalid/past = 400 with
+  ZERO orphan food rows (verified).
+- Schedule cards show the resolved time so a wrong offset is catchable before confirm.
+- Removed a duplicate nutrient sanitizer — reuse the app's canonical `sanitizeNutrients`.
+
+Total: 3 review rounds, 9 findings (2 P1 + 7 P2) all fixed + verified. A final round is running.
+
 ## Deploy status (for morning)
 - Chat is on `feat/ai-chat`, NOT pushed/merged. The live app is still the describe/report build
   the user was mid-deploying. Morning path: (1) finish sidecar Coolify setup using the NEW
