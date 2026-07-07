@@ -11,7 +11,11 @@ import { query, tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod';
 import { parseFood } from './parseFood.mjs';
 
-const PORT = Number(process.env.PORT || 8787);
+// Own port var (NOT the generic PORT) — bundled in the app container, PORT=3000 is the app's,
+// so reading PORT here would collide. HOST defaults to loopback: the app calls us on 127.0.0.1
+// and nothing outside the container should reach the sidecar.
+const PORT = Number(process.env.AGENT_PORT || 8787);
+const HOST = process.env.AGENT_HOST || '127.0.0.1';
 const SECRET = process.env.AGENT_SECRET;
 const MCP_URL = process.env.APP_MCP_URL; // e.g. http://healthmaxxing:3000/mcp
 const MCP_TOKEN = process.env.MCP_TOKEN;
@@ -319,4 +323,4 @@ const server = createServer(async (req, res) => {
 	}
 });
 
-server.listen(PORT, '0.0.0.0', () => console.log(`agent listening on :${PORT}`));
+server.listen(PORT, HOST, () => console.log(`agent listening on ${HOST}:${PORT}`));
