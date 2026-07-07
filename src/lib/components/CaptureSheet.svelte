@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import BarcodeScan from './BarcodeScan.svelte';
+	import AiDescribe from './AiDescribe.svelte';
 	import { fuzzySearch } from '$lib/fuzzy';
 	import { UNITS, UNIT_LABEL, toServings, formatAmount, type Unit } from '$lib/units';
 
@@ -53,7 +54,7 @@
 		bolusableLowConfidence: boolean;
 	};
 
-	type Mode = 'browse' | 'detail' | 'review' | 'barcode';
+	type Mode = 'browse' | 'detail' | 'review' | 'barcode' | 'ai';
 
 	let { open = $bindable(false) }: { open: boolean } = $props();
 	let mode = $state<Mode>('browse');
@@ -129,7 +130,7 @@
 	// Load history the first time the sheet opens; refresh on each open so newly
 	// logged foods (e.g. just added via Claude) show up.
 	$effect(() => {
-		if (open && mode !== 'barcode') loadHistory();
+		if (open && mode !== 'barcode' && mode !== 'ai') loadHistory();
 	});
 
 	async function loadHistory() {
@@ -563,6 +564,13 @@
 						{/if}
 					</div>
 					<button
+						class="card-sm flex h-11 w-11 shrink-0 items-center justify-center text-lg text-white transition active:scale-95"
+						aria-label="Describe or scan a label with Claude"
+						onclick={() => (mode = 'ai')}
+					>
+						✨
+					</button>
+					<button
 						class="card-sm flex h-11 w-11 shrink-0 items-center justify-center text-white transition active:scale-95"
 						aria-label="Scan barcode"
 						onclick={() => (mode = 'barcode')}
@@ -987,7 +995,10 @@
 				</button>
 
 				<!-- Or schedule it for later today; it counts against remaining until confirmed. -->
-				<div class="mt-2 flex items-center gap-2 rounded-2xl border p-2" style="border-color: var(--color-border);">
+				<div
+					class="mt-2 flex items-center gap-2 rounded-2xl border p-2"
+					style="border-color: var(--color-border);"
+				>
 					<input
 						type="time"
 						bind:value={scheduleAt}
@@ -1008,6 +1019,19 @@
 			<div class="p-5" style="padding-bottom: calc(1.25rem + env(safe-area-inset-bottom));">
 				<div class="mx-auto mb-4 h-1 w-12 rounded-full bg-white/20"></div>
 				<BarcodeScan
+					onback={() => (mode = 'browse')}
+					mealCount={meal.length}
+					onadd={(item) => {
+						meal.push(item);
+						mealError = null;
+						mode = 'review';
+					}}
+				/>
+			</div>
+		{:else if mode === 'ai'}
+			<div class="p-5" style="padding-bottom: calc(1.25rem + env(safe-area-inset-bottom));">
+				<div class="mx-auto mb-4 h-1 w-12 rounded-full bg-white/20"></div>
+				<AiDescribe
 					onback={() => (mode = 'browse')}
 					mealCount={meal.length}
 					onadd={(item) => {

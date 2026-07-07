@@ -4,6 +4,8 @@
 // user's nutrition & health data and suggest improvements. Sleep is sourced
 // elsewhere (Google Health); tools degrade gracefully when a metric has no data.
 import { json } from '@sveltejs/kit';
+import { timingSafeEqual } from 'node:crypto';
+import { env } from '$env/dynamic/private';
 import { validateAccessToken } from '$lib/server/oauth';
 import { keycloakEnabled, validateMcpToken } from '$lib/server/keycloak';
 import {
@@ -1046,18 +1048,33 @@ function unauthorized(origin: string) {
 	});
 }
 
+// Constant-time check of the optional first-party service token. Unset => always
+// false (the static-token path is simply disabled), so this never weakens OAuth.
+function serviceTokenOk(token: string): boolean {
+	const expected = env.MCP_SERVICE_TOKEN;
+	if (!expected || !token) return false;
+	const a = Buffer.from(token);
+	const b = Buffer.from(expected);
+	return a.length === b.length && timingSafeEqual(a, b);
+}
+
 export async function POST({ request, url }) {
 	// Auth: every MCP request must carry a valid access token. An unauthenticated
 	// request gets a 401 whose WWW-Authenticate points Claude.ai at our metadata,
 	// kicking off the OAuth flow.
 	const auth = request.headers.get('authorization') ?? '';
 	const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+	// Trusted first-party service token (the Claude sandbox sidecar) — a strong
+	// static bearer set on both sides, same trust model as API_TOKEN for /api/*.
+	// Skips the interactive OAuth dance a headless agent can't perform.
 	// Keycloak mode: validate the realm-issued JWT (signature via JWKS, issuer,
 	// and that the audience targets THIS /mcp resource). Legacy mode: look the
 	// opaque token up in our own oauthTokens table.
-	const tokenOk = keycloakEnabled()
-		? !!token && !!(await validateMcpToken(token, `${url.origin}/mcp`))
-		: !!token && !!(await validateAccessToken(token));
+	const tokenOk =
+		serviceTokenOk(token) ||
+		(keycloakEnabled()
+			? !!token && !!(await validateMcpToken(token, `${url.origin}/mcp`))
+			: !!token && !!(await validateAccessToken(token)));
 	if (!tokenOk) {
 		return unauthorized(url.origin);
 	}

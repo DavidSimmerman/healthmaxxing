@@ -1,7 +1,33 @@
 <script lang="ts">
 	import { pullToRefresh } from '$lib/actions/pullToRefresh';
+	import { invalidateAll } from '$app/navigation';
 
 	let { data } = $props();
+
+	let generating = $state(false);
+	let genError = $state<string | null>(null);
+
+	// Ask the Claude sandbox to analyze recent data and save_report; the new report
+	// arrives via invalidateAll(). Runs long (Claude reads the data + writes it), so
+	// the button just spins until it lands.
+	async function generate() {
+		if (generating) return;
+		generating = true;
+		genError = null;
+		try {
+			const res = await fetch('/api/reports/generate', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ period: 'this week' })
+			});
+			if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
+			await invalidateAll();
+		} catch (e) {
+			genError = e instanceof Error ? e.message : 'failed';
+		} finally {
+			generating = false;
+		}
+	}
 
 	function fmtDate(iso: string): string {
 		return new Date(iso).toLocaleDateString('en-US', {
@@ -23,7 +49,21 @@
 	<header class="mb-5 flex items-center gap-3">
 		<a href="/" class="text-sm" style="color: var(--color-text-muted);">← Home</a>
 		<h1 class="text-lg font-bold text-white">Reports</h1>
+		<button
+			onclick={generate}
+			disabled={generating}
+			class="ml-auto rounded-full px-3 py-1.5 text-xs font-semibold text-white transition disabled:opacity-60"
+			style="background: rgba(255,255,255,0.09);"
+		>
+			{generating ? 'Analyzing…' : '✨ Generate'}
+		</button>
 	</header>
+
+	{#if genError}
+		<p class="mb-3 text-xs" style="color: var(--color-danger, #f87171);">
+			Couldn't generate: {genError}
+		</p>
+	{/if}
 
 	{#if data.reports.length === 0}
 		<div class="card p-6 text-center text-sm" style="color: var(--color-text-subtle);">

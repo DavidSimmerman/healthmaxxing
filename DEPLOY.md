@@ -18,6 +18,12 @@ automatically on container start.
 | `ORIGIN`            | ✅       | Public URL, e.g. `https://health.example.com`. adapter-node needs it behind the proxy for form actions, CSRF, and the OAuth metadata documents.                                                     |
 | `API_TOKEN`         |          | Bearer token for the `/api/*` endpoints used by the desktop `/log-food` slash command. Leave unset to disable that auth (not recommended in prod).                                                  |
 | `APP_TZ`            |          | IANA timezone whose calendar day defines "today" for the dashboard and `/api/today`. Defaults to `America/New_York`. Set to your timezone so the day doesn't roll over at midnight UTC.             |
+| `AGENT_URL`         |          | Internal URL of the Claude sandbox sidecar, e.g. `http://<sidecar-service>:8787`. Unset = the in-app ✨ describe/scan and report-generate features are off. See [`agent/README.md`](agent/README.md).  |
+| `AGENT_SECRET`      | with AGENT_URL | Shared bearer the app uses to call the sidecar. Must match the sidecar's `AGENT_SECRET`.                                                                                                     |
+| `MCP_SERVICE_TOKEN` |          | Strong static bearer that lets the trusted sidecar call `/mcp` without the interactive OAuth flow. Must match the sidecar's `MCP_TOKEN`. Unset = only OAuth tokens are accepted (feature-neutral).   |
+
+The Claude sandbox is a **separate Coolify application** — see [`agent/README.md`](agent/README.md)
+for its setup (subscription token, deploy, env).
 
 ## 3. Healthcheck
 
