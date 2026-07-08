@@ -8,6 +8,7 @@
 		servings: number;
 		amount: number | null;
 		unit: string | null;
+		loggedAt: string | Date;
 		foodName: string;
 		foodServingSize: string | null;
 		foodServingGrams: number | null;
@@ -23,6 +24,7 @@
 	// Initial state derived from entry
 	let unit = $state<Unit>('serving');
 	let amount = $state<number>(1);
+	let time = $state(''); // HH:MM of loggedAt, editable
 	let saving = $state(false);
 	let deleting = $state(false);
 
@@ -47,6 +49,8 @@
 			unit = 'serving';
 			amount = entry.servings;
 		}
+		const d = new Date(entry.loggedAt);
+		time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 	});
 
 	// Seed the editable name from the entry, keyed on entry identity.
@@ -68,10 +72,16 @@
 	async function save() {
 		if (!entry) return;
 		saving = true;
+		// Keep the entry's original date; only apply the edited H:M.
+		const when = new Date(entry.loggedAt);
+		if (time) {
+			const [h, m] = time.split(':').map(Number);
+			when.setHours(h, m, 0, 0);
+		}
 		const res = await fetch(`/api/log/${entry.id}`, {
 			method: 'PATCH',
 			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ amount: Number(amount), unit })
+			body: JSON.stringify({ amount: Number(amount), unit, loggedAt: when.toISOString() })
 		});
 		if (res.ok) onsaved();
 		else {
@@ -302,6 +312,17 @@
 				</div>
 				<div class="text-xs" style="color: var(--color-text-subtle);">fat</div>
 			</div>
+		</div>
+
+		<!-- Logged-at time (editable) -->
+		<div class="mt-4 flex items-center justify-between">
+			<span class="text-sm" style="color: var(--color-text-subtle);">Time</span>
+			<input
+				type="time"
+				bind:value={time}
+				class="rounded-xl bg-white/10 px-3 py-2 text-sm text-white"
+				aria-label="Logged time"
+			/>
 		</div>
 
 		<div class="mt-4 flex gap-2">

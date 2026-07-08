@@ -8,8 +8,22 @@ import { getFiberMode } from '$lib/server/prefs';
 
 export async function POST({ request }) {
 	const body = await request.json();
-	const { foodId, amount, unit } = body as { foodId: string; amount?: number; unit?: Unit };
+	const { foodId, amount, unit, loggedAt } = body as {
+		foodId: string;
+		amount?: number;
+		unit?: Unit;
+		loggedAt?: string;
+	};
 	if (!foodId) throw error(400, 'foodId required');
+
+	// Optional explicit log time (past/now). A future time belongs on /api/planned
+	// as a pending row, so reject it here to keep logged rows non-future.
+	let when: Date | undefined;
+	if (loggedAt != null) {
+		when = new Date(loggedAt);
+		if (Number.isNaN(when.getTime())) throw error(400, 'valid loggedAt required');
+		if (when.getTime() > Date.now()) throw error(400, 'loggedAt cannot be in the future — schedule it instead');
+	}
 
 	const [food] = await db.select().from(foods).where(eq(foods.id, foodId));
 	if (!food) throw error(404, 'food not found');
@@ -46,6 +60,7 @@ export async function POST({ request }) {
 			servings,
 			amount: storedAmount,
 			unit: storedUnit,
+			...(when ? { loggedAt: when } : {}),
 			calories: food.calories * servings,
 			proteinG: food.proteinG * servings,
 			carbsG: food.carbsG * servings,

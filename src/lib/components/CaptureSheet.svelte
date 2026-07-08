@@ -70,8 +70,22 @@
 	let logging = $state(false);
 	let deletingId = $state<string | null>(null);
 
-	// Optional "schedule for later" time (HH:MM, local today). Empty = log now.
-	let scheduleAt = $state('');
+	// Log time (HH:MM, local today), defaulted to now. A past/now time logs the
+	// meal at that time; a future time schedules it (pending) for later today.
+	let scheduleAt = $state(hhmm(new Date()));
+	function hhmm(d: Date) {
+		return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+	}
+	// The chosen HH:MM resolved to a Date today, and whether it's in the future.
+	let logWhen = $derived.by(() => {
+		const d = new Date();
+		if (scheduleAt) {
+			const [h, m] = scheduleAt.split(':').map(Number);
+			d.setHours(h, m, 0, 0);
+		}
+		return d;
+	});
+	let isFuture = $derived(logWhen.getTime() > Date.now());
 
 	// Items staged into the current meal (T1D bolus: log several foods, see the
 	// combined carb + bolusable total, then confirm once). Nothing is written until
@@ -128,9 +142,13 @@
 	});
 
 	// Load history the first time the sheet opens; refresh on each open so newly
-	// logged foods (e.g. just added via Claude) show up.
+	// logged foods (e.g. just added via Claude) show up. Also re-default the log
+	// time to "now" on each open — the component is mounted once (in the layout),
+	// so a load-time initializer would go stale across a long-lived session.
 	$effect(() => {
-		if (open && mode !== 'barcode' && mode !== 'ai') loadHistory();
+		if (!open) return;
+		scheduleAt = hhmm(new Date());
+		if (mode !== 'barcode' && mode !== 'ai') loadHistory();
 	});
 
 	async function loadHistory() {
@@ -401,68 +419,48 @@
 		selected = null;
 	}
 
-	// Commit every staged item via /api/log. Succeeded items are removed as they
-	// land, so a retry after a mid-way failure only re-sends what's left (no
-	// double-logging). Reloads once the whole meal is written.
-	async function confirmMeal() {
+	// Commit every staged item at the chosen time. A future time schedules it
+	// (pending row via /api/planned); a past/now time logs it at that time via
+	// /api/log. Succeeded items are removed as they land, so a retry after a
+	// mid-way failure only re-sends what's left (no double-logging). Reloads once
+	// the whole meal is written.
+	async function logMeal() {
 		if (meal.length === 0 || logging) return;
+		// Recompute fresh at click time — the derived values can go stale if the
+		// sheet sat open past the chosen minute.
+		const when = new Date();
+		if (scheduleAt) {
+			const [h, m] = scheduleAt.split(':').map(Number);
+			when.setHours(h, m, 0, 0);
+		}
+		const future = when.getTime() > Date.now();
+		const whenISO = when.toISOString();
+		const url = future ? '/api/planned' : '/api/log';
+		const verb = future ? 'schedule' : 'log';
 		logging = true;
 		mealError = null;
 		try {
 			while (meal.length > 0) {
 				const m = meal[0];
-				const res = await fetch('/api/log', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ foodId: m.foodId, amount: m.amount, unit: m.unit })
-				});
-				if (!res.ok) {
-					mealError = `Couldn't log "${m.name}". ${meal.length} item(s) left — tap to retry.`;
-					return;
-				}
-				meal.shift();
-			}
-			reload();
-		} catch {
-			mealError = 'Network error while logging. Tap to retry.';
-		} finally {
-			logging = false;
-		}
-	}
-
-	// Schedule the staged meal for later today instead of logging now — one
-	// planned_meals row per item at the chosen time. Same retry-safe drain as
-	// confirmMeal. The items stay counted against "remaining" until confirmed.
-	async function scheduleMeal() {
-		if (meal.length === 0 || logging || !scheduleAt) return;
-		const [h, m] = scheduleAt.split(':').map(Number);
-		const when = new Date();
-		when.setHours(h, m, 0, 0);
-		const scheduledAt = when.toISOString();
-		logging = true;
-		mealError = null;
-		try {
-			while (meal.length > 0) {
-				const item = meal[0];
-				const res = await fetch('/api/planned', {
+				const res = await fetch(url, {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify({
-						foodId: item.foodId,
-						amount: item.amount,
-						unit: item.unit,
-						scheduledAt
+						foodId: m.foodId,
+						amount: m.amount,
+						unit: m.unit,
+						...(future ? { scheduledAt: whenISO } : { loggedAt: whenISO })
 					})
 				});
 				if (!res.ok) {
-					mealError = `Couldn't schedule "${item.name}". ${meal.length} item(s) left — tap to retry.`;
+					mealError = `Couldn't ${verb} "${m.name}". ${meal.length} item(s) left — tap to retry.`;
 					return;
 				}
 				meal.shift();
 			}
 			reload();
 		} catch {
-			mealError = 'Network error while scheduling. Tap to retry.';
+			mealError = `Network error while ${verb === 'log' ? 'logging' : 'scheduling'}. Tap to retry.`;
 		} finally {
 			logging = false;
 		}
@@ -986,32 +984,27 @@
 				>
 					+ Log another
 				</button>
-				<button
-					class="accent-gradient mt-2 w-full rounded-2xl py-4 font-bold text-white disabled:opacity-50"
-					disabled={logging || meal.length === 0}
-					onclick={confirmMeal}
-				>
-					{logging ? 'Logging…' : `Log ${meal.length} item${meal.length === 1 ? '' : 's'} to today`}
-				</button>
-
-				<!-- Or schedule it for later today; it counts against remaining until confirmed. -->
-				<div
-					class="mt-2 flex items-center gap-2 rounded-2xl border p-2"
-					style="border-color: var(--color-border);"
-				>
+				<!-- Time defaults to now (logs immediately). Set a future time to schedule
+				     it for later today — it counts against remaining until confirmed. -->
+				<div class="mt-2 flex items-center gap-2">
 					<input
 						type="time"
 						bind:value={scheduleAt}
-						class="rounded-xl bg-white/10 px-3 py-2 text-sm text-white"
-						aria-label="Schedule time"
+						class="rounded-2xl bg-white/10 px-3 py-4 text-sm text-white"
+						aria-label="Log time"
 					/>
 					<button
-						class="flex-1 rounded-xl py-2 text-sm font-semibold text-white transition hover:bg-white/10 disabled:opacity-40"
-						style="border: 1px solid var(--color-border);"
-						disabled={logging || meal.length === 0 || !scheduleAt}
-						onclick={scheduleMeal}
+						class="accent-gradient flex-1 rounded-2xl py-4 font-bold text-white disabled:opacity-50"
+						disabled={logging || meal.length === 0}
+						onclick={logMeal}
 					>
-						Schedule for later
+						{#if logging}
+							{isFuture ? 'Scheduling…' : 'Logging…'}
+						{:else}
+							{isFuture ? 'Schedule' : 'Log'}
+							{meal.length} item{meal.length === 1 ? '' : 's'}
+							{isFuture ? 'for later' : ''}
+						{/if}
 					</button>
 				</div>
 			</div>
