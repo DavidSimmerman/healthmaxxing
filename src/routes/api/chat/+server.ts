@@ -10,14 +10,22 @@ export async function POST({ request }) {
 		throw error(400, 'message or images required');
 	}
 
+	// Connect-timeout: abort if the sidecar doesn't return headers within 20s, so a
+	// misconfigured/unreachable AGENT_URL fails fast with a clean error instead of hanging
+	// (which the proxy surfaces as a scary 502). Cleared once headers arrive — the SSE body
+	// itself then streams unbounded, and client disconnect still aborts via request.signal.
+	const connect = new AbortController();
+	const timer = setTimeout(() => connect.abort(), 20_000);
 	let upstream: Response;
 	try {
 		upstream = await chatStream(
 			{ message: body.message, images: body.images, sessionId: body.sessionId },
-			request.signal // forward client abort to the sidecar
+			AbortSignal.any([request.signal, connect.signal])
 		);
 	} catch (e) {
 		throw error(502, `chat unavailable: ${(e as Error).message}`);
+	} finally {
+		clearTimeout(timer);
 	}
 
 	if (!upstream.ok || !upstream.body) {

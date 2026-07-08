@@ -242,16 +242,24 @@ async function chat(req, res, { message, images, sessionId }) {
 	if (typeof sessionId === 'string' && sessionId) options.resume = sessionId;
 
 	try {
+		let streamedText = false;
 		for await (const m of query({ prompt: gen(), options })) {
 			if (m.type === 'system' && m.subtype === 'init' && m.session_id) {
 				sse(res, 'session', { sessionId: m.session_id });
 			} else if (m.type === 'stream_event') {
 				const ev = m.event;
 				if (ev?.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
+					streamedText = true;
 					sse(res, 'delta', { text: ev.delta.text });
 				}
 			} else if (m.type === 'result') {
-				if (m.subtype !== 'success') sse(res, 'error', { message: `chat failed: ${m.subtype}` });
+				if (m.subtype !== 'success') {
+					sse(res, 'error', { message: `chat failed: ${m.subtype}` });
+				} else if (!streamedText && typeof m.result === 'string' && m.result) {
+					// Deltas didn't stream (env doesn't emit partial text) — send the final
+					// answer once so the user always sees the reply instead of nothing.
+					sse(res, 'delta', { text: m.result });
+				}
 				break;
 			}
 		}
