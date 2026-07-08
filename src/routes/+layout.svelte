@@ -6,7 +6,6 @@
 	import CaptureSheet from '$lib/components/CaptureSheet.svelte';
 	import ChatSheet from '$lib/components/ChatSheet.svelte';
 	import { captureOpen } from '$lib/stores/capture';
-	import { chatOpen } from '$lib/stores/chat';
 
 	let { children } = $props();
 
@@ -53,20 +52,6 @@
 	{@render children()}
 </div>
 
-<!-- Floating AI chat launcher — above the bottom nav, out of the way of the centre FAB.
-     Hidden while the chat is open (the full-screen sheet covers it anyway). -->
-{#if !$chatOpen}
-	<button
-		type="button"
-		onclick={() => chatOpen.set(true)}
-		class="accent-shadow fixed right-4 z-40 flex h-13 w-13 items-center justify-center rounded-full text-xl text-white transition active:scale-95"
-		style="bottom: calc(5rem + env(safe-area-inset-bottom)); height: 3.25rem; width: 3.25rem; background: var(--color-accent, #6366f1);"
-		aria-label="Open AI assistant"
-	>
-		✨
-	</button>
-{/if}
-
 <BottomNav />
 <CaptureSheet bind:open={$captureOpen} />
-<ChatSheet bind:open={$chatOpen} />
+<ChatSheet />

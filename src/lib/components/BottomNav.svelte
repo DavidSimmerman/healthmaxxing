@@ -57,21 +57,18 @@
 			{/if}
 		</div>
 
-		<!-- Reports -->
+		<!-- Assistant (chats + reports) -->
 		<a
 			href="/reports"
 			class="flex flex-col items-center gap-1 transition active:scale-95"
 			style="color: {active.startsWith('/reports') ? 'var(--color-accent-to, #fb923c)' : 'var(--color-text-subtle)'};"
-			aria-label="Reports"
+			aria-label="Assistant"
 			aria-current={active.startsWith('/reports') ? 'page' : undefined}
 		>
 			<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-				<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-				<polyline points="14 2 14 8 20 8" />
-				<line x1="8" y1="13" x2="16" y2="13" />
-				<line x1="8" y1="17" x2="16" y2="17" />
+				<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
 			</svg>
-			<span class="text-[10px] font-medium">Reports</span>
+			<span class="text-[10px] font-medium">Assistant</span>
 		</a>
 	</div>
 </nav>

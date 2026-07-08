@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import BarcodeScan from './BarcodeScan.svelte';
 	import AiDescribe from './AiDescribe.svelte';
+	import { openNewChat } from '$lib/stores/chat';
 	import { fuzzySearch } from '$lib/fuzzy';
 	import { UNITS, UNIT_LABEL, toServings, formatAmount, type Unit } from '$lib/units';
 
@@ -563,6 +564,16 @@
 							</button>
 						{/if}
 					</div>
+					<button
+						class="card-sm flex h-11 w-11 shrink-0 items-center justify-center text-lg text-white transition active:scale-95"
+						aria-label="Ask the AI assistant"
+						onclick={() => {
+							open = false;
+							openNewChat();
+						}}
+					>
+						💬
+					</button>
 					<button
 						class="card-sm flex h-11 w-11 shrink-0 items-center justify-center text-lg text-white transition active:scale-95"
 						aria-label="Describe or scan a label with Claude"
