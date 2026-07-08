@@ -183,6 +183,35 @@ export const reports = pgTable(
 	(t) => [index('reports_created_at_idx').on(t.createdAt)]
 );
 
+// A saved AI-assistant conversation. Messages are a JSONB array. Image DATA is intentionally
+// NOT persisted (base64 would bloat the row) — user turns keep only text + how many photos
+// were attached (shown as a chip on resume). Scheduled reports stay in the `reports` table and
+// are merged into the Assistant list by the /reports loader.
+export type ChatMessage =
+	| { role: 'user'; text: string; imageCount?: number }
+	| { role: 'assistant'; text: string }
+	| {
+			role: 'action';
+			kind: 'track' | 'recipe' | 'schedule';
+			name: string;
+			summary?: string;
+			macros: { calories: number; proteinG: number; carbsG: number; fatG: number };
+			status: 'pending' | 'done' | 'cancelled';
+			scheduled?: boolean;
+	  };
+
+export const chats = pgTable(
+	'chats',
+	{
+		id: uuid('id').primaryKey().defaultRandom(),
+		title: text('title').notNull(),
+		createdAt: timestamp('created_at').notNull().defaultNow(),
+		updatedAt: timestamp('updated_at').notNull().defaultNow(),
+		messages: jsonb('messages').$type<ChatMessage[]>().notNull().default([])
+	},
+	(t) => [index('chats_updated_at_idx').on(t.updatedAt)]
+);
+
 // ── HealthKit sync (pushed by the iOS wrapper app) ──────────────────────────
 
 // One row per weigh-in. Sourced from HealthKit (smart scale → Fit Days → Apple
