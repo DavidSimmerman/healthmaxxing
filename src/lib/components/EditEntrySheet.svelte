@@ -20,6 +20,7 @@
 
 	type Props = { entry: Entry | null; onclose: () => void; onsaved: () => void };
 	let { entry, onclose, onsaved }: Props = $props();
+	let sheetEl = $state<HTMLElement | undefined>(undefined);
 
 	// Initial state derived from entry
 	let unit = $state<Unit>('serving');
@@ -51,6 +52,7 @@
 		}
 		const d = new Date(entry.loggedAt);
 		time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+		sheetEl?.focus(); // initial focus into the dialog (container — no keyboard pop)
 	});
 
 	// Seed the editable name from the entry, keyed on entry identity.
@@ -73,6 +75,7 @@
 		if (!entry) return;
 		saving = true;
 		// Keep the entry's original date; only apply the edited H:M.
+		// eslint-disable-next-line svelte/prefer-svelte-reactivity -- local: built, mutated, serialized to ISO in one call
 		const when = new Date(entry.loggedAt);
 		if (time) {
 			const [h, m] = time.split(':').map(Number);
@@ -166,18 +169,28 @@
 	}
 </script>
 
+<!-- Escape closes from anywhere while open (the backdrop is never focused, so a
+     handler there would be dead code). Inner inputs stopPropagation their own Escape. -->
+<svelte:window
+	onkeydown={(e) => {
+		if (entry && e.key === 'Escape') onclose();
+	}}
+/>
+
 {#if entry}
 	<div
 		class="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
 		onclick={onclose}
-		role="button"
-		tabindex="-1"
-		aria-label="Close"
-		onkeydown={(e) => e.key === 'Escape' && onclose()}
+		aria-hidden="true"
 	></div>
 
 	<div
-		class="fixed right-0 bottom-0 left-0 z-50 rounded-t-3xl border-t p-5"
+		bind:this={sheetEl}
+		role="dialog"
+		aria-modal="true"
+		aria-label="Edit logged food"
+		tabindex="-1"
+		class="fixed right-0 bottom-0 left-0 z-50 rounded-t-3xl border-t p-5 outline-none"
 		style="background: var(--color-bg-elevated); border-color: var(--color-border); padding-bottom: calc(1.25rem + env(safe-area-inset-bottom));"
 	>
 		<div class="mx-auto mb-4 h-1 w-12 rounded-full bg-white/20"></div>
@@ -191,7 +204,10 @@
 					class="w-full rounded-lg bg-white/5 px-3 py-2 text-center text-lg font-bold text-white outline-none focus:bg-white/10"
 					onkeydown={(e) => {
 						if (e.key === 'Enter') saveName();
-						if (e.key === 'Escape') editingName = false;
+						if (e.key === 'Escape') {
+							e.stopPropagation(); // cancel the edit only — window Escape closes the sheet
+							editingName = false;
+						}
 					}}
 				/>
 				<div class="mt-2 flex justify-center gap-2">
@@ -242,7 +258,7 @@
 
 		<!-- Unit picker -->
 		<div class="no-scrollbar mt-4 flex gap-1 overflow-x-auto rounded-full bg-white/5 p-1">
-			{#each UNITS as u}
+			{#each UNITS as u (u)}
 				{@const enabled = isAvail(u)}
 				<button
 					type="button"

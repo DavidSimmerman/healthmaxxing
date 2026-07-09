@@ -34,7 +34,8 @@
 
 	let {
 		onback,
-		onadd
+		onadd,
+		mealCount
 	}: { onback: () => void; onadd: (item: StagedItem) => void; mealCount: number } = $props();
 
 	let text = $state('');
@@ -186,10 +187,12 @@
 				class="flex-1 rounded-xl py-3 text-sm font-semibold text-white/80"
 				style="background: rgba(255,255,255,0.06);">Redo</button
 			>
+			<!-- Mirrors BarcodeScan: staging into an empty meal reads as a direct log. -->
 			<button
 				onclick={add}
 				class="flex-1 rounded-xl py-3 text-sm font-semibold text-white"
-				style="background: var(--color-accent, #6366f1);">Add to meal</button
+				style="background: var(--color-accent, #6366f1);"
+				>{mealCount > 0 ? 'Add to meal' : 'Log to today'}</button
 			>
 		</div>
 	</div>

@@ -45,6 +45,7 @@
 	let curAssistant = $state(-1);
 	let ac: AbortController | null = null;
 	let scroller = $state<HTMLElement | undefined>(undefined);
+	let sheetEl = $state<HTMLElement | undefined>(undefined);
 	let revealRAF = 0;
 
 	// Track the on-screen keyboard via the visual viewport so the sheet occupies exactly the
@@ -82,6 +83,7 @@
 		if (s && s !== loadedRef) {
 			loadedRef = s;
 			loadSession(s.messages ?? [], s.id ?? null);
+			sheetEl?.focus(); // initial focus into the dialog (container — no keyboard pop)
 		} else if (!s) {
 			loadedRef = null;
 		}
@@ -164,9 +166,9 @@
 		}
 	}
 
-	async function scrollToEnd() {
+	async function scrollToEnd(behavior: ScrollBehavior = 'smooth') {
 		await tick();
-		scroller?.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' });
+		scroller?.scrollTo({ top: scroller.scrollHeight, behavior });
 	}
 
 	async function onPick(e: Event) {
@@ -205,11 +207,21 @@
 				const remaining = m.target.length - m.text.length;
 				const n = Math.max(2, Math.ceil(remaining / 5)); // quick; accelerates on backlog
 				m.text = m.target.slice(0, m.text.length + n);
-				scrollToEnd();
+				scrollToEnd('auto'); // per-frame smooth restarts the animation 60×/s — jank on phones
 				revealRAF = requestAnimationFrame(step);
+			} else {
+				scrollToEnd(); // reveal finished — one smooth settle
 			}
 		};
 		revealRAF = requestAnimationFrame(step);
+	}
+
+	// Anything that repoints curAssistant mid-reveal must flush first: the rAF loop
+	// stops rescheduling once curAssistant moves, stranding the bubble truncated on
+	// screen (target already holds the full streamed text).
+	function flushReveal() {
+		const m = messages[curAssistant];
+		if (m?.type === 'assistant' && m.target != null) m.text = m.target;
 	}
 
 	function handleEvent(raw: string) {
@@ -229,6 +241,7 @@
 		if (event === 'session') sessionId = payload.sessionId ?? sessionId;
 		else if (event === 'delta') appendDelta(payload.text ?? '');
 		else if (event === 'action') {
+			flushReveal();
 			messages.push({ type: 'action', proposal: payload as Proposal, status: 'pending' });
 			curAssistant = -1;
 			scrollToEnd();
@@ -243,6 +256,7 @@
 		messages.push({ type: 'user', text, images: imgs.length ? imgs : undefined });
 		input = '';
 		attachments = [];
+		flushReveal(); // a still-animating previous reply must not be stranded truncated
 		curAssistant = -1;
 		streaming = true;
 		scrollToEnd();
@@ -356,10 +370,22 @@
 	}
 </script>
 
+<!-- Escape closes from anywhere while the chat is open (fullscreen sheet, no backdrop). -->
+<svelte:window
+	onkeydown={(e) => {
+		if ($chatSession && e.key === 'Escape') close();
+	}}
+/>
+
 {#if $chatSession}
 	<!-- Sized to the visual viewport so the input bar hugs the keyboard (no gap / focus jump). -->
 	<div
-		class="fixed right-0 left-0 z-50 flex flex-col"
+		bind:this={sheetEl}
+		role="dialog"
+		aria-modal="true"
+		aria-label="Assistant"
+		tabindex="-1"
+		class="fixed right-0 left-0 z-50 flex flex-col outline-none"
 		style="top: {vvH ? vvTop + 'px' : '0'}; height: {vvH
 			? vvH + 'px'
 			: '100dvh'}; background: var(--color-bg, #0a0a0c);"

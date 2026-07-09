@@ -48,6 +48,7 @@
 	);
 	function applyWhatIf() {
 		if (whatIfInput === '' || !Number.isFinite(Number(whatIfInput))) return;
+		// eslint-disable-next-line svelte/prefer-svelte-reactivity -- local: built, serialized into the goto URL, discarded
 		const p = new URLSearchParams();
 		p.set('window', String(data.windowDays));
 		if (data.target) p.set('target', data.target);
@@ -88,6 +89,7 @@
 	}
 
 	function setWindow(days: number) {
+		// eslint-disable-next-line svelte/prefer-svelte-reactivity -- local: built, serialized into the goto URL, discarded
 		const p = new URLSearchParams();
 		p.set('window', String(days));
 		if (data.target) p.set('target', data.target);
@@ -97,6 +99,7 @@
 		const v = (e.currentTarget as HTMLInputElement).value;
 		// Navigate on clear too — dropping ?target removes the custom projection
 		// (otherwise "reset" in the picker appeared not to take effect).
+		// eslint-disable-next-line svelte/prefer-svelte-reactivity -- local: built, serialized into the goto URL, discarded
 		const p = new URLSearchParams();
 		p.set('window', String(data.windowDays));
 		if (v) p.set('target', v);

@@ -40,6 +40,7 @@
 	</p>
 
 	<article class="prose-report card mt-4 p-5 text-sm leading-relaxed">
+		<!-- eslint-disable-next-line svelte/no-at-html-tags -- sanitized server-side (marked + sanitize-html allowlist in +page.server.ts) -->
 		{@html data.html}
 	</article>
 </main>

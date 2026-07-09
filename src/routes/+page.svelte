@@ -29,6 +29,7 @@
 	// Default a new schedule to the next round hour (HH:00, local) so the time field
 	// starts somewhere sensible for a "dinner later" plan.
 	function defaultTime(): string {
+		// eslint-disable-next-line svelte/prefer-svelte-reactivity -- local: built, mutated, formatted in one call
 		const d = new Date();
 		d.setHours(d.getHours() + 1, 0, 0, 0);
 		return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
@@ -36,36 +37,73 @@
 	// "HH:MM" (local, today) → ISO instant for the API.
 	function timeToISO(hhmm: string): string {
 		const [h, m] = hhmm.split(':').map(Number);
+		// eslint-disable-next-line svelte/prefer-svelte-reactivity -- local: built, mutated, serialized to ISO in one call
 		const d = new Date();
 		d.setHours(h, m, 0, 0);
 		return d.toISOString();
+	}
+
+	// One in-flight guard for every quick mutating action on this page — a
+	// double-tap would race two POSTs before location.reload() lands (double-log).
+	// Stays set on success (the reload replaces the page); clears on network error.
+	let pendingKey = $state<string | null>(null);
+	async function quickAdd(foodId: string) {
+		if (pendingKey) return;
+		pendingKey = `quick:${foodId}`;
+		try {
+			await fetch('/api/log', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ foodId, servings: 1 })
+			});
+			location.reload();
+		} catch {
+			pendingKey = null;
+		}
 	}
 
 	// Quick-add scheduling: tapping a tile's clock opens one shared time row.
 	let schedulingQuick = $state<{ foodId: string; name: string } | null>(null);
 	let quickTime = $state('');
 	async function scheduleQuick() {
-		if (!schedulingQuick) return;
-		await fetch('/api/planned', {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({
-				foodId: schedulingQuick.foodId,
-				servings: 1,
-				scheduledAt: timeToISO(quickTime)
-			})
-		});
-		schedulingQuick = null;
-		location.reload();
+		if (!schedulingQuick || pendingKey) return;
+		pendingKey = 'schedule';
+		try {
+			await fetch('/api/planned', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					foodId: schedulingQuick.foodId,
+					servings: 1,
+					scheduledAt: timeToISO(quickTime)
+				})
+			});
+			schedulingQuick = null;
+			location.reload();
+		} catch {
+			pendingKey = null;
+		}
 	}
 
 	async function confirmPlanned(id: string) {
-		await fetch(`/api/planned/${id}`, { method: 'POST' });
-		location.reload();
+		if (pendingKey) return;
+		pendingKey = `confirm:${id}`;
+		try {
+			await fetch(`/api/planned/${id}`, { method: 'POST' });
+			location.reload();
+		} catch {
+			pendingKey = null;
+		}
 	}
 	async function removePlanned(id: string) {
-		await fetch(`/api/planned/${id}`, { method: 'DELETE' });
-		location.reload();
+		if (pendingKey) return;
+		pendingKey = `remove:${id}`;
+		try {
+			await fetch(`/api/planned/${id}`, { method: 'DELETE' });
+			location.reload();
+		} catch {
+			pendingKey = null;
+		}
 	}
 
 	// Whether the calorie ring and protein bar lead with what's left vs. consumed.
@@ -188,15 +226,9 @@
 			{#each data.quickAddItems as q (q.id)}
 				<div class="card-sm relative shrink-0 transition hover:bg-white/10">
 					<button
-						class="px-4 py-3 pr-9 text-left active:scale-95"
-						onclick={async () => {
-							await fetch('/api/log', {
-								method: 'POST',
-								headers: { 'Content-Type': 'application/json' },
-								body: JSON.stringify({ foodId: q.foodId, servings: 1 })
-							});
-							location.reload();
-						}}
+						class="px-4 py-3 pr-9 text-left active:scale-95 disabled:opacity-50"
+						disabled={pendingKey === `quick:${q.foodId}`}
+						onclick={() => quickAdd(q.foodId)}
 					>
 						<div class="text-sm font-semibold text-white">{q.name}</div>
 						<div class="text-xs" style="color: var(--color-text-subtle);">
@@ -237,7 +269,8 @@
 					aria-label="Scheduled time"
 				/>
 				<button
-					class="rounded-md bg-white/10 px-3 py-1 text-sm font-semibold text-white hover:bg-white/20"
+					class="rounded-md bg-white/10 px-3 py-1 text-sm font-semibold text-white hover:bg-white/20 disabled:opacity-50"
+					disabled={pendingKey === 'schedule'}
 					onclick={scheduleQuick}>Schedule</button
 				>
 				<button
@@ -268,15 +301,17 @@
 						</div>
 					</div>
 					<button
-						class="rounded-lg px-3 py-1.5 text-sm font-semibold text-white transition hover:brightness-125"
+						class="rounded-lg px-3 py-1.5 text-sm font-semibold text-white transition hover:brightness-125 disabled:opacity-50"
 						style="background: rgba(74,222,128,0.18); color: #4ade80;"
+						disabled={pendingKey === `confirm:${p.id}`}
 						onclick={() => confirmPlanned(p.id)}
 					>
 						Confirm
 					</button>
 					<button
-						class="rounded-lg px-2.5 py-1.5 text-sm text-white/60 transition hover:text-white"
+						class="rounded-lg px-2.5 py-1.5 text-sm text-white/60 transition hover:text-white disabled:opacity-50"
 						aria-label="Remove planned {p.foodName}"
+						disabled={pendingKey === `remove:${p.id}`}
 						onclick={() => removePlanned(p.id)}
 					>
 						✕

@@ -59,6 +59,7 @@
 
 	let { open = $bindable(false) }: { open: boolean } = $props();
 	let mode = $state<Mode>('browse');
+	let sheetEl = $state<HTMLElement | undefined>(undefined);
 
 	let history = $state<HistoryFood[]>([]);
 	let loading = $state(false);
@@ -79,6 +80,7 @@
 	}
 	// The chosen HH:MM resolved to a Date today, and whether it's in the future.
 	let logWhen = $derived.by(() => {
+		// eslint-disable-next-line svelte/prefer-svelte-reactivity -- mutated only inside this derived run, read-only after
 		const d = new Date();
 		if (scheduleAt) {
 			const [h, m] = scheduleAt.split(':').map(Number);
@@ -142,14 +144,21 @@
 		};
 	});
 
-	// Load history the first time the sheet opens; refresh on each open so newly
-	// logged foods (e.g. just added via Claude) show up. Also re-default the log
-	// time to "now" on each open — the component is mounted once (in the layout),
-	// so a load-time initializer would go stale across a long-lived session.
+	// Load history + re-default the log time to "now" on each open — the component
+	// is mounted once (in the layout), so a load-time initializer would go stale.
+	// Fires on false→true ONLY (plain non-reactive wasOpen): reading `mode` here
+	// would re-run on every mode hop, clobbering a user-picked schedule time and
+	// re-fetching history (which only feeds the browse list).
+	let wasOpen = false;
+	let closeTimer: ReturnType<typeof setTimeout> | undefined;
 	$effect(() => {
-		if (!open) return;
-		scheduleAt = hhmm(new Date());
-		if (mode !== 'barcode' && mode !== 'ai') loadHistory();
+		if (open && !wasOpen) {
+			clearTimeout(closeTimer); // reopen during the close animation keeps the live session
+			scheduleAt = hhmm(new Date());
+			loadHistory();
+			sheetEl?.focus();
+		}
+		wasOpen = open;
 	});
 
 	async function loadHistory() {
@@ -209,7 +218,10 @@
 	function close() {
 		open = false;
 		// reset after the sheet animates out — discards any unconfirmed meal.
-		setTimeout(() => {
+		// Kept + cleared on (re)open so a close→reopen inside the 200ms animation
+		// can't wipe a live session (e.g. a staged multi-item meal).
+		clearTimeout(closeTimer);
+		closeTimer = setTimeout(() => {
 			mode = 'browse';
 			query = '';
 			selected = null;
@@ -429,6 +441,7 @@
 		if (meal.length === 0 || logging) return;
 		// Recompute fresh at click time — the derived values can go stale if the
 		// sheet sat open past the chosen minute.
+		// eslint-disable-next-line svelte/prefer-svelte-reactivity -- local: built, mutated, serialized to ISO in one call
 		const when = new Date();
 		if (scheduleAt) {
 			const [h, m] = scheduleAt.split(':').map(Number);
@@ -468,18 +481,28 @@
 	}
 </script>
 
+<!-- Escape closes from anywhere while open (the backdrop is never focused, so a
+     handler there would be dead code). Inner inputs stopPropagation their own Escape. -->
+<svelte:window
+	onkeydown={(e) => {
+		if (open && e.key === 'Escape') close();
+	}}
+/>
+
 {#if open}
 	<div
 		class="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
 		onclick={close}
-		role="button"
-		tabindex="-1"
-		aria-label="Close"
-		onkeydown={(e) => e.key === 'Escape' && close()}
+		aria-hidden="true"
 	></div>
 
 	<div
-		class="fixed right-0 bottom-0 left-0 z-50 flex flex-col border-t"
+		bind:this={sheetEl}
+		role="dialog"
+		aria-modal="true"
+		aria-label="Log food"
+		tabindex="-1"
+		class="fixed right-0 bottom-0 left-0 z-50 flex flex-col border-t outline-none"
 		class:rounded-t-3xl={!browseExpanded}
 		style="
 			background: var(--color-bg-elevated);
@@ -712,7 +735,10 @@
 							class="w-full rounded-lg bg-white/5 px-3 py-2 text-xl font-bold text-white outline-none focus:bg-white/10"
 							onkeydown={(e) => {
 								if (e.key === 'Enter') saveName();
-								if (e.key === 'Escape') editingName = false;
+								if (e.key === 'Escape') {
+									e.stopPropagation(); // cancel the edit only — window Escape closes the sheet
+									editingName = false;
+								}
 							}}
 						/>
 						<div class="mt-2 flex justify-end gap-2">
