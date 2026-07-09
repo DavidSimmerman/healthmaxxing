@@ -1,119 +1,52 @@
-# 🌙 Nightshift log — AI chat feature
+# 🌙 Nightshift log — deep review + fixes (2026-07-09 overnight) — ✅ DONE
 
-Branch: `feat/ai-chat` (worktree `.claude/worktrees/ai-chat`). NOT pushed (Auto Deploy is on;
-leaving for morning review/merge).
+Branch: **`feat/deep-review`** (worktree `.claude/worktrees/deep-review`). **NOT pushed**
+(Auto Deploy is on; merging + pushing main deploys — your call in the morning).
+Full fix report + feature ideas are in the chat message; this file is the on-disk summary.
 
-## Task
+## What happened
 
-Turn the AI food feature into a **full streaming chat**:
+7 read-only review agents swept the codebase (db, domain logic, integrations,
+auth/security, API correctness, UI, sidecar/deploy) → findings triaged → fixed in
+batches by 4 parallel implementation agents + me → verified centrally → codex-reviewed
+(2 rounds, 3 findings, all fixed).
 
-- Talk to it, assistant text **streamed** back.
-- Multi-turn conversation with context ("going to Costco, what fits my macros today?").
-- Send **barcode/label photos** mid-conversation; it reads + sums them (e.g. a recipe).
-- On the user's **green light**, it **tracks food / adds a recipe / schedules for later**.
-- Every action shows a **confirmation card in the UI with the final macros** before it commits.
+## The 10 commits (oldest first)
 
-Plus standing rule captured: **all Coolify config must be zero-downtime** (see MEMORY.md + DEPLOY.md).
+- `f3cf122` chore: prettier across repo; ignore ios/ + keycloak/
+- `942c993` fix: food input hardening, deficit window off-by-one, O(n·m) hot loops, day-page 404s
+- `6120c27` fix: migration advisory lock, oauth code purge, categories search, pinned dev PG
+- `20d210b` fix: sidecar abort+restart, non-root image, MCP read-only token scope, deploy hygiene
+- `d100630` fix: capture-sheet state wipes, chat reveal truncation, double-tap logging, sheet a11y
+- `cf3b217` fix: route validation via shared lib, uuid guards, ingest dedupe, parallel loaders
+- `22266de` fix: integration resilience — token rotation guard, loud failures, timeouts, encrypted tokens
+- `23826b6` test: repair two e2e suites (broken on main: renamed label + fresh-DB semantics)
+- `c1d8120` fix: codex-review round — garbage amount 400s, quick actions surface failures
 
-## Design decisions (autonomous)
+## Verification evidence (all on the final tree)
 
-- **Streaming = SSE** over `fetch` POST (need POST for history+images; EventSource can't POST).
-- **Conversation state lives in the client** (browser holds message history, sends each turn).
-  No DB table for chats — YAGNI for v1. Revisit if persistence is wanted.
-- **Green-light gate is structural, not trust-based:** the chat sidecar gets **read-only**
-  MCP tools (get_nutrition, get_day_log, list_foods, lookup_barcode, lookup_fdc) + a custom
-  **`propose_action`** tool. It has **NO write tools**, so it _cannot_ mutate anything itself.
-  When it calls `propose_action`, the sidecar emits an SSE `action_proposed` event; the UI
-  renders a confirmation card (final macros) with Confirm/Cancel. Only on Confirm does the
-  **app** execute the write via existing `createAndLogFood`/`prepFood` (track/recipe/schedule).
-- **Sidecar reached via its Coolify proxy domain + AGENT_SECRET bearer** (zero-downtime; no
-  custom container name / host port map). `/health` is the only unauthenticated route.
+- `pnpm check` 0 errors · `pnpm lint` green · `vitest` ✓ · `pnpm build` ✓
+- 10/10 standalone selfchecks ✓ · agent `npm run check` ✓
+- Playwright e2e **7/7** (keycloak-login excluded — needs the compose Keycloak, not running here)
+- Live pokes vs preview: negative/NaN/string macros→400, servings 0→400, string amount→400,
+  bogus uuid→404, past scheduleAt→400, /api/today 200, valid paths unchanged
+- Docker image builds (Coolify-style build args) and **boots as `node`**, migrations apply,
+  /api/health 200; failed-DB boot exits the container (healthcheck gate works)
+- codex review: round 1 → 2 P2s (fixed + live-verified), round 2 → 1 P3 (fixed); clean logic after
 
-## Status
+## Morning checklist
 
-- [x] Workspace + memory rule + log
-- [x] Research: Agent SDK streaming (partial messages, custom tool, multi-turn via `resume`)
-- [x] Explore: app internals for track/recipe/schedule shapes + entry point
-- [x] Sidecar `POST /chat` — SSE stream (session/delta/action/done/error), read tools + propose_action
-- [x] App `POST /api/chat` — SSE proxy (session-gated, forwards client abort)
-- [x] App `POST /api/chat/confirm` — execute confirmed proposal, return authoritative macros
-- [x] Chat UI (`ChatSheet.svelte`) + streaming + image attach + confirmation cards + floating launcher
-- [x] Verify: typecheck (0 err) + build ✓ + Playwright against mock sidecar + REAL Postgres write ✓
-- [x] Update DEPLOY.md / agent README for zero-downtime + /chat env
-- [x] codex review — 4 rounds, 11 findings (2 correctness + 9 hardening), ALL fixed + verified
+1. Skim the branch: `git -C .claude/worktrees/deep-review log --oneline main..HEAD`
+2. Merge when happy: `git merge feat/deep-review` on main, push → Coolify deploys.
+3. **New optional env on Coolify (app resource):** `MCP_SERVICE_TOKEN_RO` + `MCP_TOKEN_RO`
+   (read-only MCP scope for chat — falls back to the existing tokens until set, nothing breaks).
+4. Nothing else changes operationally. Fitbit/Dexcom tokens encrypt themselves on next rotation.
 
-## ✅ DONE. Final state
+## Deliberately NOT done (calibrated, revisit when it matters)
 
-8 commits on `feat/ai-chat`. typecheck 0 errors, prod build ✓, streaming/actions/validation all
-verified against real Postgres + mock sidecar. Review converged (round 4 = deep recipe edge cases,
-handled). Not pushed/merged — morning task.
-
-## Codex round 4 — addressed + verified
-
-- confirm rejects non-numeric/missing ingredient macros (`reqNum`) instead of zeroing → a recipe
-  can't be saved with macros differing from the approved card (verified: string/missing → 400).
-- recipes attach fiber per-ingredient (recipe nutrients sum from ingredients) — verified persist.
-
-## Codex findings — all addressed
-
-- P1 (commit ≠ card): confirm now logs the **displayed** proposal macros as 1 serving. Proved with
-  a divergent-payload test (payload said BOGUS/999cal/servings:2 → logged row was 150/5/27/3, srv=1).
-- P1 (servings double-count): same fix — servings forced to 1, macros are the shown totals.
-- P2 (stale dashboard): `invalidateAll()` after track/schedule + `/api/chat/confirm` added to the
-  iOS widget reload hook.
-- P2 (zod peer): bumped agent `zod` to ^4 (SDK peer-deps zod@^4); tool constructs verified.
-
-## Codex round 2 — all addressed + verified (400s/200 via curl)
-
-- schedule w/o `scheduleAt` → 400 (was: silently logged now).
-- negative macros → 400; recipe requires ingredients + `makesServings > 0`.
-- recipe card previews per-serving macros (ingredients ÷ makesServings) = what's saved.
-- sidecar aborts the Claude run on SSE client disconnect (AbortController on `res` close).
-
-## Codex round 3 — all addressed + verified
-
-- Proposals carry a `nutrients` bag (fiber etc.); confirm → prepFood's sanitizeNutrients keeps
-  net-carb/bolus accuracy. Verified: fiberG 6 → bolusable 21 of 27 carbs; food row stores it.
-- scheduleAt validated (exported `parseScheduleAt`) BEFORE any write → invalid/past = 400 with
-  ZERO orphan food rows (verified).
-- Schedule cards show the resolved time so a wrong offset is catchable before confirm.
-- Removed a duplicate nutrient sanitizer — reuse the app's canonical `sanitizeNutrients`.
-
-Total: 3 review rounds, 9 findings (2 P1 + 7 P2) all fixed + verified. A final round is running.
-
-## Deploy status (for morning)
-
-- Chat is on `feat/ai-chat`, NOT pushed/merged. The live app is still the describe/report build
-  the user was mid-deploying. Morning path: (1) finish sidecar Coolify setup using the NEW
-  zero-downtime approach (give sidecar a **domain**, set app `AGENT_URL` to it — no custom
-  container name); (2) merge `feat/ai-chat` → main to ship chat too; (3) set `BODY_SIZE_LIMIT=10M`
-  on the app for photo uploads.
-- The sidecar↔Claude live path needs the real `CLAUDE_CODE_OAUTH_TOKEN` on Coolify to exercise;
-  everything app-side is verified here against a mock sidecar + real Postgres.
-
-## Verification evidence
-
-- Playwright drove: open chat → send → streaming assistant text → `Track now` card → Confirm →
-  `✓ Logged` + authoritative macros. Screenshots in `/tmp/hm-verify/*.png` (ephemeral).
-- Real DB writes confirmed via psql: track (pending=f), schedule (pending=t), recipe (per-serving
-  = sum/makesServings = 125/6.5/19.5/2.5). Bad kind → 400.
-- Ran against a mock sidecar (`/tmp/hm-verify/mock-agent.mjs`) emitting the real SSE protocol —
-  no Claude token needed. The sidecar↔Claude path is verified by construction/boot only (needs the
-  Max token on Coolify to exercise live).
-- **Streaming is incremental** (not buffered): `curl -N` through the app proxy showed
-  `event: session` then `delta` events arriving at ~40ms spacing (matching the mock cadence).
-  Confirms adapter-node passes the SSE ReadableStream straight through token-by-token.
-
-## How to run / verify
-
-- App dev: `pnpm dev` (needs Postgres: `pnpm db:start` via docker, then `pnpm db:push`).
-- Sidecar local: `cd agent && AGENT_SECRET=x CLAUDE_CODE_OAUTH_TOKEN=x node server.mjs`.
-- Sidecar self-check: `cd agent && npm run check`.
-- Playwright: mock the sidecar with a tiny local SSE stub so the chat UI + confirm flow can be
-  driven without a real Claude token.
-
-## Resume pointer
-
-If compacted: re-read this file + the Task above. Continue at the first unchecked box.
-Core novel piece is the sidecar `/chat` SSE + `propose_action`; everything else reuses
-existing food logic. Don't restart — the food describe/report feature already shipped on `main`.
+- daily_log stored local-date column + index (real seq scans, but ~5k rows/yr and APP_TZ
+  is env-driven → backfill/trigger carries rolling-deploy corruption risk; not worth it yet)
+- tz-day SQL helper consolidation (12 hand-copies across 7 files — clean refactor for a
+  calm daytime session, not a 3am one); pg_trgm name index / barcode canonical column;
+  foods/history rollup; oauth_tokens purge; svelte.config csrf deprecation migration;
+  goals.ts streak-loop refactor. Details + reasoning in the chat report.
