@@ -43,67 +43,65 @@
 		return d.toISOString();
 	}
 
-	// One in-flight guard for every quick mutating action on this page — a
-	// double-tap would race two POSTs before location.reload() lands (double-log).
-	// Stays set on success (the reload replaces the page); clears on network error.
+	// One in-flight guard + one error line for every quick mutating action here.
+	// The guard: a double-tap would race two POSTs before location.reload() lands
+	// (double-log). The ok-check: a 400 (e.g. a past schedule time) used to clear
+	// state and reload as fake success. pendingKey stays set on success (the
+	// reload replaces the page) and clears on failure so a retry works.
 	let pendingKey = $state<string | null>(null);
-	async function quickAdd(foodId: string) {
-		if (pendingKey) return;
-		pendingKey = `quick:${foodId}`;
+	let actionError = $state<string | null>(null);
+	async function act(key: string, url: string, init?: RequestInit): Promise<boolean> {
+		if (pendingKey) return false;
+		pendingKey = key;
+		actionError = null;
 		try {
-			await fetch('/api/log', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ foodId, servings: 1 })
-			});
-			location.reload();
+			const res = await fetch(url, init);
+			if (res.ok) return true;
+			actionError = (await res.json().catch(() => null))?.message ?? `Failed (${res.status})`;
 		} catch {
-			pendingKey = null;
+			actionError = 'Network error — try again.';
 		}
+		pendingKey = null;
+		return false;
+	}
+	const postJson = (body: unknown): RequestInit => ({
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(body)
+	});
+
+	async function quickAdd(foodId: string) {
+		if (await act(`quick:${foodId}`, '/api/log', postJson({ foodId, servings: 1 })))
+			location.reload();
 	}
 
 	// Quick-add scheduling: tapping a tile's clock opens one shared time row.
+	// Kept open on failure so the user can fix the time (server names the reason).
 	let schedulingQuick = $state<{ foodId: string; name: string } | null>(null);
 	let quickTime = $state('');
 	async function scheduleQuick() {
-		if (!schedulingQuick || pendingKey) return;
-		pendingKey = 'schedule';
-		try {
-			await fetch('/api/planned', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					foodId: schedulingQuick.foodId,
-					servings: 1,
-					scheduledAt: timeToISO(quickTime)
-				})
-			});
+		if (!schedulingQuick) return;
+		// Guard before timeToISO — a cleared input would throw RangeError outside act().
+		if (!/^\d{2}:\d{2}$/.test(quickTime)) {
+			actionError = 'Pick a time first.';
+			return;
+		}
+		const body = postJson({
+			foodId: schedulingQuick.foodId,
+			servings: 1,
+			scheduledAt: timeToISO(quickTime)
+		});
+		if (await act('schedule', '/api/planned', body)) {
 			schedulingQuick = null;
 			location.reload();
-		} catch {
-			pendingKey = null;
 		}
 	}
 
 	async function confirmPlanned(id: string) {
-		if (pendingKey) return;
-		pendingKey = `confirm:${id}`;
-		try {
-			await fetch(`/api/planned/${id}`, { method: 'POST' });
-			location.reload();
-		} catch {
-			pendingKey = null;
-		}
+		if (await act(`confirm:${id}`, `/api/planned/${id}`, { method: 'POST' })) location.reload();
 	}
 	async function removePlanned(id: string) {
-		if (pendingKey) return;
-		pendingKey = `remove:${id}`;
-		try {
-			await fetch(`/api/planned/${id}`, { method: 'DELETE' });
-			location.reload();
-		} catch {
-			pendingKey = null;
-		}
+		if (await act(`remove:${id}`, `/api/planned/${id}`, { method: 'DELETE' })) location.reload();
 	}
 
 	// Whether the calorie ring and protein bar lead with what's left vs. consumed.
@@ -280,6 +278,10 @@
 				>
 			</div>
 		{/if}
+	{/if}
+
+	{#if actionError}
+		<p class="mt-2 text-sm text-red-400" role="alert">{actionError}</p>
 	{/if}
 
 	{#if data.plannedMeals.length > 0}

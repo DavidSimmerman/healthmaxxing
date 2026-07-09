@@ -320,6 +320,9 @@ export function resolveServings(
 ): { servings: number; amount: number | null; unit: Unit | null } {
 	// Prefer an explicit amount+unit (e.g. grams); fall back to a servings multiplier.
 	const hasAmount = typeof input.amount === 'number' && Number.isFinite(input.amount);
+	// Present-but-garbage amount (a string, NaN) must reject, not silently fall
+	// through to the 1-serving default below.
+	if (input.amount != null && !hasAmount) throw new FoodInputError('amount must be a number.');
 	const unit: Unit = (input.unit as Unit) ?? 'serving';
 	if (hasAmount) {
 		if (!UNITS.includes(unit)) throw new FoodInputError(`Unknown unit "${input.unit}".`);
