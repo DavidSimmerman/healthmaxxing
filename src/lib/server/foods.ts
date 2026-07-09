@@ -1,6 +1,6 @@
 import { db } from '$lib/server/db';
 import { foods, dailyLog, quickAdds, type Ingredient } from '$lib/server/db/schema';
-import { and, desc, eq, ilike, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, ilike, isNull, or, sql } from 'drizzle-orm';
 import { canonicalBarcode } from '$lib/barcode';
 import { mergeNutrients, sanitizeNutrients, scaleNutrients, sumNutrients } from '$lib/nutrients';
 import type { Nutrients } from '$lib/nutrients';
@@ -530,8 +530,13 @@ export type FoodSearchResult = Pick<
 // plus the derived per-serving bolusable carbs alongside the total.
 export async function searchFoods(query?: string, limit = 25): Promise<FoodSearchResult[]> {
 	const q = query?.trim();
+	// Match categories too — they're populated on every OFF import precisely to
+	// widen search coverage (see schema comment) but were never actually searched.
 	const where = q
-		? and(isNull(foods.archivedAt), ilike(foods.name, `%${q}%`))
+		? and(
+				isNull(foods.archivedAt),
+				or(ilike(foods.name, `%${q}%`), ilike(foods.categories, `%${q}%`))
+			)
 		: isNull(foods.archivedAt);
 	const rows = await db
 		.select({

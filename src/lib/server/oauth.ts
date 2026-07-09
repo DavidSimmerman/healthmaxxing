@@ -1,6 +1,6 @@
 import { db } from '$lib/server/db';
 import { oauthClients, oauthCodes, oauthTokens } from '$lib/server/db/schema';
-import { and, eq, gt } from 'drizzle-orm';
+import { and, eq, gt, lt } from 'drizzle-orm';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { env } from '$env/dynamic/private';
 
@@ -80,6 +80,9 @@ export async function createAuthCode(input: {
 	resource?: string | null;
 }): Promise<string> {
 	const code = randomToken(32);
+	// Opportunistic hygiene: nothing else ever deletes expired codes (they're
+	// 10-minute-TTL rows), and oauth_codes_expires_idx serves exactly this predicate.
+	await db.delete(oauthCodes).where(lt(oauthCodes.expiresAt, new Date()));
 	await db.insert(oauthCodes).values({
 		code: sha256(code),
 		clientId: input.clientId,
