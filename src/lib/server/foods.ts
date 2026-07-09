@@ -15,7 +15,19 @@ export class FoodInputError extends Error {}
 type FoodRow = typeof foods.$inferSelect;
 type LogRow = typeof dailyLog.$inferSelect;
 
-const posNum = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+// Finite, NON-NEGATIVE number or 0 — ingredient macros are sanitized, not rejected.
+const posNum = (v: unknown): number =>
+	typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0;
+
+// Direct per-serving macros come from untrusted callers (REST bodies, AI-resolved
+// JSON, MCP args) and become the food's PERMANENT catalog values — reject garbage
+// instead of storing it. undefined/null = "not provided" (falls back to existing).
+const macroOrThrow = (v: unknown, name: string): number | undefined => {
+	if (v == null) return undefined;
+	if (typeof v !== 'number' || !Number.isFinite(v) || v < 0)
+		throw new FoodInputError(`${name} must be a non-negative number.`);
+	return v;
+};
 
 // Find a cataloged food by barcode, matching on the CANONICAL form so a UPC-A
 // (12-digit) scan resolves to the same row a 13-digit EAN-13 override was saved
@@ -138,6 +150,19 @@ export async function prepFood(input: PrepFoodInput): Promise<FoodRow> {
 
 	const makesServings = input.makesServings ?? existing?.makesServings ?? 1;
 	const totalGrams = input.totalGrams ?? existing?.totalGrams ?? null;
+	if (!(typeof makesServings === 'number' && Number.isFinite(makesServings) && makesServings > 0))
+		throw new FoodInputError('makesServings must be a positive number.');
+	if (totalGrams != null && !(Number.isFinite(totalGrams) && totalGrams > 0))
+		throw new FoodInputError('totalGrams must be a positive number.');
+	if (
+		input.servingGrams != null &&
+		!(
+			typeof input.servingGrams === 'number' &&
+			Number.isFinite(input.servingGrams) &&
+			input.servingGrams > 0
+		)
+	)
+		throw new FoodInputError('servingGrams must be a positive number.');
 
 	if (!existing) {
 		if (!input.name?.trim()) throw new FoodInputError('name required to create a food');
@@ -150,10 +175,10 @@ export async function prepFood(input: PrepFoodInput): Promise<FoodRow> {
 	const macros = isRecipe
 		? perServingFromIngredients(ingredients, makesServings)
 		: {
-				calories: input.calories ?? existing?.calories ?? 0,
-				proteinG: input.proteinG ?? existing?.proteinG ?? 0,
-				carbsG: input.carbsG ?? existing?.carbsG ?? 0,
-				fatG: input.fatG ?? existing?.fatG ?? 0,
+				calories: macroOrThrow(input.calories, 'calories') ?? existing?.calories ?? 0,
+				proteinG: macroOrThrow(input.proteinG, 'proteinG') ?? existing?.proteinG ?? 0,
+				carbsG: macroOrThrow(input.carbsG, 'carbsG') ?? existing?.carbsG ?? 0,
+				fatG: macroOrThrow(input.fatG, 'fatG') ?? existing?.fatG ?? 0,
 				nutrients:
 					input.nutrients !== undefined
 						? sanitizeNutrients(input.nutrients)
@@ -177,7 +202,7 @@ export async function prepFood(input: PrepFoodInput): Promise<FoodRow> {
 			: (existing?.sourcePayload ?? null);
 
 	const values = {
-		name: input.name?.trim() ?? existing!.name,
+		name: input.name?.trim() || existing!.name,
 		brand: input.brand !== undefined ? (input.brand ?? null) : (existing?.brand ?? null),
 		// Store the canonical (GTIN-14) barcode on NEW rows so future scans in either
 		// format match. Never rewrite an EXISTING row's barcode: with legacy
@@ -285,6 +310,46 @@ function parseLogDate(date: string | null | undefined): Date | undefined {
 	return d;
 }
 
+// Resolve "how much was eaten" from an explicit amount+unit (preferred) or a
+// servings multiplier. Shared by createAndLogFood and the /api/log + /api/planned
+// routes so quantity validation can't drift between them. Absent → 1 serving;
+// present-but-garbage (0, negative, NaN) → FoodInputError.
+export function resolveServings(
+	food: Pick<FoodRow, 'name' | 'servingGrams'>,
+	input: { amount?: number | null; unit?: string | null; servings?: number | null }
+): { servings: number; amount: number | null; unit: Unit | null } {
+	// Prefer an explicit amount+unit (e.g. grams); fall back to a servings multiplier.
+	const hasAmount = typeof input.amount === 'number' && Number.isFinite(input.amount);
+	const unit: Unit = (input.unit as Unit) ?? 'serving';
+	if (hasAmount) {
+		if (!UNITS.includes(unit)) throw new FoodInputError(`Unknown unit "${input.unit}".`);
+		if ((input.amount as number) <= 0) throw new FoodInputError('amount must be greater than 0.');
+		// Gram/volume units need a serving weight to convert; without one, toServings
+		// silently treats the amount as servings (188g → 188 servings). Reject instead.
+		if (unit !== 'serving' && !(food.servingGrams && food.servingGrams > 0)) {
+			throw new FoodInputError(`Cannot log "${food.name}" by ${unit}: it has no serving weight.`);
+		}
+	}
+	let servings: number;
+	if (hasAmount) servings = toServings(input.amount as number, unit, food.servingGrams);
+	else if (input.servings == null) servings = 1;
+	else if (
+		typeof input.servings === 'number' &&
+		Number.isFinite(input.servings) &&
+		input.servings > 0
+	)
+		servings = input.servings;
+	else throw new FoodInputError('servings must be a positive number.');
+	if (!Number.isFinite(servings) || servings <= 0) {
+		throw new FoodInputError('Could not resolve a positive amount to log.');
+	}
+	return {
+		servings,
+		amount: hasAmount ? (input.amount as number) : null,
+		unit: hasAmount ? unit : null
+	};
+}
+
 // Upsert a food (via prepFood) and optionally log it to today. Shared by the REST
 // endpoint (POST /api/foods) and the MCP `log_food` tool so both behave identically.
 export async function createAndLogFood(
@@ -294,26 +359,7 @@ export async function createAndLogFood(
 
 	let logEntry: LogRow | null = null;
 	if (input.logToday) {
-		// Prefer an explicit amount+unit (e.g. grams); fall back to a servings multiplier.
-		const hasAmount = typeof input.amount === 'number' && Number.isFinite(input.amount);
-		const unit: Unit = (input.unit as Unit) ?? 'serving';
-		if (hasAmount) {
-			if (!UNITS.includes(unit)) throw new FoodInputError(`Unknown unit "${input.unit}".`);
-			if ((input.amount as number) <= 0) throw new FoodInputError('amount must be greater than 0.');
-			// Gram/volume units need a serving weight to convert; without one, toServings
-			// silently treats the amount as servings (188g → 188 servings). Reject instead.
-			if (unit !== 'serving' && !(food.servingGrams && food.servingGrams > 0)) {
-				throw new FoodInputError(`Cannot log "${food.name}" by ${unit}: it has no serving weight.`);
-			}
-		}
-		const servings = hasAmount
-			? toServings(input.amount as number, unit, food.servingGrams)
-			: typeof input.servings === 'number' && Number.isFinite(input.servings) && input.servings > 0
-				? input.servings
-				: 1;
-		if (!Number.isFinite(servings) || servings <= 0) {
-			throw new FoodInputError('Could not resolve a positive amount to log.');
-		}
+		const resolved = resolveServings(food, input);
 
 		// A scheduled meal lands at its planned time as pending; otherwise an optional
 		// backfill date, else the DB default now(). scheduleAt (future) and date (past)
@@ -326,15 +372,15 @@ export async function createAndLogFood(
 			.insert(dailyLog)
 			.values({
 				foodId: food.id,
-				servings,
-				amount: hasAmount ? (input.amount as number) : null,
-				unit: hasAmount ? unit : null,
+				servings: resolved.servings,
+				amount: resolved.amount,
+				unit: resolved.unit,
 				...(loggedAt ? { loggedAt } : {}),
 				pending: scheduled != null,
-				calories: food.calories * servings,
-				proteinG: food.proteinG * servings,
-				carbsG: food.carbsG * servings,
-				fatG: food.fatG * servings
+				calories: food.calories * resolved.servings,
+				proteinG: food.proteinG * resolved.servings,
+				carbsG: food.carbsG * resolved.servings,
+				fatG: food.fatG * resolved.servings
 			})
 			.returning();
 	}

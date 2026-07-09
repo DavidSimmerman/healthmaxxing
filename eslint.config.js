@@ -37,8 +37,12 @@ export default defineConfig(
 		}
 	},
 	{
-		// Override or add rule settings here, such as:
-		// 'svelte/button-has-type': 'error'
-		rules: {}
+		rules: {
+			// Served from the domain root forever — paths.base is never set, so wrapping
+			// every href/goto in resolve() is portability noise, not safety.
+			'svelte/no-navigation-without-resolve': 'off',
+			// `any` at JSON/API boundaries is tolerated here; keep it visible as a warning.
+			'@typescript-eslint/no-explicit-any': 'warn'
+		}
 	}
 );

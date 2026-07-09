@@ -91,10 +91,15 @@ export function interpolateGaps(values: (number | null)[]): (number | null)[] {
 	const out = values.slice();
 	const known = values.flatMap((v, i) => (v == null ? [] : [i]));
 	if (known.length === 0) return out;
+	// Two-pointer walk (known is ascending): ki is the last known index < i.
+	let ki = -1;
 	for (let i = 0; i < out.length; i++) {
-		if (out[i] != null) continue;
-		const prev = [...known].reverse().find((k) => k < i);
-		const next = known.find((k) => k > i);
+		if (out[i] != null) {
+			ki++;
+			continue;
+		}
+		const prev = ki >= 0 ? known[ki] : undefined;
+		const next = ki + 1 < known.length ? known[ki + 1] : undefined;
 		if (prev !== undefined && next !== undefined) {
 			const t = (i - prev) / (next - prev);
 			out[i] = values[prev]! + t * (values[next]! - values[prev]!);

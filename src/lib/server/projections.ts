@@ -166,8 +166,10 @@ export async function bodyInsights({
 	const leanMass = trendFor(series, (w) => w.leanMassKg, anchor, today);
 
 	// Deficit-implied weight rate over the same window: avg daily deficit ÷ 7700
-	// kcal/kg. Positive deficit ⇒ losing ⇒ negative weight change.
-	const from = addDays(today, -windowDays + 1);
+	// kcal/kg. Positive deficit ⇒ losing ⇒ negative weight change. Fetch one extra
+	// day back (−windowDays, not −windowDays+1): today is excluded below, so this
+	// keeps a full windowDays of completed days — same window energyInsights uses.
+	const from = addDays(today, -windowDays);
 	const ledger = await deficitDays(from, today);
 	// Exclude today's deficit — you're not done eating, so it's an inflated
 	// partial. Today's weigh-in still counts (it's in `series` above).
