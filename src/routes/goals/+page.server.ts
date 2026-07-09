@@ -1,4 +1,4 @@
-import { buildGoalsView, dayMetricsForRange } from '$lib/server/goals';
+import { buildGoalsView } from '$lib/server/goals';
 import { todayLabel } from '$lib/server/day';
 import { weekToDate } from '$lib/period';
 import { scoreDay, weekBalances } from '$lib/score';
@@ -22,17 +22,20 @@ export async function load({ url }) {
 	}
 	if (date > today) date = today;
 
-	const view = await buildGoalsView(date);
+	// weekDayMetrics stays server-side (stripped from `view` here) — the client
+	// payload keeps its old shape.
+	const { weekDayMetrics, ...view } = await buildGoalsView(date);
 
 	// Week strip: the 7 calendar days (Sun–Sat) of the week containing `date`, each
-	// with its overall score for the day rings. Only fetch up to today; later days
-	// render as empty/dimmed.
+	// with its overall score for the day rings. Only days up to today count; later
+	// days render as empty/dimmed. buildGoalsView already computed this week's
+	// per-day metrics (same Sun–Sat range) — reuse them instead of re-querying.
 	const weekStart = weekToDate(date).from; // Sunday
 	const fetchEnd = addDays(weekStart, 6) > today ? today : addDays(weekStart, 6);
 	// Score each day with its bank/debt balance from the earlier days of the same week
 	// — exactly as the day-detail card does — so a ring in the strip matches the big
 	// number when you select that day (they used to disagree: strip plain, card banked).
-	const weekMetrics = await dayMetricsForRange(weekStart, fetchEnd);
+	const weekMetrics = weekDayMetrics.filter((m) => m.date <= fetchEnd);
 	const specsFor = await loadSpecsFor();
 	const scored = new Map(
 		weekMetrics.map((m, i) => [

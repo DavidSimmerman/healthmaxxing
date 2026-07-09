@@ -2,8 +2,9 @@ import { json, error } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { foods, dailyLog } from '$lib/server/db/schema';
 import { eq } from 'drizzle-orm';
-import { toServings, type Unit } from '$lib/units';
-import { todayLabel, APP_TZ } from '$lib/server/day';
+import type { Unit } from '$lib/units';
+import { FoodInputError, parseScheduleAt, resolveServings } from '$lib/server/foods';
+import { UUID_RE } from '$lib/uuid';
 
 // Schedule a meal for later today. Same food/serving resolution as POST /api/log,
 // but the row lands in daily_log with pending=true and loggedAt = scheduledAt — so
@@ -18,46 +19,42 @@ export async function POST({ request }) {
 		scheduledAt?: string;
 	};
 	if (!foodId) throw error(400, 'foodId required');
+	// Malformed uuid → clean 404, not a Postgres uuid-cast 500.
+	if (!UUID_RE.test(foodId)) throw error(404, 'food not found');
 
-	// scheduledAt must parse and fall on today (APP_TZ) — you schedule for later
-	// *today*, not arbitrary dates.
-	const when = scheduledAt ? new Date(scheduledAt) : null;
-	if (!when || Number.isNaN(when.getTime())) throw error(400, 'valid scheduledAt required');
-	const onDay = new Intl.DateTimeFormat('en-CA', { timeZone: APP_TZ }).format(when);
-	if (onDay !== todayLabel()) throw error(400, 'scheduledAt must be today');
+	// scheduledAt must parse to a FUTURE time later today (APP_TZ) — parseScheduleAt
+	// enforces both, matching the MCP scheduling path.
+	let when: Date | undefined;
+	try {
+		when = parseScheduleAt(scheduledAt);
+	} catch (e) {
+		if (e instanceof FoodInputError) throw error(400, e.message);
+		throw e;
+	}
+	if (!when) throw error(400, 'valid scheduledAt required');
 
 	const [food] = await db.select().from(foods).where(eq(foods.id, foodId));
 	if (!food) throw error(404, 'food not found');
 
-	if (
-		amount != null &&
-		unit &&
-		unit !== 'serving' &&
-		!(food.servingGrams && food.servingGrams > 0)
-	) {
-		throw error(400, `Cannot schedule "${food.name}" by ${unit}: it has no serving weight.`);
+	// Shared quantity resolution (rejects 0/negative/NaN amounts and servings,
+	// unknown units, gram/volume logging without a serving weight) — same rules as
+	// POST /api/log and the MCP log_food path.
+	let resolved: ReturnType<typeof resolveServings>;
+	try {
+		resolved = resolveServings(food, { amount, unit, servings: body.servings });
+	} catch (e) {
+		if (e instanceof FoodInputError) throw error(400, e.message);
+		throw e;
 	}
-
-	let servings: number;
-	let storedAmount: number | null;
-	let storedUnit: Unit | null;
-	if (amount != null && unit) {
-		servings = toServings(amount, unit, food.servingGrams);
-		storedAmount = amount;
-		storedUnit = unit;
-	} else {
-		servings = body.servings ?? 1;
-		storedAmount = null;
-		storedUnit = null;
-	}
+	const { servings } = resolved;
 
 	const [entry] = await db
 		.insert(dailyLog)
 		.values({
 			foodId,
 			servings,
-			amount: storedAmount,
-			unit: storedUnit,
+			amount: resolved.amount,
+			unit: resolved.unit,
 			loggedAt: when,
 			pending: true,
 			calories: food.calories * servings,

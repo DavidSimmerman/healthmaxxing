@@ -13,6 +13,11 @@ import { sql } from 'drizzle-orm';
 
 type MetricIn = { date: string; metric: string; value: number };
 
+// Mirrors the chunk helper in src/lib/server/tandem.ts.
+function* chunk<T>(arr: T[], size: number): Generator<T[]> {
+	for (let i = 0; i < arr.length; i += size) yield arr.slice(i, i + size);
+}
+
 function parseMetric(raw: unknown): MetricIn {
 	if (typeof raw !== 'object' || raw === null) throw error(400, 'invalid metric entry');
 	const r = raw as Record<string, unknown>;
@@ -48,10 +53,16 @@ export async function POST({ request }) {
 	const parsed = rawMetrics.map(parseMetric);
 	if (parsed.length > 2000) throw error(400, 'batch too large');
 
-	if (parsed.length) {
+	// Dedupe by the (date, metric) conflict key first: a duplicated pair in one
+	// payload would make Postgres reject the whole batched ON CONFLICT ("cannot
+	// affect row a second time"). Map keeps the last occurrence. Chunk to stay
+	// well under bind-param limits. (Pattern mirrors tandem.ts syncInsulin.)
+	const rows = [...new Map(parsed.map((m) => [`${m.date}|${m.metric}`, m])).values()];
+
+	for (const part of chunk(rows, 500)) {
 		await db
 			.insert(dailyMetrics)
-			.values(parsed)
+			.values(part)
 			.onConflictDoUpdate({
 				target: [dailyMetrics.date, dailyMetrics.metric],
 				set: { value: sql`excluded.value`, updatedAt: new Date() }

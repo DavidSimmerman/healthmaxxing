@@ -1,8 +1,28 @@
 import { json, type Handle } from '@sveltejs/kit';
+import { dev } from '$app/environment';
 import { env } from '$env/dynamic/private';
 import { authEnabled, sessionValid, SESSION_COOKIE } from '$lib/server/session';
 import { apiTokenOk } from '$lib/server/auth';
 import { keycloakEnabled } from '$lib/server/keycloak';
+
+// Fail-open tripwire. Auth is DELIBERATELY fail-open when unconfigured (dev
+// convenience), so losing the env vars in prod would silently publish every page
+// and endpoint. Shout at boot; warning only — do not refuse to start.
+if (!dev && !authEnabled()) {
+	console.error(
+		[
+			'',
+			'############################################################',
+			'# WARNING: AUTH IS DISABLED IN A PRODUCTION BUILD',
+			'#',
+			'# Neither KEYCLOAK_ISSUER nor MCP_AUTH_PASSWORD is set, so',
+			'# authEnabled() is false — EVERY page and API endpoint is',
+			'# PUBLIC. Set one of them to restore the login gate.',
+			'############################################################',
+			''
+		].join('\n')
+	);
+}
 
 // Paths that participate in the OAuth + MCP flow and need permissive CORS so
 // Claude.ai (web) can complete discovery, registration, and token exchange.

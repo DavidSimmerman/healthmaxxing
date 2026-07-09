@@ -30,9 +30,11 @@ async function withBolusable(food: typeof foods.$inferSelect) {
 //   3. No cached row → cache OFF if found; else tell the caller to enter by hand.
 export async function GET({ params }) {
 	const code = params.code;
-	const cached = await findFoodByBarcode(code);
+	// Cache (DB) and source (network) lookups are independent — run them together.
+	// Only the variant-form retry below needs the cached row.
+	const [cached, offScanned] = await Promise.all([findFoodByBarcode(code), lookupBarcode(code)]);
 
-	let off = await lookupBarcode(code);
+	let off = offScanned;
 	// `findFoodByBarcode` may have matched a UPC-A/EAN-13 variant of the scanned
 	// code. If OFF didn't resolve the scanned form, retry with the cached row's
 	// stored form so the stale-source check still runs for that exact mismatch.
@@ -93,7 +95,7 @@ export async function GET({ params }) {
 					.set({ sourceMacros: offMacros, sourceCheckedAt: new Date() })
 					.where(eq(foods.id, cached.id))
 					.returning();
-				return json({ food: updated, source: 'cache' });
+				return json({ food: await withBolusable(updated), source: 'cache' });
 			}
 			if (macrosDiffer(cached.sourceMacros, offMacros)) {
 				await db.update(foods).set({ sourceCheckedAt: new Date() }).where(eq(foods.id, cached.id));
@@ -108,7 +110,7 @@ export async function GET({ params }) {
 				});
 			}
 		}
-		return json({ food: cached, source: 'cache' });
+		return json({ food: await withBolusable(cached), source: 'cache' });
 	}
 
 	// Not cached yet — cache the OFF product (source-mirrored, baseline = OFF).
