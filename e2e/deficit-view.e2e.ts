@@ -117,8 +117,11 @@ test('deficit ledger computes resting burn from synced body comp', async ({ page
 	// Footnote confirms the BMR source is body comp, not a fallback.
 	await expect(page.getByText('Katch-McArdle')).toBeVisible();
 
-	// Range switcher works and week view lists today.
+	// Range switcher works. Week aggregates exclude today by design (see the
+	// `counted` comment in +page.svelte) and this test only seeds today — so a
+	// fresh DB correctly shows the empty state until "include today" is on.
 	await page.click('a[href="?range=w"]');
 	await expect(page.getByText('This week')).toBeVisible();
+	await page.goto('/deficit?range=w&today=1');
 	await expect(page.getByText('Daily breakdown')).toBeVisible();
 });

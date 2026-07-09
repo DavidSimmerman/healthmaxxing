@@ -87,7 +87,8 @@ test('live scanner decodes a rotated, partial-frame barcode', async ({ page }) =
 	await page.click('button[type="submit"]');
 	await page.waitForURL((u) => !u.pathname.startsWith('/login'));
 
-	await page.getByLabel('Add food').click();
+	// The launcher moved into BottomNav as "Log food" (was a floating "Add food").
+	await page.getByLabel('Log food').click();
 	await page.getByLabel('Scan barcode').click();
 
 	// Decode (wasm load + a few frames) → lookup stub → found card.
