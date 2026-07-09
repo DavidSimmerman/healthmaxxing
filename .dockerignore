@@ -1,11 +1,16 @@
 .git
 .svelte-kit
 build
-node_modules
+# any-depth: agent/node_modules in the context must never overlay the image's npm ci
+**/node_modules
 uploads
 .env
 .env.*
 !.env.example
+# in-repo Claude worktrees/tooling — gitignored, but docker doesn't read .gitignore
+.claude
+NIGHTSHIFT-LOG.md
+e2e
 playwright-report
 test-results
 *.log

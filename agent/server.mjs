@@ -1,5 +1,5 @@
-// Claude sandbox for healthmaxxing — a locked-down Claude Code container the app
-// calls over the private network. Auth is the user's Max subscription via
+// Claude sandbox for healthmaxxing — a locked-down Claude Code sidecar bundled in
+// the app container (loopback 127.0.0.1). Auth is the user's Max subscription via
 // CLAUDE_CODE_OAUTH_TOKEN (no API billing). Two jobs:
 //   POST /describe  {image?, mediaType?, text?}  -> validated food JSON (vision, NO tools)
 //   POST /report    {period?, from?, to?, instruction?} -> Claude reads/writes via the
@@ -17,8 +17,12 @@ import { parseFood } from './parseFood.mjs';
 const PORT = Number(process.env.AGENT_PORT || 8787);
 const HOST = process.env.AGENT_HOST || '127.0.0.1';
 const SECRET = process.env.AGENT_SECRET;
-const MCP_URL = process.env.APP_MCP_URL; // e.g. http://healthmaxxing:3000/mcp
-const MCP_TOKEN = process.env.MCP_TOKEN;
+const MCP_URL = process.env.APP_MCP_URL; // e.g. http://127.0.0.1:3000/mcp
+const MCP_TOKEN = process.env.MCP_TOKEN; // RW service token — /report may save_report
+// Read-only service token for /chat (the /mcp side refuses write tools on it —
+// defense in depth against prompt injection). Falls back to the RW token so
+// nothing breaks before MCP_TOKEN_RO/MCP_SERVICE_TOKEN_RO are set in Coolify.
+const MCP_TOKEN_RO = process.env.MCP_TOKEN_RO || MCP_TOKEN;
 const MAX_BODY = 20 * 1024 * 1024; // 20 MB — room for a phone photo as base64
 
 if (!SECRET) throw new Error('AGENT_SECRET is required');
@@ -74,7 +78,7 @@ function parseImage(image, mediaType) {
 	return { media_type: mediaType || 'image/jpeg', data: image };
 }
 
-async function describe({ image, mediaType, text }) {
+async function describe({ image, mediaType, text }, abortController) {
 	const img = parseImage(image, mediaType);
 	if (!img && !(typeof text === 'string' && text.trim())) {
 		const e = new Error('provide an image and/or text');
@@ -94,6 +98,7 @@ async function describe({ image, mediaType, text }) {
 	}
 	const result = await runToFinalText(gen(), {
 		systemPrompt: DESCRIBE_SYS,
+		abortController,
 		allowedTools: [],
 		canUseTool: gate(new Set()),
 		maxTurns: 1,
@@ -107,7 +112,7 @@ read the user's nutrition, body, and health-metric data for the requested period
 adherence, and then call save_report to persist a concise, useful markdown report (give it a clear title,
 the period, the date range, and a short tag). Do not log or modify foods. Reply with a one-line confirmation.`;
 
-async function report({ period, from, to, instruction }) {
+async function report({ period, from, to, instruction }, abortController) {
 	if (!MCP_URL || !MCP_TOKEN) {
 		const e = new Error('reports require APP_MCP_URL and MCP_TOKEN to be configured');
 		e.status = 503;
@@ -119,6 +124,7 @@ async function report({ period, from, to, instruction }) {
 
 	return runToFinalText(prompt, {
 		systemPrompt: REPORT_SYS,
+		abortController,
 		mcpServers: {
 			health: { type: 'http', url: MCP_URL, headers: { Authorization: `Bearer ${MCP_TOKEN}` } }
 		},
@@ -164,8 +170,8 @@ function sse(res, event, data) {
 }
 
 async function chat(req, res, { message, images, sessionId }) {
-	if (!MCP_URL || !MCP_TOKEN)
-		return send(res, 503, { error: 'chat requires APP_MCP_URL and MCP_TOKEN' });
+	if (!MCP_URL || !MCP_TOKEN_RO)
+		return send(res, 503, { error: 'chat requires APP_MCP_URL and MCP_TOKEN(_RO)' });
 	const hasText = typeof message === 'string' && message.trim().length > 0;
 	const imgs = Array.isArray(images) ? images : [];
 	if (!hasText && imgs.length === 0)
@@ -231,7 +237,9 @@ async function chat(req, res, { message, images, sessionId }) {
 		abortController,
 		tools: [], // no built-ins (Bash/Write/etc.)
 		mcpServers: {
-			health: { type: 'http', url: MCP_URL, headers: { Authorization: `Bearer ${MCP_TOKEN}` } },
+			// RO token: even if a prompt-injected label tricked the model into a write
+			// tool, /mcp itself refuses writes on this bearer.
+			health: { type: 'http', url: MCP_URL, headers: { Authorization: `Bearer ${MCP_TOKEN_RO}` } },
 			proposer
 		},
 		allowedTools: [...allowed],
@@ -320,11 +328,20 @@ const server = createServer(async (req, res) => {
 			return send(res, 401, { error: 'unauthorized' });
 
 		const body = await readJson(req);
-		if (req.url === '/describe') return send(res, 200, { food: await describe(body) });
-		if (req.url === '/report') return send(res, 200, { result: await report(body) });
+		if (req.url === '/describe' || req.url === '/report') {
+			// Abort the Claude run when the caller disconnects (the app-side fetch aborts
+			// /describe at 90s, /report at 240s) — otherwise the SDK keeps burning the
+			// Max-subscription rate limit on a response nobody reads. Same as /chat.
+			const abortController = new AbortController();
+			res.on('close', () => abortController.abort()); // no-op after a completed run
+			if (req.url === '/describe')
+				return send(res, 200, { food: await describe(body, abortController) });
+			return send(res, 200, { result: await report(body, abortController) });
+		}
 		if (req.url === '/chat') return await chat(req, res, body); // manages its own SSE response
 		return send(res, 404, { error: 'not found' });
 	} catch (e) {
+		if (res.writableEnded || res.destroyed) return; // client hung up (abort) — nobody to answer
 		const status = e?.status ?? 500;
 		if (status >= 500) console.error(e);
 		send(res, status, { error: e?.message ?? 'internal error' });

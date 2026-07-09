@@ -1,15 +1,15 @@
 # Claude sandbox (agent sidecar)
 
-A locked-down container that runs Claude Code on **your Max subscription** (no API
-billing) so the app can describe food, read nutrition labels, write reports, and power
-the in-app AI chat — without you opening a Claude chat. Every request is Bearer-gated
-with `AGENT_SECRET`; only `/health` is open.
+A locked-down sidecar **process bundled in the app's container** that runs Claude Code
+on **your Max subscription** (no API billing) so the app can describe food, read
+nutrition labels, write reports, and power the in-app AI chat — without you opening a
+Claude chat. Every request is Bearer-gated with `AGENT_SECRET`; only `/health` is open.
 
 ```
-[healthmaxxing app] --POST /describe|/report|/chat--> [this sidecar]
+[healthmaxxing app] --POST /describe|/report|/chat--> [this sidecar, 127.0.0.1:8787]
       |                                                    |  CLAUDE_CODE_OAUTH_TOKEN (your Max plan)
       |                                                    |  internet + WebSearch/WebFetch (reports)
-      └──────────── /mcp (Bearer MCP_SERVICE_TOKEN) ◄──────┘  reads (chat) / reads+writes (reports)
+      └── /mcp (Bearer MCP_TOKEN_RO ro | MCP_TOKEN rw) ◄───┘  chat reads (RO) / reports read+write (RW)
 ```
 
 Endpoints, all Bearer-auth'd with `AGENT_SECRET`:
@@ -24,7 +24,10 @@ Endpoints, all Bearer-auth'd with `AGENT_SECRET`:
   Multi-turn via the returned `sessionId` (session `resume`).
 
 Everything Claude Code ships that isn't on the allowlist (Bash, Write, file edits, …)
-is **denied** by a `canUseTool` gate — the container plus that allowlist is the sandbox.
+is **denied** by a `canUseTool` gate — that tool lockdown is the sandbox (containment is
+NOT container isolation; the process shares the app's container). Chat additionally
+authenticates to `/mcp` with a read-only token, so `/mcp` itself refuses write tools
+even if the allowlist were ever wrong.
 
 ## One-time setup (only you can do these)
 
@@ -37,10 +40,12 @@ is **denied** by a `canUseTool` gate — the container plus that allowlist is th
    Copy the printed token → the sidecar's `CLAUDE_CODE_OAUTH_TOKEN`. Re-run if it ever
    expires or is revoked. (This spends your personal Max rate limit; keep it single-user.)
 
-2. **Pick a service token** for the sidecar → `/mcp` calls. Generate a strong random
-   string (e.g. `openssl rand -hex 32`) and set it as **both**:
-   - app env `MCP_SERVICE_TOKEN`
-   - sidecar env `MCP_TOKEN`
+2. **Pick two service tokens** for the sidecar → `/mcp` calls (`openssl rand -hex 32`
+   each; app + sidecar names must hold the same value pairwise):
+   - read/write (used by `/report`): app `MCP_SERVICE_TOKEN` = sidecar `MCP_TOKEN`
+   - read-only (used by `/chat`; `/mcp` refuses write tools on it): app
+     `MCP_SERVICE_TOKEN_RO` = sidecar `MCP_TOKEN_RO`. Optional — when unset, chat
+     falls back to the RW token and just loses the read-only scoping.
 
 3. **Pick an agent secret** the same way and set it as **both** the app's `AGENT_SECRET`
    and the sidecar's `AGENT_SECRET`.
@@ -55,15 +60,17 @@ Nothing here is reachable from outside the container.
 
 Everything is configured with **env vars on the app resource**:
 
-| Variable                  | Required     | Notes                                                             |
-| ------------------------- | ------------ | ----------------------------------------------------------------- |
-| `AGENT_URL`               | ✅           | `http://127.0.0.1:8787` — the in-container sidecar.               |
-| `AGENT_SECRET`            | ✅           | Any strong random string; app + sidecar share the container env.  |
-| `CLAUDE_CODE_OAUTH_TOKEN` | ✅           | From `claude setup-token`. Your Max subscription — no API cost.   |
-| `MCP_SERVICE_TOKEN`       | reports/chat | Static bearer for `/mcp` (see `DEPLOY.md`).                       |
-| `MCP_TOKEN`               | reports/chat | Same value as `MCP_SERVICE_TOKEN` (the sidecar reads this name).  |
-| `APP_MCP_URL`             | reports/chat | `http://127.0.0.1:3000/mcp` — the app's own MCP over loopback.    |
-| `BODY_SIZE_LIMIT`         | for photos   | e.g. `10M` — adapter-node default 512KB; photo uploads exceed it. |
+| Variable                  | Required     | Notes                                                                                                                |
+| ------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------- |
+| `AGENT_URL`               | ✅           | `http://127.0.0.1:8787` — the in-container sidecar.                                                                  |
+| `AGENT_SECRET`            | ✅           | Any strong random string; app + sidecar share the container env.                                                     |
+| `CLAUDE_CODE_OAUTH_TOKEN` | ✅           | From `claude setup-token`. Your Max subscription — no API cost.                                                      |
+| `MCP_SERVICE_TOKEN`       | reports      | Static read/write bearer for `/mcp` (see `DEPLOY.md`).                                                               |
+| `MCP_TOKEN`               | reports      | Same value as `MCP_SERVICE_TOKEN` (the sidecar reads this name).                                                     |
+| `MCP_SERVICE_TOKEN_RO`    | chat         | Read-only bearer — `/mcp` refuses write tools on it.                                                                 |
+| `MCP_TOKEN_RO`            | chat         | Same value as `MCP_SERVICE_TOKEN_RO`. Unset → falls back to `MCP_TOKEN`.                                             |
+| `APP_MCP_URL`             | reports/chat | `http://127.0.0.1:3000/mcp` — the app's own MCP over loopback.                                                       |
+| `BODY_SIZE_LIMIT`         | for photos   | `20M` — matches the sidecar's 20MB `MAX_BODY`; base64 photos + JSON overhead blow past adapter-node's 512KB default. |
 
 If `AGENT_URL` is unset the AI features are simply off (the ✨ chat + buttons return a clear
 "not configured" error).

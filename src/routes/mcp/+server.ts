@@ -1051,15 +1051,24 @@ function unauthorized(origin: string) {
 	});
 }
 
-// Constant-time check of the optional first-party service token. Unset => always
-// false (the static-token path is simply disabled), so this never weakens OAuth.
-function serviceTokenOk(token: string): boolean {
-	const expected = env.MCP_SERVICE_TOKEN;
+// Constant-time check of an optional first-party service token. Unset => always
+// false (that static-token path is simply disabled), so this never weakens OAuth.
+function serviceTokenOk(token: string, expected: string | undefined): boolean {
 	if (!expected || !token) return false;
 	const a = Buffer.from(token);
 	const b = Buffer.from(expected);
 	return a.length === b.length && timingSafeEqual(a, b);
 }
+
+// Tools that mutate data — refused when authed with the read-only service token.
+// Everything else (get_*/list_*/lookup_*/export_data) is a pure read.
+const WRITE_TOOLS = new Set([
+	'log_food',
+	'prep_food',
+	'correct_food_nutrients',
+	'correct_log_entry',
+	'save_report'
+]);
 
 export async function POST({ request, url }) {
 	// Auth: every MCP request must carry a valid access token. An unauthenticated
@@ -1067,14 +1076,19 @@ export async function POST({ request, url }) {
 	// kicking off the OAuth flow.
 	const auth = request.headers.get('authorization') ?? '';
 	const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-	// Trusted first-party service token (the Claude sandbox sidecar) — a strong
-	// static bearer set on both sides, same trust model as API_TOKEN for /api/*.
-	// Skips the interactive OAuth dance a headless agent can't perform.
+	// Trusted first-party service tokens (the Claude sandbox sidecar) — strong
+	// static bearers set on both sides, same trust model as API_TOKEN for /api/*.
+	// Skip the interactive OAuth dance a headless agent can't perform. Two scopes:
+	// MCP_SERVICE_TOKEN (read/write, sidecar /report) and MCP_SERVICE_TOKEN_RO
+	// (read-only, sidecar /chat — write tools refused in tools/call below). RO is
+	// checked first so a collision between the two envs fails closed (read-only).
 	// Keycloak mode: validate the realm-issued JWT (signature via JWKS, issuer,
 	// and that the audience targets THIS /mcp resource). Legacy mode: look the
 	// opaque token up in our own oauthTokens table.
+	const readOnly = serviceTokenOk(token, env.MCP_SERVICE_TOKEN_RO);
 	const tokenOk =
-		serviceTokenOk(token) ||
+		readOnly ||
+		serviceTokenOk(token, env.MCP_SERVICE_TOKEN) ||
 		(keycloakEnabled()
 			? !!token && !!(await validateMcpToken(token, `${url.origin}/mcp`))
 			: !!token && !!(await validateAccessToken(token)));
@@ -1130,6 +1144,9 @@ export async function POST({ request, url }) {
 		case 'tools/call': {
 			const name = params?.name;
 			const args = (params?.arguments ?? {}) as Record<string, unknown>;
+			// Read-only bearer may not invoke mutating tools — same error shape as unknown.
+			if (readOnly && WRITE_TOOLS.has(String(name)))
+				return rpcError(id, -32602, `Tool not available with a read-only token: ${String(name)}`);
 			if (name === 'log_food') return callLogFood(id, args);
 			if (name === 'prep_food') return callPrepFood(id, args);
 			if (name === 'list_foods') return callListFoods(id, args);
