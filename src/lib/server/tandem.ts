@@ -1,7 +1,7 @@
 import { env } from '$env/dynamic/private';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'node:crypto';
+import { openSecret, sealSecret, secretBoxEnabled } from '$lib/server/secretBox';
 import { eq, sql } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { insulinEvents, pumpGlucose, tandemAuth } from '$lib/server/db/schema';
@@ -22,29 +22,10 @@ const execFileP = promisify(execFile);
 
 // Enabled only when we have a key to encrypt credentials with — without it we
 // can't safely store the password, so the whole integration stays off.
+// (Credential encryption itself lives in secretBox.ts, shared with the OAuth
+// refresh-token stores; format and key derivation are unchanged.)
 export function tandemEnabled(): boolean {
-	return !!env.TANDEM_ENC_KEY;
-}
-
-// ── credential encryption (aes-256-gcm) ─────────────────────────────────────
-function key(): Buffer {
-	if (!env.TANDEM_ENC_KEY) throw new Error('TANDEM_ENC_KEY is not set.');
-	return scryptSync(env.TANDEM_ENC_KEY, 'tandem-insulin', 32);
-}
-
-function encrypt(plain: string): string {
-	const iv = randomBytes(12);
-	const c = createCipheriv('aes-256-gcm', key(), iv);
-	const ct = Buffer.concat([c.update(plain, 'utf8'), c.final()]);
-	return [iv, c.getAuthTag(), ct].map((b) => b.toString('hex')).join(':');
-}
-
-function decrypt(blob: string): string {
-	const [iv, tag, ct] = blob.split(':').map((h) => Buffer.from(h, 'hex'));
-	if (!iv || !tag || !ct) throw new Error('Malformed stored Tandem credential.');
-	const d = createDecipheriv('aes-256-gcm', key(), iv);
-	d.setAuthTag(tag);
-	return Buffer.concat([d.update(ct), d.final()]).toString('utf8');
+	return secretBoxEnabled();
 }
 
 // ── connect / status ────────────────────────────────────────────────────────
@@ -54,7 +35,7 @@ export async function storeCreds(
 	region: string
 ): Promise<void> {
 	const reg = region === 'EU' ? 'EU' : 'US';
-	const secret = encrypt(`${username}\n${password}`); // newline-joined: passwords can't contain \n on input
+	const secret = sealSecret(`${username}\n${password}`); // newline-joined: passwords can't contain \n on input
 	await db
 		.insert(tandemAuth)
 		.values({ id: 1, username, secret, region: reg })
@@ -111,7 +92,7 @@ async function creds(): Promise<{ email: string; password: string; region: strin
 		throw new Error(
 			'Tandem not connected on this server. While logged in, connect it from /settings.'
 		);
-	const [email, password] = decrypt(row.secret).split('\n');
+	const [email, password] = openSecret(row.secret).split('\n');
 	return { email, password, region: row.region };
 }
 
@@ -159,12 +140,12 @@ async function runSidecar(startLabel: string, endLabel: string): Promise<Sidecar
 		if (out) {
 			try {
 				const parsed = JSON.parse(out) as SidecarOut;
-				if (parsed.error) throw new Error(`Tandem sync: ${parsed.error}`);
+				if (parsed.error) throw new Error(`Tandem sync: ${parsed.error}`, { cause: e });
 			} catch (inner) {
 				if (inner instanceof Error && inner.message.startsWith('Tandem sync:')) throw inner;
 			}
 		}
-		throw new Error(`Tandem sidecar failed: ${(e as Error).message}`);
+		throw new Error(`Tandem sidecar failed: ${(e as Error).message}`, { cause: e });
 	}
 	const parsed = JSON.parse(stdout) as SidecarOut;
 	if (parsed.error) throw new Error(`Tandem sync: ${parsed.error}`);

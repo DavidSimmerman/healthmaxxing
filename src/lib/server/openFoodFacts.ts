@@ -94,12 +94,18 @@ export async function lookupBarcode(barcode: string): Promise<OffResult> {
 	const url = `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(barcode)}?fields=${FIELDS}`;
 	let res: Response;
 	try {
-		res = await fetch(url, { headers: { 'User-Agent': 'healthmaxxing/0.1 (personal)' } });
+		res = await fetch(url, {
+			headers: { 'User-Agent': 'healthmaxxing/0.1 (personal)' },
+			// Bound the request so a stalled OFF call can't hang a barcode scan.
+			signal: AbortSignal.timeout(10_000)
+		});
 	} catch {
 		return { ok: false, reason: 'http_error' };
 	}
 	if (!res.ok) return { ok: false, reason: 'http_error' };
-	const body = (await res.json()) as any;
+	// Body read can also fail/abort — keep the {ok:false} contract, don't throw.
+	const body = (await res.json().catch(() => null)) as any;
+	if (!body) return { ok: false, reason: 'http_error' };
 	if (body.status !== 1 || !body.product) return { ok: false, reason: 'not_found', raw: body };
 
 	const p = body.product;
@@ -190,12 +196,18 @@ export async function lookupBarcodeRich(barcode: string): Promise<RichOffResult>
 	const url = `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(barcode)}?fields=${FIELDS}`;
 	let res: Response;
 	try {
-		res = await fetch(url, { headers: { 'User-Agent': 'healthmaxxing/0.1 (personal)' } });
+		res = await fetch(url, {
+			headers: { 'User-Agent': 'healthmaxxing/0.1 (personal)' },
+			// Bound the request so a stalled OFF call can't hang a barcode scan.
+			signal: AbortSignal.timeout(10_000)
+		});
 	} catch {
 		return { ok: false, reason: 'http_error' };
 	}
 	if (!res.ok) return { ok: false, reason: 'http_error' };
-	const body = (await res.json()) as any;
+	// Body read can also fail/abort — keep the {ok:false} contract, don't throw.
+	const body = (await res.json().catch(() => null)) as any;
+	if (!body) return { ok: false, reason: 'http_error' };
 	if (body.status !== 1 || !body.product) return { ok: false, reason: 'not_found' };
 
 	const p = body.product;
