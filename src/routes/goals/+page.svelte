@@ -34,7 +34,9 @@
 		return new Date(`${date}T12:00:00Z`).toLocaleDateString('en-US', { timeZone: 'UTC', ...opts });
 	}
 
-	const selectedLabel = $derived(fmt(data.date, { weekday: 'long', month: 'short', day: 'numeric' }));
+	const selectedLabel = $derived(
+		fmt(data.date, { weekday: 'long', month: 'short', day: 'numeric' })
+	);
 	const weekLabel = $derived(
 		`${fmt(data.weekDays[0].date, { month: 'short', day: 'numeric' })} – ${fmt(data.weekDays[6].date, { month: 'short', day: 'numeric' })}`
 	);
@@ -69,10 +71,24 @@
 			class="card-sm flex h-9 w-9 shrink-0 items-center justify-center text-white transition hover:brightness-125"
 			aria-label="Back to today"
 		>
-			<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
+			<svg
+				width="16"
+				height="16"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="2.5"
+				stroke-linecap="round"
+				stroke-linejoin="round"><path d="M15 18l-6-6 6-6" /></svg
+			>
 		</a>
 		<div class="min-w-0">
-			<p class="text-xs font-semibold tracking-widest uppercase" style="color: var(--color-text-subtle);">Performance</p>
+			<p
+				class="text-xs font-semibold tracking-widest uppercase"
+				style="color: var(--color-text-subtle);"
+			>
+				Performance
+			</p>
 			<h1 class="truncate text-2xl font-bold text-white">Goals</h1>
 		</div>
 	</header>
@@ -85,7 +101,16 @@
 				class="flex h-8 w-8 items-center justify-center rounded-lg text-white transition hover:brightness-125"
 				aria-label="Previous week"
 			>
-				<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
+				<svg
+					width="14"
+					height="14"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2.5"
+					stroke-linecap="round"
+					stroke-linejoin="round"><path d="M15 18l-6-6 6-6" /></svg
+				>
 			</a>
 			<span class="text-sm font-medium text-white">{weekLabel}</span>
 			<a
@@ -94,7 +119,16 @@
 				class="flex h-8 w-8 items-center justify-center rounded-lg text-white transition hover:brightness-125 aria-disabled:pointer-events-none aria-disabled:opacity-30"
 				aria-label="Next week"
 			>
-				<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6" /></svg>
+				<svg
+					width="14"
+					height="14"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2.5"
+					stroke-linecap="round"
+					stroke-linejoin="round"><path d="M9 18l6-6-6-6" /></svg
+				>
 			</a>
 		</div>
 
@@ -115,16 +149,36 @@
 					</span>
 					<span class="relative grid place-items-center" style="width: {SZ}px; height: {SZ}px;">
 						<svg width={SZ} height={SZ} viewBox="0 0 {SZ} {SZ}" class="-rotate-90">
-							<circle cx={SZ / 2} cy={SZ / 2} r={R} fill="none" stroke="rgba(255,255,255,0.08)" stroke-width={STK} />
+							<circle
+								cx={SZ / 2}
+								cy={SZ / 2}
+								r={R}
+								fill="none"
+								stroke="rgba(255,255,255,0.08)"
+								stroke-width={STK}
+							/>
 							{#if d.score != null}
-								<circle cx={SZ / 2} cy={SZ / 2} r={R} fill="none" stroke={ringColor(d.score)} stroke-width={STK} stroke-linecap="round" stroke-dasharray={CIRC} stroke-dashoffset={CIRC * (1 - pct)} />
+								<circle
+									cx={SZ / 2}
+									cy={SZ / 2}
+									r={R}
+									fill="none"
+									stroke={ringColor(d.score)}
+									stroke-width={STK}
+									stroke-linecap="round"
+									stroke-dasharray={CIRC}
+									stroke-dashoffset={CIRC * (1 - pct)}
+								/>
 							{/if}
 						</svg>
-						<span class="absolute text-[11px] font-bold tabular-nums text-white">
+						<span class="absolute text-[11px] font-bold text-white tabular-nums">
 							{d.score == null ? '–' : Math.round(d.score)}
 						</span>
 					</span>
-					<span class="text-[10px] tabular-nums" style="color: {d.selected ? '#fff' : 'var(--color-text-subtle)'};">
+					<span
+						class="text-[10px] tabular-nums"
+						style="color: {d.selected ? '#fff' : 'var(--color-text-subtle)'};"
+					>
 						{fmt(d.date, { day: 'numeric' })}
 					</span>
 				</svelte:element>
@@ -140,21 +194,30 @@
 		<ScoreRing score={day.score} />
 		<div class="min-w-0 flex-1">
 			{#if day.score == null}
-				<p class="text-sm" style="color: var(--color-text-subtle);">No data yet — connect your sources.</p>
+				<p class="text-sm" style="color: var(--color-text-subtle);">
+					No data yet — connect your sources.
+				</p>
 			{:else}
 				<span class="text-lg font-bold text-white">Grade {day.grade}</span>
 				{#if day.streak > 0}
-					<div class="mt-2 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold" style="background: rgba(251,146,60,0.15); color: #fb923c;">
+					<div
+						class="mt-2 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold"
+						style="background: rgba(251,146,60,0.15); color: #fb923c;"
+					>
 						🔥 {day.streak}-day streak
 					</div>
 				{/if}
 				{#if day.vacation}
-					<div class="mt-2 ml-2 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold" style="background: rgba(56,189,248,0.15); color: #38bdf8;">
+					<div
+						class="mt-2 ml-2 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold"
+						style="background: rgba(56,189,248,0.15); color: #38bdf8;"
+					>
 						🏝️ Vacation goals
 					</div>
 				{/if}
 				<p class="mt-2 text-xs" style="color: var(--color-text-subtle);">
-					{Math.round(day.base ?? 0)} base{#if day.bonus > 0} · +{day.bonus.toFixed(1)} bonus{/if}
+					{Math.round(day.base ?? 0)} base{#if day.bonus > 0}
+						· +{day.bonus.toFixed(1)} bonus{/if}
 				</p>
 				{#if day.bonusParts.length}
 					<div class="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-[11px]" style="color: #4ade80;">
@@ -169,7 +232,12 @@
 
 	<!-- Daily goals -->
 	<section class="card mb-3 p-5">
-		<p class="mb-3 text-[10px] font-semibold tracking-widest uppercase" style="color: var(--color-accent-from);">Daily goals</p>
+		<p
+			class="mb-3 text-[10px] font-semibold tracking-widest uppercase"
+			style="color: var(--color-accent-from);"
+		>
+			Daily goals
+		</p>
 		{#each day.goals as goal (goal.key)}
 			<GoalRow {goal} />
 		{/each}
@@ -198,7 +266,10 @@
 		</div>
 
 		<p class="mb-3 text-xs" style="color: var(--color-text-subtle);">
-			avg of {sum.completedDays} completed day{sum.completedDays === 1 ? '' : 's'}{#if sum.bonus > 0} · +{sum.bonus.toFixed(1)} bonus{/if}
+			avg of {sum.completedDays} completed day{sum.completedDays === 1
+				? ''
+				: 's'}{#if sum.bonus > 0}
+				· +{sum.bonus.toFixed(1)} bonus{/if}
 		</p>
 		{#if sum.completedDays === 0}
 			<p class="text-sm" style="color: var(--color-text-subtle);">

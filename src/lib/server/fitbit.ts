@@ -28,7 +28,9 @@ export function googleHealthEnabled(): boolean {
 // CSRF state for the OAuth round-trip: an HMAC of the secret API token, so it
 // proves the flow started from us without putting the token in the redirect URL.
 export function oauthState(): string {
-	return createHmac('sha256', env.API_TOKEN ?? '').update('fitbit-oauth').digest('hex');
+	return createHmac('sha256', env.API_TOKEN ?? '')
+		.update('fitbit-oauth')
+		.digest('hex');
 }
 
 export function safeEqual(a: string, b: string): boolean {
@@ -78,15 +80,25 @@ async function storeRefresh(refreshToken: string, scope: string | undefined): Pr
 		.values({ id: 1, refreshToken, scope: scope ?? null })
 		.onConflictDoUpdate({
 			target: fitbitAuth.id,
-			set: { refreshToken: sql`excluded.refresh_token`, scope: sql`excluded.scope`, updatedAt: new Date() }
+			set: {
+				refreshToken: sql`excluded.refresh_token`,
+				scope: sql`excluded.scope`,
+				updatedAt: new Date()
+			}
 		});
 }
 
 // One-time: exchange the authorization code for tokens and persist the refresh token.
 export async function exchangeCode(code: string, redirectUri: string): Promise<void> {
-	const tok = await tokenRequest({ grant_type: 'authorization_code', code, redirect_uri: redirectUri });
+	const tok = await tokenRequest({
+		grant_type: 'authorization_code',
+		code,
+		redirect_uri: redirectUri
+	});
 	if (!tok.refresh_token) {
-		throw new Error('Google did not return a refresh token (re-consent with prompt=consent & access_type=offline).');
+		throw new Error(
+			'Google did not return a refresh token (re-consent with prompt=consent & access_type=offline).'
+		);
 	}
 	await storeRefresh(tok.refresh_token, tok.scope);
 }
@@ -120,11 +132,42 @@ function windowUrls(startDate: string): { key: keyof RawWindow; url: string }[] 
 	const startIso = `${startDate}T00:00:00Z`;
 	return [
 		{ key: 'sleep', url: pointsUrl('sleep', '', 25) },
-		{ key: 'restingHr', url: pointsUrl('daily-resting-heart-rate', `daily_resting_heart_rate.date >= "${startDate}"`, 100) },
-		{ key: 'hrv', url: pointsUrl('heart-rate-variability', `heart_rate_variability.sample_time.physical_time >= "${startIso}"`, 1440) },
-		{ key: 'spo2', url: pointsUrl('oxygen-saturation', `oxygen_saturation.sample_time.physical_time >= "${startIso}"`, 1440) },
-		{ key: 'respRate', url: pointsUrl('daily-respiratory-rate', `daily_respiratory_rate.date >= "${startDate}"`, 100) },
-		{ key: 'skinTemp', url: pointsUrl('daily-sleep-temperature-derivations', `daily_sleep_temperature_derivations.date >= "${startDate}"`, 100) }
+		{
+			key: 'restingHr',
+			url: pointsUrl(
+				'daily-resting-heart-rate',
+				`daily_resting_heart_rate.date >= "${startDate}"`,
+				100
+			)
+		},
+		{
+			key: 'hrv',
+			url: pointsUrl(
+				'heart-rate-variability',
+				`heart_rate_variability.sample_time.physical_time >= "${startIso}"`,
+				1440
+			)
+		},
+		{
+			key: 'spo2',
+			url: pointsUrl(
+				'oxygen-saturation',
+				`oxygen_saturation.sample_time.physical_time >= "${startIso}"`,
+				1440
+			)
+		},
+		{
+			key: 'respRate',
+			url: pointsUrl('daily-respiratory-rate', `daily_respiratory_rate.date >= "${startDate}"`, 100)
+		},
+		{
+			key: 'skinTemp',
+			url: pointsUrl(
+				'daily-sleep-temperature-derivations',
+				`daily_sleep_temperature_derivations.date >= "${startDate}"`,
+				100
+			)
+		}
 	];
 }
 
@@ -142,7 +185,9 @@ type RawWindow = {
 // window ever exceeds pageSize the older points are dropped, which the next sync
 // refills.)
 async function getJson(url: string, token: string): Promise<unknown> {
-	const res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } });
+	const res = await fetch(url, {
+		headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }
+	});
 	if (!res.ok) return null;
 	return res.json().catch(() => null);
 }
@@ -206,7 +251,9 @@ export async function peekHealth(days = 2): Promise<unknown> {
 	const reads = windowUrls(startDate);
 	return Promise.all(
 		reads.map(async (r) => {
-			const res = await fetch(r.url, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } });
+			const res = await fetch(r.url, {
+				headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }
+			});
 			const body = await res.text().catch(() => '');
 			let parsed: unknown = body;
 			try {

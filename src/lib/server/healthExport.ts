@@ -67,10 +67,7 @@ function vitalsRow(d: DayReview) {
 	return { date: d.date, metrics };
 }
 
-export const EXPORT_CATEGORIES: Record<
-	string,
-	(from: string, to: string) => Promise<unknown>
-> = {
+export const EXPORT_CATEGORIES: Record<string, (from: string, to: string) => Promise<unknown>> = {
 	nutrition: async (from, to) => ({
 		totals: await nutritionReport(from, to),
 		log: await logEntries(from, to)
@@ -113,7 +110,9 @@ export const EXPORT_CATEGORY_NAMES = Object.keys(EXPORT_CATEGORIES);
 export async function runExport(category: string, from: string, to: string): Promise<unknown> {
 	if (category === 'all') {
 		const entries = await Promise.all(
-			EXPORT_CATEGORY_NAMES.map(async (name) => [name, await EXPORT_CATEGORIES[name](from, to)] as const)
+			EXPORT_CATEGORY_NAMES.map(
+				async (name) => [name, await EXPORT_CATEGORIES[name](from, to)] as const
+			)
 		);
 		const bundle: Record<string, unknown> = Object.fromEntries(entries);
 		const [row] = await db.select().from(settings).where(eq(settings.id, 1));

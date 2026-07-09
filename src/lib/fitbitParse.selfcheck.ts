@@ -11,7 +11,13 @@ const FIT = { dataSource: { platform: 'FITBIT' } };
 const APPLE = { dataSource: { platform: 'HEALTH_KIT' } };
 
 // One sleep session ending 7am EDT on 2026-06-22. asleep 414 / inBed 450 = 92%.
-const sleepSession = (endIso: string, asleep: string, inBed: string, awake: string, stages: [string, string][]) => ({
+const sleepSession = (
+	endIso: string,
+	asleep: string,
+	inBed: string,
+	awake: string,
+	stages: [string, string][]
+) => ({
 	...FIT,
 	sleep: {
 		interval: { startTime: '2026-06-22T03:00:00Z', endTime: endIso },
@@ -40,12 +46,23 @@ const rows = parseHealthData(
 		// beatsPerMinute is an int64 → JSON STRING. Plus an Apple point that must be dropped.
 		restingHr: {
 			dataPoints: [
-				{ ...FIT, dailyRestingHeartRate: { date: { year: 2026, month: 6, day: 22 }, beatsPerMinute: '54' } },
-				{ ...APPLE, dailyRestingHeartRate: { date: { year: 2026, month: 6, day: 22 }, beatsPerMinute: '70' } }
+				{
+					...FIT,
+					dailyRestingHeartRate: { date: { year: 2026, month: 6, day: 22 }, beatsPerMinute: '54' }
+				},
+				{
+					...APPLE,
+					dailyRestingHeartRate: { date: { year: 2026, month: 6, day: 22 }, beatsPerMinute: '70' }
+				}
 			]
 		},
 		respRate: {
-			dataPoints: [{ ...FIT, dailyRespiratoryRate: { date: { year: 2026, month: 6, day: 22 }, breathsPerMinute: 15.7 } }]
+			dataPoints: [
+				{
+					...FIT,
+					dailyRespiratoryRate: { date: { year: 2026, month: 6, day: 22 }, breathsPerMinute: 15.7 }
+				}
+			]
 		},
 		skinTemp: {
 			dataPoints: [
@@ -61,18 +78,45 @@ const rows = parseHealthData(
 		},
 		hrv: {
 			dataPoints: [
-				{ ...FIT, heartRateVariability: { sampleTime: { physicalTime: '2026-06-22T05:00:00Z' }, rootMeanSquareOfSuccessiveDifferencesMilliseconds: 40 } },
-				{ ...FIT, heartRateVariability: { sampleTime: { physicalTime: '2026-06-22T06:00:00Z' }, rootMeanSquareOfSuccessiveDifferencesMilliseconds: 44 } },
+				{
+					...FIT,
+					heartRateVariability: {
+						sampleTime: { physicalTime: '2026-06-22T05:00:00Z' },
+						rootMeanSquareOfSuccessiveDifferencesMilliseconds: 40
+					}
+				},
+				{
+					...FIT,
+					heartRateVariability: {
+						sampleTime: { physicalTime: '2026-06-22T06:00:00Z' },
+						rootMeanSquareOfSuccessiveDifferencesMilliseconds: 44
+					}
+				},
 				// Apple HRV sample on the same night must NOT pull the average:
-				{ ...APPLE, heartRateVariability: { sampleTime: { physicalTime: '2026-06-22T05:30:00Z' }, rootMeanSquareOfSuccessiveDifferencesMilliseconds: 999 } }
+				{
+					...APPLE,
+					heartRateVariability: {
+						sampleTime: { physicalTime: '2026-06-22T05:30:00Z' },
+						rootMeanSquareOfSuccessiveDifferencesMilliseconds: 999
+					}
+				}
 			]
 		},
 		spo2: {
 			dataPoints: [
-				{ ...FIT, oxygenSaturation: { sampleTime: { physicalTime: '2026-06-22T05:00:00Z' }, percentage: 96 } },
-				{ ...FIT, oxygenSaturation: { sampleTime: { physicalTime: '2026-06-22T06:00:00Z' }, percentage: 97 } },
+				{
+					...FIT,
+					oxygenSaturation: { sampleTime: { physicalTime: '2026-06-22T05:00:00Z' }, percentage: 96 }
+				},
+				{
+					...FIT,
+					oxygenSaturation: { sampleTime: { physicalTime: '2026-06-22T06:00:00Z' }, percentage: 97 }
+				},
 				// non-physiological noise read — must be dropped (floor 70), not averaged in:
-				{ ...FIT, oxygenSaturation: { sampleTime: { physicalTime: '2026-06-22T06:30:00Z' }, percentage: 50 } }
+				{
+					...FIT,
+					oxygenSaturation: { sampleTime: { physicalTime: '2026-06-22T06:30:00Z' }, percentage: 50 }
+				}
 			]
 		}
 	},
@@ -92,17 +136,41 @@ assert.equal(m.sleep_resp_rate, 15.7);
 assert.equal(Math.round(m.sleep_skin_temp_dev_c * 10) / 10, -0.4);
 assert.equal(m.sleep_hrv_ms, 42); // (40+44)/2, Apple 999 excluded
 assert.equal(m.sleep_spo2_pct, 96.5);
-assert.equal(rows.every((r) => r.date === '2026-06-22'), true);
+assert.equal(
+	rows.every((r) => r.date === '2026-06-22'),
+	true
+);
 
 // An Apple-only payload yields nothing (platform filter).
 assert.deepEqual(
-	parseHealthData({ restingHr: { dataPoints: [{ ...APPLE, dailyRestingHeartRate: { date: { year: 2026, month: 6, day: 22 }, beatsPerMinute: '70' } }] } }, TZ),
+	parseHealthData(
+		{
+			restingHr: {
+				dataPoints: [
+					{
+						...APPLE,
+						dailyRestingHeartRate: { date: { year: 2026, month: 6, day: 22 }, beatsPerMinute: '70' }
+					}
+				]
+			}
+		},
+		TZ
+	),
 	[]
 );
 
 // Pre-dawn UTC-next-day sample buckets to the local night's date.
 const cross = parseHealthData(
-	{ spo2: { dataPoints: [{ ...FIT, oxygenSaturation: { sampleTime: { physicalTime: '2026-06-22T03:30:00Z' }, percentage: 95 } }] } },
+	{
+		spo2: {
+			dataPoints: [
+				{
+					...FIT,
+					oxygenSaturation: { sampleTime: { physicalTime: '2026-06-22T03:30:00Z' }, percentage: 95 }
+				}
+			]
+		}
+	},
 	TZ
 );
 assert.deepEqual(cross, [{ date: '2026-06-21', metric: 'sleep_spo2_pct', value: 95 }]);
@@ -140,7 +208,9 @@ assert.deepEqual(parseHealthData({}, TZ), []);
 					...FIT,
 					sleep: {
 						interval: { startTime: '2026-06-22T18:00:00Z', endTime: '2026-06-22T18:30:00Z' },
-						stages: [{ startTime: '2026-06-22T18:00:00Z', endTime: '2026-06-22T18:30:00Z', type: 'LIGHT' }]
+						stages: [
+							{ startTime: '2026-06-22T18:00:00Z', endTime: '2026-06-22T18:30:00Z', type: 'LIGHT' }
+						]
 					}
 				},
 				// the main sleep
@@ -157,7 +227,10 @@ assert.deepEqual(parseHealthData({}, TZ), []);
 				// an Apple session must be ignored (platform filter)
 				{
 					...APPLE,
-					sleep: { interval: { startTime: '2026-06-22T04:00:00Z', endTime: '2026-06-22T12:00:00Z' }, stages: [] }
+					sleep: {
+						interval: { startTime: '2026-06-22T04:00:00Z', endTime: '2026-06-22T12:00:00Z' },
+						stages: []
+					}
 				}
 			]
 		},

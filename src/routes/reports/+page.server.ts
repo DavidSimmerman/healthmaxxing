@@ -13,7 +13,12 @@ export async function load() {
 			.orderBy(desc(chats.updatedAt))
 			.limit(100),
 		db
-			.select({ id: reports.id, title: reports.title, createdAt: reports.createdAt, tag: reports.tag })
+			.select({
+				id: reports.id,
+				title: reports.title,
+				createdAt: reports.createdAt,
+				tag: reports.tag
+			})
 			.from(reports)
 			.orderBy(desc(reports.createdAt))
 			.limit(100)

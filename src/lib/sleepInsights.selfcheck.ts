@@ -14,7 +14,17 @@ const byKey = (a: ReturnType<typeof sleepInsights>) => Object.fromEntries(a.map(
 
 // Healthy night: 7.5h, deep 18%, rem 22%, eff 92%.
 {
-	const i = byKey(sleepInsights({ sleepMin: 450, deepMin: 81, remMin: 99, lightMin: 270, efficiencyPct: 92, restingHr: 55, hrvMs: 60 }));
+	const i = byKey(
+		sleepInsights({
+			sleepMin: 450,
+			deepMin: 81,
+			remMin: 99,
+			lightMin: 270,
+			efficiencyPct: 92,
+			restingHr: 55,
+			hrvMs: 60
+		})
+	);
 	assert.equal(i.total.status, 'good');
 	assert.equal(i.deep.status, 'good');
 	assert.equal(i.rem.status, 'good');
@@ -25,7 +35,17 @@ const byKey = (a: ReturnType<typeof sleepInsights>) => Object.fromEntries(a.map(
 
 // Short night, low deep, poor efficiency.
 {
-	const i = byKey(sleepInsights({ sleepMin: 360, deepMin: 36, remMin: 54, lightMin: 270, efficiencyPct: 78, restingHr: 60, hrvMs: 40 }));
+	const i = byKey(
+		sleepInsights({
+			sleepMin: 360,
+			deepMin: 36,
+			remMin: 54,
+			lightMin: 270,
+			efficiencyPct: 78,
+			restingHr: 60,
+			hrvMs: 40
+		})
+	);
 	assert.equal(i.total.status, 'low'); // 6h < 7h
 	assert.equal(i.deep.status, 'low'); // 10% < 13%
 	assert.equal(i.efficiency.status, 'low'); // 78% < 85%
@@ -33,13 +53,31 @@ const byKey = (a: ReturnType<typeof sleepInsights>) => Object.fromEntries(a.map(
 
 // Missing data → those insights are simply omitted, no throw.
 {
-	const i = sleepInsights({ sleepMin: null, deepMin: null, remMin: null, lightMin: null, efficiencyPct: null, restingHr: null, hrvMs: null });
+	const i = sleepInsights({
+		sleepMin: null,
+		deepMin: null,
+		remMin: null,
+		lightMin: null,
+		efficiencyPct: null,
+		restingHr: null,
+		hrvMs: null
+	});
 	assert.deepEqual(i, []);
 }
 
 // Stage % is of time ASLEEP, not time in bed.
 {
-	const i = byKey(sleepInsights({ sleepMin: 400, deepMin: 100, remMin: null, lightMin: null, efficiencyPct: null, restingHr: null, hrvMs: null }));
+	const i = byKey(
+		sleepInsights({
+			sleepMin: 400,
+			deepMin: 100,
+			remMin: null,
+			lightMin: null,
+			efficiencyPct: null,
+			restingHr: null,
+			hrvMs: null
+		})
+	);
 	assert.equal(i.deep.value, '25%'); // 100/400, and 25 > 23 → high
 	assert.equal(i.deep.status, 'high');
 }
@@ -110,7 +148,9 @@ const byKey = (a: ReturnType<typeof sleepInsights>) => Object.fromEntries(a.map(
 		{ date: '2026-06-21', m: { sleep_min: 450, sleep_resting_hr: 57 } },
 		{ date: '2026-06-20', m: { sleep_min: 450, sleep_resting_hr: 58 } }
 	];
-	const byKey = Object.fromEntries(sleepTrends(nights, {}, 'America/New_York').map((i) => [i.key, i]));
+	const byKey = Object.fromEntries(
+		sleepTrends(nights, {}, 'America/New_York').map((i) => [i.key, i])
+	);
 	assert.equal(byKey['rhr-trend'].status, 'good'); // recent half lower → improving
 	assert.ok(byKey['rhr-trend'].value.startsWith('▼'));
 }
@@ -140,7 +180,9 @@ const byKey = (a: ReturnType<typeof sleepInsights>) => Object.fromEntries(a.map(
 		{ date: '2026-06-23', m: { sleep_min: 450 } },
 		{ date: '2026-06-22', m: { sleep_min: 450 } }
 	];
-	const byKey = Object.fromEntries(sleepTrends(nights, stagesByDate, 'America/New_York').map((i) => [i.key, i]));
+	const byKey = Object.fromEntries(
+		sleepTrends(nights, stagesByDate, 'America/New_York').map((i) => [i.key, i])
+	);
 	assert.equal(byKey.awakenings.value, '1 / night'); // 1 AWAKE seg each
 	// Onsets 23:00 & 00:30 → 90 min apart → small noon-origin spread, not ~22h.
 	assert.ok(byKey.consistency, 'consistency card should exist');

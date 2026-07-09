@@ -16,7 +16,14 @@ export type DayReview = {
 	steps: number | null;
 	exerciseMin: number | null;
 	metrics: Record<string, number>; // metric key -> value (see catalog in mcp tool)
-	workouts: { name: string; start: string; end: string | null; kcal: number | null; avgHr: number | null; maxHr: number | null }[];
+	workouts: {
+		name: string;
+		start: string;
+		end: string | null;
+		kcal: number | null;
+		avgHr: number | null;
+		maxHr: number | null;
+	}[];
 };
 
 export async function healthReview(from: string, to: string): Promise<DayReview[]> {
@@ -52,7 +59,15 @@ export async function healthReview(from: string, to: string): Promise<DayReview[
 	const day = (d: string): DayReview => {
 		let r = byDate.get(d);
 		if (!r) {
-			r = { date: d, activeKcal: null, basalKcal: null, steps: null, exerciseMin: null, metrics: {}, workouts: [] };
+			r = {
+				date: d,
+				activeKcal: null,
+				basalKcal: null,
+				steps: null,
+				exerciseMin: null,
+				metrics: {},
+				workouts: []
+			};
 			byDate.set(d, r);
 		}
 		return r;

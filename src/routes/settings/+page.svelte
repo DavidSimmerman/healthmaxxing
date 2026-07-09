@@ -401,9 +401,9 @@
 	<section class="card mt-6 p-5">
 		<h2 class="mb-1 text-sm font-semibold tracking-wide text-white uppercase">Vacation mode</h2>
 		<p class="mb-4 text-xs" style="color: var(--color-text-subtle);">
-			Days inside a trip are scored against easier goals — blood sugar targets loosen upward (running
-			higher to avoid lows won't hurt your score), and steps, sleep, deficit, protein &amp; water all
-			relax.
+			Days inside a trip are scored against easier goals — blood sugar targets loosen upward
+			(running higher to avoid lows won't hurt your score), and steps, sleep, deficit, protein &amp;
+			water all relax.
 		</p>
 
 		{#if data.vacations.length}
@@ -599,8 +599,8 @@
 							{/if}
 						</p>
 						<p class="mt-0.5 text-xs leading-relaxed" style="color: var(--color-text-subtle);">
-							Syncs steps, sleep and resting heart rate via the Google Health API. Reconnect
-							if the token expires or is revoked.
+							Syncs steps, sleep and resting heart rate via the Google Health API. Reconnect if the
+							token expires or is revoked.
 						</p>
 					</div>
 					<!-- Redirect to Google's consent screen (offline + prompt=consent mints a

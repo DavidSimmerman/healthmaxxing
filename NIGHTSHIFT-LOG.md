@@ -4,7 +4,9 @@ Branch: `feat/ai-chat` (worktree `.claude/worktrees/ai-chat`). NOT pushed (Auto 
 leaving for morning review/merge).
 
 ## Task
+
 Turn the AI food feature into a **full streaming chat**:
+
 - Talk to it, assistant text **streamed** back.
 - Multi-turn conversation with context ("going to Costco, what fits my macros today?").
 - Send **barcode/label photos** mid-conversation; it reads + sums them (e.g. a recipe).
@@ -14,12 +16,13 @@ Turn the AI food feature into a **full streaming chat**:
 Plus standing rule captured: **all Coolify config must be zero-downtime** (see MEMORY.md + DEPLOY.md).
 
 ## Design decisions (autonomous)
+
 - **Streaming = SSE** over `fetch` POST (need POST for history+images; EventSource can't POST).
 - **Conversation state lives in the client** (browser holds message history, sends each turn).
   No DB table for chats — YAGNI for v1. Revisit if persistence is wanted.
 - **Green-light gate is structural, not trust-based:** the chat sidecar gets **read-only**
   MCP tools (get_nutrition, get_day_log, list_foods, lookup_barcode, lookup_fdc) + a custom
-  **`propose_action`** tool. It has **NO write tools**, so it *cannot* mutate anything itself.
+  **`propose_action`** tool. It has **NO write tools**, so it _cannot_ mutate anything itself.
   When it calls `propose_action`, the sidecar emits an SSE `action_proposed` event; the UI
   renders a confirmation card (final macros) with Confirm/Cancel. Only on Confirm does the
   **app** execute the write via existing `createAndLogFood`/`prepFood` (track/recipe/schedule).
@@ -27,6 +30,7 @@ Plus standing rule captured: **all Coolify config must be zero-downtime** (see M
   custom container name / host port map). `/health` is the only unauthenticated route.
 
 ## Status
+
 - [x] Workspace + memory rule + log
 - [x] Research: Agent SDK streaming (partial messages, custom tool, multi-turn via `resume`)
 - [x] Explore: app internals for track/recipe/schedule shapes + entry point
@@ -39,16 +43,19 @@ Plus standing rule captured: **all Coolify config must be zero-downtime** (see M
 - [x] codex review — 4 rounds, 11 findings (2 correctness + 9 hardening), ALL fixed + verified
 
 ## ✅ DONE. Final state
+
 8 commits on `feat/ai-chat`. typecheck 0 errors, prod build ✓, streaming/actions/validation all
 verified against real Postgres + mock sidecar. Review converged (round 4 = deep recipe edge cases,
 handled). Not pushed/merged — morning task.
 
 ## Codex round 4 — addressed + verified
+
 - confirm rejects non-numeric/missing ingredient macros (`reqNum`) instead of zeroing → a recipe
   can't be saved with macros differing from the approved card (verified: string/missing → 400).
 - recipes attach fiber per-ingredient (recipe nutrients sum from ingredients) — verified persist.
 
 ## Codex findings — all addressed
+
 - P1 (commit ≠ card): confirm now logs the **displayed** proposal macros as 1 serving. Proved with
   a divergent-payload test (payload said BOGUS/999cal/servings:2 → logged row was 150/5/27/3, srv=1).
 - P1 (servings double-count): same fix — servings forced to 1, macros are the shown totals.
@@ -57,12 +64,14 @@ handled). Not pushed/merged — morning task.
 - P2 (zod peer): bumped agent `zod` to ^4 (SDK peer-deps zod@^4); tool constructs verified.
 
 ## Codex round 2 — all addressed + verified (400s/200 via curl)
+
 - schedule w/o `scheduleAt` → 400 (was: silently logged now).
 - negative macros → 400; recipe requires ingredients + `makesServings > 0`.
 - recipe card previews per-serving macros (ingredients ÷ makesServings) = what's saved.
 - sidecar aborts the Claude run on SSE client disconnect (AbortController on `res` close).
 
 ## Codex round 3 — all addressed + verified
+
 - Proposals carry a `nutrients` bag (fiber etc.); confirm → prepFood's sanitizeNutrients keeps
   net-carb/bolus accuracy. Verified: fiberG 6 → bolusable 21 of 27 carbs; food row stores it.
 - scheduleAt validated (exported `parseScheduleAt`) BEFORE any write → invalid/past = 400 with
@@ -73,6 +82,7 @@ handled). Not pushed/merged — morning task.
 Total: 3 review rounds, 9 findings (2 P1 + 7 P2) all fixed + verified. A final round is running.
 
 ## Deploy status (for morning)
+
 - Chat is on `feat/ai-chat`, NOT pushed/merged. The live app is still the describe/report build
   the user was mid-deploying. Morning path: (1) finish sidecar Coolify setup using the NEW
   zero-downtime approach (give sidecar a **domain**, set app `AGENT_URL` to it — no custom
@@ -82,6 +92,7 @@ Total: 3 review rounds, 9 findings (2 P1 + 7 P2) all fixed + verified. A final r
   everything app-side is verified here against a mock sidecar + real Postgres.
 
 ## Verification evidence
+
 - Playwright drove: open chat → send → streaming assistant text → `Track now` card → Confirm →
   `✓ Logged` + authoritative macros. Screenshots in `/tmp/hm-verify/*.png` (ephemeral).
 - Real DB writes confirmed via psql: track (pending=f), schedule (pending=t), recipe (per-serving
@@ -94,6 +105,7 @@ Total: 3 review rounds, 9 findings (2 P1 + 7 P2) all fixed + verified. A final r
   Confirms adapter-node passes the SSE ReadableStream straight through token-by-token.
 
 ## How to run / verify
+
 - App dev: `pnpm dev` (needs Postgres: `pnpm db:start` via docker, then `pnpm db:push`).
 - Sidecar local: `cd agent && AGENT_SECRET=x CLAUDE_CODE_OAUTH_TOKEN=x node server.mjs`.
 - Sidecar self-check: `cd agent && npm run check`.
@@ -101,6 +113,7 @@ Total: 3 review rounds, 9 findings (2 P1 + 7 P2) all fixed + verified. A final r
   driven without a real Claude token.
 
 ## Resume pointer
+
 If compacted: re-read this file + the Task above. Continue at the first unchecked box.
 Core novel piece is the sidecar `/chat` SSE + `propose_action`; everything else reuses
 existing food logic. Don't restart — the food describe/report feature already shipped on `main`.

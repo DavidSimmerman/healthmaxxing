@@ -479,8 +479,16 @@ export function scorePeriod(
 			label: g.label,
 			points: n ? (BONUS_CAP_WEEK * overshoot(specs[g.key], g.value)) / (3 * n) : 0
 		})),
-		{ key: 'strength', label: SPEC.strength.label, points: (BONUS_CAP_WEEK * overshoot(strengthSpec, extras.strengthCount)) / 3 },
-		{ key: 'running', label: SPEC.running.label, points: (BONUS_CAP_WEEK * overshoot(runningSpec, extras.runningMiles)) / 3 }
+		{
+			key: 'strength',
+			label: SPEC.strength.label,
+			points: (BONUS_CAP_WEEK * overshoot(strengthSpec, extras.strengthCount)) / 3
+		},
+		{
+			key: 'running',
+			label: SPEC.running.label,
+			points: (BONUS_CAP_WEEK * overshoot(runningSpec, extras.runningMiles)) / 3
+		}
 	];
 	const bonusParts = base == null ? [] : rawParts.filter((p) => p.points >= 0.05);
 	const bonus = bonusParts.reduce((s, p) => s + p.points, 0);

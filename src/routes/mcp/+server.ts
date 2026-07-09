@@ -761,7 +761,10 @@ async function callExportData(id: Id, args: Record<string, unknown>) {
 		const { from, to } = periodRange(period, anchor);
 		const data = await runExport(category, from, to);
 		const line = `Export ${category} ${from} → ${to} (${period}).`;
-		return toolResult(id, `${line}\n${JSON.stringify({ period, from, to, category, data }, null, 2)}`);
+		return toolResult(
+			id,
+			`${line}\n${JSON.stringify({ period, from, to, category, data }, null, 2)}`
+		);
 	} catch (e) {
 		if (e instanceof Error && e.message === 'invalid date') {
 			return toolResult(id, 'Invalid `date` — use YYYY-MM-DD.', true);

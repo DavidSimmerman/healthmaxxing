@@ -187,7 +187,11 @@
 					class="mt-3 flex items-center justify-between rounded-lg px-3 py-2 text-xs transition"
 					style="background: var(--color-bg-elevated); color: var(--color-text-muted);"
 				>
-					<span>Include today <span style="color: var(--color-text-subtle);">(assumes full budget)</span></span>
+					<span
+						>Include today <span style="color: var(--color-text-subtle);"
+							>(assumes full budget)</span
+						></span
+					>
 					<span
 						class="flex h-5 w-9 items-center rounded-full p-0.5 transition"
 						class:accent-gradient={data.includeToday}

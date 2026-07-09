@@ -211,22 +211,40 @@
 							schedulingQuick = { foodId: q.foodId, name: q.name };
 						}}
 					>
-						<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
+						<svg
+							width="14"
+							height="14"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							stroke-linejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg
+						>
 					</button>
 				</div>
 			{/each}
 		</div>
 		{#if schedulingQuick}
 			<div class="card-sm mt-2 flex items-center gap-2 p-3">
-				<span class="flex-1 truncate text-sm text-white">Schedule <b>{schedulingQuick.name}</b></span>
+				<span class="flex-1 truncate text-sm text-white"
+					>Schedule <b>{schedulingQuick.name}</b></span
+				>
 				<input
 					type="time"
 					bind:value={quickTime}
 					class="rounded-md bg-white/10 px-2 py-1 text-sm text-white"
 					aria-label="Scheduled time"
 				/>
-				<button class="rounded-md bg-white/10 px-3 py-1 text-sm font-semibold text-white hover:bg-white/20" onclick={scheduleQuick}>Schedule</button>
-				<button class="px-2 py-1 text-sm text-white/60 hover:text-white" onclick={() => (schedulingQuick = null)} aria-label="Cancel">✕</button>
+				<button
+					class="rounded-md bg-white/10 px-3 py-1 text-sm font-semibold text-white hover:bg-white/20"
+					onclick={scheduleQuick}>Schedule</button
+				>
+				<button
+					class="px-2 py-1 text-sm text-white/60 hover:text-white"
+					onclick={() => (schedulingQuick = null)}
+					aria-label="Cancel">✕</button
+				>
 			</div>
 		{/if}
 	{/if}
@@ -267,7 +285,8 @@
 			{/each}
 		</div>
 		<p class="mt-2 text-center text-xs" style="color: var(--color-text-subtle);">
-			Planned meals already count toward your day — confirm when you eat (stamps the time) or remove.
+			Planned meals already count toward your day — confirm when you eat (stamps the time) or
+			remove.
 		</p>
 	{/if}
 

@@ -17,7 +17,8 @@ export async function POST({ request }) {
 	const messages = Array.isArray(body?.messages) ? (body.messages as ChatMessage[]) : null;
 	if (!messages) throw error(400, 'messages array required');
 	// Backstop against accidental image-data bloat — the client persists text + imageCount only.
-	if (JSON.stringify(messages).length > 512 * 1024) throw error(413, 'conversation too large to save');
+	if (JSON.stringify(messages).length > 512 * 1024)
+		throw error(413, 'conversation too large to save');
 
 	const title = (typeof body.title === 'string' && body.title.trim()) || deriveTitle(messages);
 

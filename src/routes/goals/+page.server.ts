@@ -49,10 +49,13 @@ export async function load({ url }) {
 	// the week that contains today.
 	const todayWeekStart = weekToDate(today).from;
 	const nextWeekStart = addDays(weekStart, 7);
-	const nextWeekDate = nextWeekStart > todayWeekStart ? null : (() => {
-		const t = addDays(date, 7);
-		return t > today ? today : t;
-	})();
+	const nextWeekDate =
+		nextWeekStart > todayWeekStart
+			? null
+			: (() => {
+					const t = addDays(date, 7);
+					return t > today ? today : t;
+				})();
 
 	return { view, date, today, weekDays, prevWeekDate: addDays(date, -7), nextWeekDate };
 }

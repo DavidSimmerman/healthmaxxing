@@ -1,5 +1,12 @@
 import { db } from '$lib/server/db';
-import { settings, quickAdds, foods, dexcomAuth, fitbitAuth, vacations } from '$lib/server/db/schema';
+import {
+	settings,
+	quickAdds,
+	foods,
+	dexcomAuth,
+	fitbitAuth,
+	vacations
+} from '$lib/server/db/schema';
 import { asc, eq } from 'drizzle-orm';
 import { fail } from '@sveltejs/kit';
 import { listVacations } from '$lib/server/vacations';
@@ -73,7 +80,8 @@ export const actions = {
 		const to = String(form.get('to') ?? '').trim();
 		if (!validDate(from) || !validDate(to))
 			return fail(400, { vacationError: 'Enter valid start and end dates.' });
-		if (from > to) return fail(400, { vacationError: 'End date must be on or after the start date.' });
+		if (from > to)
+			return fail(400, { vacationError: 'End date must be on or after the start date.' });
 		await db.insert(vacations).values({ from, to });
 		return { vacationAdded: true };
 	},

@@ -43,8 +43,12 @@
 			onclick={openNewChat}
 			class="accent-gradient ml-auto flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-semibold text-white transition active:scale-95"
 		>
-			<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"
-				><path stroke-linecap="round" d="M12 5v14m-7-7h14" /></svg
+			<svg
+				class="h-3.5 w-3.5"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="2.5"
+				viewBox="0 0 24 24"><path stroke-linecap="round" d="M12 5v14m-7-7h14" /></svg
 			>
 			New chat
 		</button>
@@ -68,12 +72,16 @@
 		<div class="flex flex-col gap-2">
 			{#each data.items as item (item.kind + item.id)}
 				{#if item.kind === 'report'}
-					<a href="/reports/{item.id}" class="card-sm flex items-center gap-3 p-4 transition hover:brightness-125">
+					<a
+						href="/reports/{item.id}"
+						class="card-sm flex items-center gap-3 p-4 transition hover:brightness-125"
+					>
 						<span class="text-lg">📊</span>
 						<div class="min-w-0 flex-1">
 							<p class="truncate font-medium text-white">{item.title}</p>
 							<p class="mt-0.5 text-xs" style="color: var(--color-text-subtle);">
-								Report · {fmtWhen(item.at)}{#if item.tag} · {item.tag}{/if}
+								Report · {fmtWhen(item.at)}{#if item.tag}
+									· {item.tag}{/if}
 							</p>
 						</div>
 					</a>

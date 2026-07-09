@@ -22,7 +22,8 @@ export async function POST({ request }) {
 	if (loggedAt != null) {
 		when = new Date(loggedAt);
 		if (Number.isNaN(when.getTime())) throw error(400, 'valid loggedAt required');
-		if (when.getTime() > Date.now()) throw error(400, 'loggedAt cannot be in the future — schedule it instead');
+		if (when.getTime() > Date.now())
+			throw error(400, 'loggedAt cannot be in the future — schedule it instead');
 	}
 
 	const [food] = await db.select().from(foods).where(eq(foods.id, foodId));

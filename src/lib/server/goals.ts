@@ -1,6 +1,12 @@
 import { and, gte, lte, inArray, sql } from 'drizzle-orm';
 import { db } from '$lib/server/db';
-import { activityDays, dailyMetrics, glucoseReadings, pumpGlucose, workouts } from '$lib/server/db/schema';
+import {
+	activityDays,
+	dailyMetrics,
+	glucoseReadings,
+	pumpGlucose,
+	workouts
+} from '$lib/server/db/schema';
 import { deficitDays } from '$lib/server/deficit';
 import { APP_TZ, todayLabel } from '$lib/server/day';
 import { addDays } from '$lib/energy';
