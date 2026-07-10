@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { invalidate } from '$app/navigation';
 	import { pullToRefresh } from '$lib/actions/pullToRefresh';
 	import { openNewChat, openChat } from '$lib/stores/chat';
 
@@ -6,8 +7,14 @@
 
 	let opening = $state<string | null>(null);
 	let error = $state<string | null>(null);
+	// Chats marked read this visit — the loader data is stale until the next invalidation.
+	let readIds = $state<string[]>([]);
 
-	async function openSaved(id: string) {
+	const CHIP = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' } as const;
+	const isUnread = (item: { unread: boolean; id: string }) =>
+		item.unread && !readIds.includes(item.id);
+
+	async function openSaved(id: string, unread = false) {
 		if (opening) return;
 		opening = id;
 		error = null;
@@ -16,11 +23,24 @@
 			if (!res.ok) throw new Error(`HTTP ${res.status}`);
 			const chat = await res.json();
 			openChat(id, chat.messages ?? []);
+			if (unread) markRead(id);
 		} catch (e) {
 			error = e instanceof Error ? e.message : "couldn't open chat";
 		} finally {
 			opening = null;
 		}
+	}
+
+	// Fire-and-forget: clear the dot locally, persist, refresh the nav badge.
+	function markRead(id: string) {
+		readIds.push(id);
+		fetch(`/api/chats/${id}`, {
+			method: 'PATCH',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ unread: false })
+		})
+			.then(() => invalidate('app:unread'))
+			.catch(() => {});
 	}
 
 	// Relative-ish time: today shows the clock, this week the weekday, else the date.
@@ -87,13 +107,25 @@
 					</a>
 				{:else}
 					<button
-						onclick={() => openSaved(item.id)}
+						onclick={() => openSaved(item.id, isUnread(item))}
 						disabled={opening === item.id}
 						class="card-sm flex items-center gap-3 p-4 text-left transition hover:brightness-125 disabled:opacity-60"
 					>
-						<span class="text-lg">💬</span>
+						<span class="text-lg">{item.chatKind !== 'chat' ? '📊' : '💬'}</span>
 						<div class="min-w-0 flex-1">
-							<p class="truncate font-medium text-white">{item.title}</p>
+							<p class="flex items-center gap-1.5 font-medium text-white">
+								{#if isUnread(item)}
+									<span class="accent-gradient h-2 w-2 shrink-0 rounded-full" aria-label="Unread"
+									></span>
+								{/if}
+								<span class="truncate">{item.title}</span>
+								{#if item.chatKind && item.chatKind !== 'chat'}
+									<span
+										class="shrink-0 rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-medium"
+										style="color: var(--color-text-subtle);">{CHIP[item.chatKind]}</span
+									>
+								{/if}
+							</p>
 							<p class="mt-0.5 text-xs" style="color: var(--color-text-subtle);">
 								{opening === item.id ? 'Opening…' : fmtWhen(item.at)}
 							</p>

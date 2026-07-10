@@ -2,6 +2,9 @@
 	import { page } from '$app/state';
 	import { captureOpen } from '$lib/stores/capture';
 
+	// `unread` puts a small badge on the Assistant item (unread report chats).
+	let { unread = 0 }: { unread?: number } = $props();
+
 	// Centre button is "home" everywhere except the home page, where it becomes
 	// the "+" that opens the log-food sheet. So from any other page it's two taps
 	// to log: home, then +.
@@ -92,20 +95,29 @@
 			aria-label="Assistant"
 			aria-current={active.startsWith('/reports') ? 'page' : undefined}
 		>
-			<svg
-				width="22"
-				height="22"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				stroke-width="2"
-				stroke-linecap="round"
-				stroke-linejoin="round"
-			>
-				<path
-					d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"
-				/>
-			</svg>
+			<span class="relative">
+				<svg
+					width="22"
+					height="22"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+				>
+					<path
+						d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"
+					/>
+				</svg>
+				{#if unread > 0}
+					<span
+						class="accent-gradient absolute -top-1.5 -right-2.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[9px] leading-none font-bold text-white"
+					>
+						{unread > 9 ? '9+' : unread}
+					</span>
+				{/if}
+			</span>
 			<span class="text-[10px] font-medium">Assistant</span>
 		</a>
 	</div>

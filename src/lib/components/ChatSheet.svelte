@@ -22,6 +22,7 @@
 		scheduled?: boolean;
 		perServing?: boolean;
 		makesServings?: number | null;
+		macroCheck?: string | null; // web-verification caveat, shown as an amber line
 	};
 	type Item =
 		| { type: 'user'; text: string; images?: string[]; imageCount?: number }
@@ -245,7 +246,11 @@
 			messages.push({ type: 'action', proposal: payload as Proposal, status: 'pending' });
 			curAssistant = -1;
 			scrollToEnd();
-		} else if (event === 'error') errorLine = payload.message ?? 'chat error';
+		} else if (event === 'error') {
+			errorLine = payload.message ?? 'chat error';
+			// A stale resume self-heals: next turn falls back to the server-side history replay.
+			sessionId = null;
+		}
 	}
 
 	async function send() {
@@ -266,7 +271,12 @@
 			const res = await fetch('/api/chat', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ message: text, images: imgs.map((d) => ({ data: d })), sessionId }),
+				body: JSON.stringify({
+					message: text,
+					images: imgs.map((d) => ({ data: d })),
+					sessionId,
+					chatId // lets the server replay persisted history when the SDK session is gone
+				}),
 				signal: ac.signal
 			});
 			if (!res.ok || !res.body) throw new Error((await res.text()) || `HTTP ${res.status}`);
@@ -341,13 +351,25 @@
 	const KIND_LABEL = { track: 'Track now', recipe: 'Save recipe', schedule: 'Schedule' } as const;
 	const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
 
-	function schedTime(pr: Proposal): string {
-		const at = (pr.payload as { scheduleAt?: string })?.scheduleAt;
-		if (!at) return 'no time set';
-		const d = new Date(at);
-		return Number.isNaN(d.getTime())
-			? 'invalid time'
-			: `Today at ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+	// Local HH:MM for the editable <input type="time"> on a pending schedule card.
+	function schedHHMM(pr: Proposal): string {
+		const at = (pr.payload as { scheduleAt?: string } | null)?.scheduleAt;
+		const d = at ? new Date(at) : null;
+		if (!d || Number.isNaN(d.getTime())) return '';
+		return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+	}
+
+	// Re-point the proposal at today @ HH:MM. confirm() reads the live payload and the
+	// server re-validates (a past time surfaces on the card's error path).
+	function setSchedTime(item: Extract<Item, { type: 'action' }>, v: string) {
+		if (!/^\d{2}:\d{2}$/.test(v)) return;
+		const [h, min] = v.split(':').map(Number);
+		const now = new Date();
+		const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, min);
+		item.proposal.payload = {
+			...((item.proposal.payload as Record<string, unknown> | null) ?? {}),
+			scheduleAt: d.toISOString()
+		};
 	}
 
 	function previewMacros(pr: Proposal) {
@@ -474,9 +496,19 @@
 								{m.proposal.summary}
 							</p>{/if}
 						{#if m.proposal.kind === 'schedule' && m.status === 'pending'}
-							<p class="mt-1 text-xs font-medium" style="color: var(--color-accent-to, #fb923c);">
-								⏰ {schedTime(m.proposal)}
-							</p>
+							<label
+								class="mt-1.5 flex items-center gap-2 text-xs font-medium"
+								style="color: var(--color-accent-to, #fb923c);"
+							>
+								⏰
+								<input
+									type="time"
+									value={schedHHMM(m.proposal)}
+									onchange={(e) => setSchedTime(m, e.currentTarget.value)}
+									class="rounded-md bg-white/10 px-2 py-1 text-sm text-white"
+									aria-label="Scheduled time"
+								/>
+							</label>
 						{/if}
 
 						<div class="mt-3 grid grid-cols-4 gap-2 text-center">
@@ -495,6 +527,9 @@
 										? `bolusable carbs ${fmt(m.result.bolusableCarbsG)}g`
 										: ''}
 							</p>
+							{#if m.result.macroCheck}
+								<p class="mt-1 text-center text-xs text-amber-400/90">{m.result.macroCheck}</p>
+							{/if}
 						{/if}
 
 						{#if m.status === 'pending'}

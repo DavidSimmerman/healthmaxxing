@@ -30,6 +30,7 @@
 		bolusableCarbsG: number;
 		bolusableLowConfidence: boolean;
 		source: string;
+		macroCheck?: string | null; // web-verification caveat, shown as an amber line
 	};
 
 	let {
@@ -168,6 +169,9 @@
 			per serving{#if food.servingSize}
 				· {food.servingSize}{/if}
 		</p>
+		{#if food.macroCheck}
+			<p class="mt-1 text-xs text-amber-400/90">{food.macroCheck}</p>
+		{/if}
 
 		<label for="ai-servings" class="mt-4 block text-xs" style="color: var(--color-text-subtle);"
 			>Servings ({UNIT_LABEL['serving']})</label

@@ -7,7 +7,7 @@
 	import ChatSheet from '$lib/components/ChatSheet.svelte';
 	import { captureOpen } from '$lib/stores/capture';
 
-	let { children } = $props();
+	let { children, data } = $props();
 
 	// Inside the iOS app's WebView, nudge the home-screen widget to reload after
 	// any food-log change (create / edit / delete — all hit /api/log) so it never
@@ -52,6 +52,6 @@
 	{@render children()}
 </div>
 
-<BottomNav />
+<BottomNav unread={data.unreadChats} />
 <CaptureSheet bind:open={$captureOpen} />
 <ChatSheet />

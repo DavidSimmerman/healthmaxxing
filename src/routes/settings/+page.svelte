@@ -63,6 +63,24 @@
 	);
 	// Free-text context for the scheduled Claude review.
 	let notes = $state(data.settings.notes ?? '');
+	// Scheduled-report prompt overrides; blank = the built-in default (shown as placeholder).
+	const cadences = ['daily', 'weekly', 'monthly'] as const;
+	let prompts = $state({
+		daily: data.reportPrompts.daily ?? '',
+		weekly: data.reportPrompts.weekly ?? '',
+		monthly: data.reportPrompts.monthly ?? ''
+	});
+
+	// Last sync outcome per integration source ('dexcom' | 'fitbit' | 'tandem' | 'healthkit').
+	let syncBySource = $derived(new Map(data.syncStatus.map((s) => [s.source, s])));
+	function relTime(at: Date | string): string {
+		const m = Math.floor((Date.now() - new Date(at).getTime()) / 60000);
+		if (m < 1) return 'just now';
+		if (m < 60) return `${m}m ago`;
+		const h = Math.floor(m / 60);
+		if (h < 24) return `${h}h ago`;
+		return `${Math.floor(h / 24)}d ago`;
+	}
 
 	// A cleared number input binds as '' / null / undefined depending on path —
 	// treat all as blank so clearing both fields saves null, not 0.
@@ -92,7 +110,8 @@
 			fiberMode !== (data.settings.fiberMode ?? 'full') ||
 			// compare trimmed — save sends notes.trim(), so trailing whitespace alone
 			// isn't a real change and shouldn't keep the form stuck "unsaved".
-			notes.trim() !== (data.settings.notes ?? '')
+			notes.trim() !== (data.settings.notes ?? '') ||
+			cadences.some((k) => prompts[k].trim() !== (data.reportPrompts[k] ?? ''))
 	);
 
 	async function saveTargets(e: SubmitEvent) {
@@ -111,7 +130,10 @@
 					birthDate: birthDate || null,
 					sex: sex || null,
 					fiberMode,
-					notes: notes.trim() || null
+					notes: notes.trim() || null,
+					dailyReportPrompt: prompts.daily.trim() || null,
+					weeklyReportPrompt: prompts.weekly.trim() || null,
+					monthlyReportPrompt: prompts.monthly.trim() || null
 				})
 			});
 			if (!res.ok) {
@@ -377,6 +399,30 @@
 			Supplements, current questions, context — included in the scheduled Claude review.
 		</p>
 
+		<h2 class="mt-6 mb-2 text-sm font-semibold tracking-wide text-white uppercase">
+			AI report prompts
+		</h2>
+		<p class="mb-3 text-xs leading-relaxed" style="color: var(--color-text-subtle);">
+			What each scheduled report should analyze. Leave empty to use the default.
+		</p>
+		<div class="flex flex-col gap-3">
+			{#each cadences as k (k)}
+				<label class="flex flex-col gap-1">
+					<span class="text-xs font-medium capitalize" style="color: var(--color-text-subtle);"
+						>{k}</span
+					>
+					<textarea
+						bind:value={prompts[k]}
+						rows="3"
+						maxlength="4000"
+						placeholder={data.reportPromptDefaults[k]}
+						class="w-full resize-y rounded-lg border bg-transparent px-3 py-2 text-sm text-white outline-none focus:border-orange-400"
+						style="border-color: var(--color-border);"
+					></textarea>
+				</label>
+			{/each}
+		</div>
+
 		<div class="mt-4 flex items-center justify-between gap-3">
 			<div class="text-xs" style="color: var(--color-text-subtle);">
 				{#if saveError}
@@ -561,9 +607,32 @@
 		{/if}
 	</section>
 
-	{#if data.dexcomConfigured || data.fitbitConfigured || data.tandemConfigured}
+	{#if data.dexcomConfigured || data.fitbitConfigured || data.tandemConfigured || syncBySource.has('healthkit')}
 		<section class="mt-6">
 			<h2 class="mb-3 text-sm font-semibold tracking-wide text-white uppercase">Integrations</h2>
+
+			<!-- Compact sync health: dot = green (ok, <36h) / amber (ok, stale) / red (failed). -->
+			{#snippet syncHealth(source: string)}
+				{@const s = syncBySource.get(source)}
+				{#if s}
+					{@const ageH = (Date.now() - new Date(s.at).getTime()) / 3600000}
+					<p
+						class="mt-1 flex items-center gap-1.5 text-xs"
+						style="color: var(--color-text-subtle);"
+					>
+						<span
+							class="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
+							class:bg-emerald-400={s.ok && ageH < 36}
+							class:bg-amber-400={s.ok && ageH >= 36}
+							class:bg-rose-400={!s.ok}
+						></span>
+						Last sync {relTime(s.at)}{s.ok && s.detail ? ` · ${s.detail}` : ''}
+					</p>
+					{#if !s.ok && s.detail}
+						<p class="mt-0.5 truncate text-xs text-rose-400">{s.detail}</p>
+					{/if}
+				{/if}
+			{/snippet}
 			{#if data.dexcomConfigured}
 				<article class="card-sm flex items-center gap-3 p-4">
 					<div class="min-w-0 flex-1">
@@ -576,6 +645,7 @@
 						<p class="mt-0.5 text-xs leading-relaxed" style="color: var(--color-text-subtle);">
 							Syncs your glucose trace, time-in-range and GMI from Dexcom.
 						</p>
+						{@render syncHealth('dexcom')}
 					</div>
 					<!-- Full-page redirect to Dexcom's consent screen (no token needed — being
 					     logged in is the owner check; see the authorize route). -->
@@ -602,6 +672,7 @@
 							Syncs steps, sleep and resting heart rate via the Google Health API. Reconnect if the
 							token expires or is revoked.
 						</p>
+						{@render syncHealth('fitbit')}
 					</div>
 					<!-- Redirect to Google's consent screen (offline + prompt=consent mints a
 					     fresh refresh token; being logged in is the owner check). Opens in a
@@ -633,6 +704,7 @@
 						Pulls your basal rate, boluses (carbs + delivered) and Control-IQ auto-corrections from
 						Tandem Source. Uses your Tandem&nbsp;Source login — stored encrypted, only used to sync.
 					</p>
+					{@render syncHealth('tandem')}
 					<form
 						method="POST"
 						action="?/connectTandem"
@@ -688,6 +760,16 @@
 							</p>
 						{/if}
 					</form>
+				</article>
+			{/if}
+
+			{#if syncBySource.has('healthkit')}
+				<article class="card-sm mt-3 p-4">
+					<p class="text-sm font-medium text-white">Apple Health</p>
+					<p class="mt-0.5 text-xs leading-relaxed" style="color: var(--color-text-subtle);">
+						Weight, activity and vitals pushed by the iOS app.
+					</p>
+					{@render syncHealth('healthkit')}
 				</article>
 			{/if}
 
