@@ -493,7 +493,7 @@ export async function energyInsights({
 	// "Am I losing as fast as my deficit predicts?" — branch on whether the logged
 	// intake is actually a deficit; surplus/maintenance gets different copy.
 	let ratio: number | null = null;
-	let verdict: EnergyInsights['pace']['verdict'] = 'unknown';
+	let verdict: EnergyInsights['pace']['verdict'];
 	if (!enoughIntake || measuredRatePerWeekKg == null || expectedRatePerWeekKg == null) {
 		verdict = 'unknown';
 	} else if (expectedRatePerWeekKg >= -1e-6) {

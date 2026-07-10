@@ -26,7 +26,7 @@ function toHistory(messages: ChatMessage[]): ChatHistoryLine[] {
 		}
 	}
 	// Cap what we ship to the sidecar: newest 60 turns, ~12k chars.
-	let out = lines.slice(-60);
+	const out = lines.slice(-60);
 	let total = out.reduce((a, l) => a + l.text.length, 0);
 	while (out.length > 1 && total > 12_000) total -= out.shift()!.text.length;
 	return out;
