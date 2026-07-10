@@ -49,7 +49,17 @@ export const generateReport = (input: {
 	instruction?: string;
 }) => call('/report', input, 240_000).then((r) => r.result as string);
 
+/**
+ * One-shot analysis with read-only health tools + web; returns the final text.
+ * Used by the scheduled daily/weekly/monthly report chats (reportChats.ts). 300s:
+ * monthly deep-dives run long, and this is always called off the request path.
+ */
+export const generateInsight = (prompt: string) =>
+	call('/insight', { prompt }, 300_000).then((r) => r.result as string);
+
 export type ChatImage = { data: string; mediaType?: string };
+/** Persisted turns replayed to the sidecar when its SDK session is gone. */
+export type ChatHistoryLine = { role: 'user' | 'assistant'; text: string };
 
 /**
  * Open a streaming chat turn against the sidecar and return the raw upstream Response so the
@@ -57,7 +67,12 @@ export type ChatImage = { data: string; mediaType?: string };
  * No JSON timeout here — chat streams are long-lived; the client aborts to stop.
  */
 export async function chatStream(
-	body: { message?: string; images?: ChatImage[]; sessionId?: string },
+	body: {
+		message?: string;
+		images?: ChatImage[];
+		sessionId?: string;
+		history?: ChatHistoryLine[];
+	},
 	signal?: AbortSignal
 ): Promise<Response> {
 	const url = env.AGENT_URL;

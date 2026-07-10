@@ -1,12 +1,18 @@
 // Claude sandbox for healthmaxxing — a locked-down Claude Code sidecar bundled in
 // the app container (loopback 127.0.0.1). Auth is the user's Max subscription via
-// CLAUDE_CODE_OAUTH_TOKEN (no API billing). Two jobs:
+// CLAUDE_CODE_OAUTH_TOKEN (no API billing). Jobs:
 //   POST /describe  {image?, mediaType?, text?}  -> validated food JSON (vision, NO tools)
 //   POST /report    {period?, from?, to?, instruction?} -> Claude reads/writes via the
 //                                                          app's /mcp + web, calls save_report
+//   POST /insight   {prompt} -> one-shot analysis text (read-only tools + web); used by
+//                               the app's scheduled daily/weekly/monthly report chats
+//   POST /chat      SSE streaming chat (read-only tools + web + propose_action)
 // Everything not in the allowlist is DENIED by canUseTool, so even though Claude Code
 // ships Bash/Write/etc., none of them can run here.
 import { createServer } from 'node:http';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
 import { query, tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { parseFood } from './parseFood.mjs';
@@ -66,7 +72,7 @@ const DESCRIBE_SYS = `You identify food from a photo and/or a text description a
 Respond with ONLY a JSON object (no prose, no markdown fences) of this shape:
 {"name":string,"brand":string|null,"servingSize":string|null,"servingGrams":number|null,
  "calories":number,"proteinG":number,"carbsG":number,"fatG":number,
- "nutrients":{"fiberG"?:number,"sugarG"?:number,"sodiumMg"?:number,"satFatG"?:number} | null,
+ "nutrients":{"fiberG"?:number,"sugarG"?:number,"sugarAlcoholG"?:number,"alluloseG"?:number,"sodiumMg"?:number,"satFatG"?:number} | null,
  "source":"label_ocr"|"estimate","confidence":"high"|"medium"|"low"}
 All numbers are PER SINGLE SERVING. Use "label_ocr" only when reading a Nutrition Facts panel;
 use "estimate" when estimating from a food photo or description. If unsure, estimate and set a lower confidence.`;
@@ -135,22 +141,83 @@ async function report({ period, from, to, instruction }, abortController) {
 	});
 }
 
+// ── Insight (one-shot analysis for the scheduled report CHATS) ────────────────
+// Read-only tools + web, RO bearer, returns the final text — the app saves it as a
+// chat row the user can reply to. Unlike /report it never writes anything.
+const INSIGHT_SYS = `You are the analyst behind scheduled report chats in a personal health dashboard; the user is a type-1 diabetic tracking food, glucose, insulin, activity, sleep, and weight. Use the read-only "health" MCP tools to pull REAL data before writing — never invent numbers; if a source is empty, say so briefly. Write directly to the user ("you"), as plain conversational text for a chat bubble: short paragraphs, an emoji or two as section markers, NO markdown syntax (no #, no **, no tables). Lead with the single most important takeaway, be specific (real numbers, real dates), and end practical.`;
+
+async function insight({ prompt }, abortController) {
+	if (!MCP_URL || !MCP_TOKEN_RO) {
+		const e = new Error('insight requires APP_MCP_URL and MCP_TOKEN(_RO)');
+		e.status = 503;
+		throw e;
+	}
+	if (typeof prompt !== 'string' || !prompt.trim()) {
+		const e = new Error('prompt required');
+		e.status = 400;
+		throw e;
+	}
+	const allowed = new Set([...CHAT_READ_TOOLS, 'WebSearch', 'WebFetch']);
+	return runToFinalText(prompt, {
+		systemPrompt: INSIGHT_SYS,
+		abortController,
+		tools: ['WebSearch', 'WebFetch'],
+		mcpServers: {
+			health: { type: 'http', url: MCP_URL, headers: { Authorization: `Bearer ${MCP_TOKEN_RO}` } }
+		},
+		allowedTools: [...allowed],
+		canUseTool: gate(allowed),
+		maxTurns: 40,
+		settingSources: []
+	});
+}
+
 // ── Chat (SSE streaming, multi-turn, vision, propose-to-confirm) ─────────────
-// Read-only health tools + a custom `propose_action` tool. NO write tools exist here,
-// so the agent structurally CANNOT log/modify anything — it can only *propose*, and the
-// app commits on the user's confirm. Multi-turn context via SDK session `resume`.
+// Read-only health tools + web + a custom `propose_action` tool. NO write tools exist
+// here, so the agent structurally CANNOT log/modify anything — it can only *propose*,
+// and the app commits on the user's confirm. Multi-turn context: SDK `resume` while the
+// session file survives, else server-side history replay (see below).
 const CHAT_READ_TOOLS = [
 	'mcp__health__get_nutrition',
 	'mcp__health__get_day_log',
 	'mcp__health__get_energy_ledger',
 	'mcp__health__get_health_metrics',
 	'mcp__health__get_body_trends',
+	'mcp__health__get_goal_report',
 	'mcp__health__list_foods',
 	'mcp__health__lookup_barcode',
 	'mcp__health__lookup_fdc',
 	'mcp__health__get_report',
-	'mcp__health__list_reports'
+	'mcp__health__list_reports',
+	'mcp__health__list_chats',
+	'mcp__health__get_chat'
 ];
+
+// SDK sessions live at <config>/projects/<cwd with non-alnum → '-'>/<id>.jsonl. When
+// that file is gone (sidecar container replaced — no volume), `resume` SILENTLY starts
+// a fresh session: the exact "chat forgot everything" bug. Check the disk and fall back
+// to history replay instead. Layout change in a future SDK just degrades to replay.
+function sessionOnDisk(id) {
+	if (!/^[a-zA-Z0-9-]+$/.test(id)) return false;
+	const base = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
+	const proj = process.cwd().replace(/[^a-zA-Z0-9]/g, '-');
+	return existsSync(join(base, 'projects', proj, `${id}.jsonl`));
+}
+
+// Persisted turns (from the app's chats table) → one context block. Belt-and-braces
+// caps: the app already trims, but never trust the wire.
+function historyBlock(history) {
+	if (!Array.isArray(history)) return null;
+	const lines = [];
+	for (const h of history.slice(-80)) {
+		if (!h || typeof h.text !== 'string' || !h.text.trim()) continue;
+		lines.push(`${h.role === 'user' ? 'User' : 'Assistant'}: ${h.text.trim()}`);
+	}
+	if (!lines.length) return null;
+	let block = lines.join('\n');
+	if (block.length > 24_000) block = `…\n${block.slice(-24_000)}`;
+	return `Earlier conversation (context — continue it naturally, no re-greeting):\n${block}\n--- end of earlier conversation ---`;
+}
 
 const CHAT_SYS = `You are the in-app AI assistant for a personal health & nutrition dashboard used by a type-1 diabetic to track food and macros. Chat naturally: be concise, warm, and practical. Use plain text (short paragraphs, the odd list) — no big markdown headers.
 
@@ -160,7 +227,15 @@ YOU CANNOT log, edit, or schedule anything yourself. When — and only when — 
 
 When the user sends photos of barcodes or nutrition labels, read them (look up barcodes for known data) and keep a running tally — e.g. build up a recipe across several photos, then propose it.
 
-ALWAYS set propose_action top-level "name" and calories/proteinG/carbsG/fatG to the EXACT totals to log and show on the card — for track & schedule these numbers are logged verbatim (as one entry), so make them the full portion, not per-serving. Whenever you can read them from a label, also include a top-level "nutrients" object (e.g. {"fiberG": 6, "sugarAlcoholG": 3}) — fiber and sugar alcohols are needed for accurate insulin (net-carb) dosing. Then by kind:
+MACRO ACCURACY — your numbers get logged and drive insulin dosing, so verify, don't vibe:
+- Restaurant/chain/branded items: FIRST look up the CURRENT official nutrition (WebSearch, then WebFetch the chain's nutrition page/PDF) and compute the exact order — size, sides, sauces, dressings, modifications. Name the source in your reply ("per Chipotle's nutrition calculator").
+- Packaged/whole foods: lookup_barcode / lookup_fdc before estimating.
+- Estimate ONLY when no exact data exists, and say plainly what you assumed (portion weight, oil, prep).
+DOUBLE-CHECK before every propose_action: step back and re-derive the totals from your sources — arithmetic (per-unit × quantity), serving basis (per item vs per 100g vs whole order), and the energy identity (calories ≈ 4×protein + 4×carbs + 9×fat, allowing for fiber/sugar alcohols/allulose). Resolve any mismatch before proposing; keep one short line of remaining assumptions.
+
+PAST CONVERSATIONS: list_chats / get_chat read earlier conversations and past daily/weekly/monthly report chats — use them when the user refers to something discussed before ("like last time", "what did my weekly report say").
+
+ALWAYS set propose_action top-level "name" and calories/proteinG/carbsG/fatG to the EXACT totals to log and show on the card — for track & schedule these numbers are logged verbatim (as one entry), so make them the full portion, not per-serving. Whenever you can read them from a label, also include a top-level "nutrients" object (e.g. {"fiberG": 6, "sugarAlcoholG": 3, "alluloseG": 8}) — fiber, sugar alcohols, and allulose are needed for accurate insulin (net-carb) dosing. Then by kind:
 - "track"    → no extra payload needed (top-level macros are logged as-is). payload: {}
 - "recipe"   → payload: { ingredients: [{ name, amount?, calories, proteinG, carbsG, fatG, nutrients? }], makesServings, totalGrams? }  (ingredient macros are WHOLE-recipe contributions, not per serving; per-serving is derived on save. For recipes, attach fiber/sugar-alcohol to EACH ingredient's own "nutrients" bag — recipe nutrients are summed from ingredients, NOT the top-level bag. All ingredient macros must be numbers.)
 - "schedule" → payload: { scheduleAt }  (ISO-8601 instant later TODAY, with timezone offset)`;
@@ -169,7 +244,7 @@ function sse(res, event, data) {
 	res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
-async function chat(req, res, { message, images, sessionId }) {
+async function chat(req, res, { message, images, sessionId, history }) {
 	if (!MCP_URL || !MCP_TOKEN_RO)
 		return send(res, 503, { error: 'chat requires APP_MCP_URL and MCP_TOKEN(_RO)' });
 	const hasText = typeof message === 'string' && message.trim().length > 0;
@@ -214,9 +289,21 @@ async function chat(req, res, { message, images, sessionId }) {
 		]
 	});
 
-	const allowed = new Set([...CHAT_READ_TOOLS, 'mcp__proposer__propose_action']);
+	const allowed = new Set([
+		...CHAT_READ_TOOLS,
+		'mcp__proposer__propose_action',
+		'WebSearch',
+		'WebFetch'
+	]);
+
+	// Resume only when the session file still exists; otherwise replay the persisted
+	// history (passed by the app from the chats table) so a reopened/redeployed chat
+	// actually remembers what's on screen.
+	const resume = typeof sessionId === 'string' && sessionId !== '' && sessionOnDisk(sessionId);
+	const context = resume ? null : historyBlock(history);
 
 	const content = [];
+	if (context) content.push({ type: 'text', text: context });
 	if (hasText) content.push({ type: 'text', text: message });
 	for (const im of imgs) {
 		const img = parseImage(im?.data ?? im, im?.mediaType);
@@ -235,7 +322,9 @@ async function chat(req, res, { message, images, sessionId }) {
 		systemPrompt: CHAT_SYS,
 		includePartialMessages: true,
 		abortController,
-		tools: [], // no built-ins (Bash/Write/etc.)
+		// Base built-ins: web only (macro verification needs current restaurant data).
+		// `tools` is the availability set — Bash/Write/etc. stay out entirely.
+		tools: ['WebSearch', 'WebFetch'],
 		mcpServers: {
 			// RO token: even if a prompt-injected label tricked the model into a write
 			// tool, /mcp itself refuses writes on this bearer.
@@ -247,7 +336,7 @@ async function chat(req, res, { message, images, sessionId }) {
 		maxTurns: 20,
 		settingSources: []
 	};
-	if (typeof sessionId === 'string' && sessionId) options.resume = sessionId;
+	if (resume) options.resume = sessionId;
 
 	try {
 		let streamedText = false;
@@ -328,14 +417,16 @@ const server = createServer(async (req, res) => {
 			return send(res, 401, { error: 'unauthorized' });
 
 		const body = await readJson(req);
-		if (req.url === '/describe' || req.url === '/report') {
+		if (req.url === '/describe' || req.url === '/report' || req.url === '/insight') {
 			// Abort the Claude run when the caller disconnects (the app-side fetch aborts
-			// /describe at 90s, /report at 240s) — otherwise the SDK keeps burning the
-			// Max-subscription rate limit on a response nobody reads. Same as /chat.
+			// /describe at 90s, /report at 240s, /insight at 300s) — otherwise the SDK
+			// keeps burning the Max-subscription rate limit on a response nobody reads.
 			const abortController = new AbortController();
 			res.on('close', () => abortController.abort()); // no-op after a completed run
 			if (req.url === '/describe')
 				return send(res, 200, { food: await describe(body, abortController) });
+			if (req.url === '/insight')
+				return send(res, 200, { result: await insight(body, abortController) });
 			return send(res, 200, { result: await report(body, abortController) });
 		}
 		if (req.url === '/chat') return await chat(req, res, body); // manages its own SSE response
