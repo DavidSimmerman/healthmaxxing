@@ -35,6 +35,16 @@ if (!SECRET) throw new Error('AGENT_SECRET is required');
 if (!process.env.CLAUDE_CODE_OAUTH_TOKEN) throw new Error('CLAUDE_CODE_OAUTH_TOKEN is required');
 
 // ── Tool policy ─────────────────────────────────────────────────────────────
+// LOAD-BEARING: tools from an EXTERNAL http MCP server (our `health`) are deferred —
+// the model only sees their names after calling the built-in `ToolSearch` meta-tool.
+// So any run that restricts `options.tools` MUST keep 'ToolSearch' in that array, or
+// every mcp__health__* tool is invisible and the model answers "I have no health
+// tools" while still happily using web/vision. (In-process SDK MCP servers — the
+// proposer below — are NOT deferred, which is exactly why this hid for so long: chat
+// could still propose food, it just couldn't read any of the user's data.)
+// ToolSearch only loads tool schemas; it executes nothing, so allowing it is safe.
+const TOOL_SEARCH = 'ToolSearch';
+
 const REPORT_TOOLS = new Set([
 	'mcp__health__get_nutrition',
 	'mcp__health__get_body_trends',
@@ -46,7 +56,8 @@ const REPORT_TOOLS = new Set([
 	'mcp__health__list_reports',
 	'mcp__health__save_report',
 	'WebSearch',
-	'WebFetch'
+	'WebFetch',
+	TOOL_SEARCH // required to discover the deferred mcp__health__* tools
 ]);
 
 // Deny-by-default gate. Any tool not explicitly allowed is refused with no prompt —
@@ -157,11 +168,11 @@ async function insight({ prompt }, abortController) {
 		e.status = 400;
 		throw e;
 	}
-	const allowed = new Set([...CHAT_READ_TOOLS, 'WebSearch', 'WebFetch']);
+	const allowed = new Set([...CHAT_READ_TOOLS, 'WebSearch', 'WebFetch', TOOL_SEARCH]);
 	return runToFinalText(prompt, {
 		systemPrompt: INSIGHT_SYS,
 		abortController,
-		tools: ['WebSearch', 'WebFetch'],
+		tools: ['WebSearch', 'WebFetch', TOOL_SEARCH],
 		mcpServers: {
 			health: { type: 'http', url: MCP_URL, headers: { Authorization: `Bearer ${MCP_TOKEN_RO}` } }
 		},
@@ -293,7 +304,8 @@ async function chat(req, res, { message, images, sessionId, history }) {
 		...CHAT_READ_TOOLS,
 		'mcp__proposer__propose_action',
 		'WebSearch',
-		'WebFetch'
+		'WebFetch',
+		TOOL_SEARCH
 	]);
 
 	// Resume only when the session file still exists; otherwise replay the persisted
@@ -322,9 +334,10 @@ async function chat(req, res, { message, images, sessionId, history }) {
 		systemPrompt: CHAT_SYS,
 		includePartialMessages: true,
 		abortController,
-		// Base built-ins: web only (macro verification needs current restaurant data).
-		// `tools` is the availability set — Bash/Write/etc. stay out entirely.
-		tools: ['WebSearch', 'WebFetch'],
+		// Base built-ins: web (macro verification needs current restaurant data) +
+		// ToolSearch (without it the deferred mcp__health__* tools are invisible —
+		// see the TOOL_SEARCH note above). Bash/Write/etc. stay out entirely.
+		tools: ['WebSearch', 'WebFetch', TOOL_SEARCH],
 		mcpServers: {
 			// RO token: even if a prompt-injected label tricked the model into a write
 			// tool, /mcp itself refuses writes on this bearer.
