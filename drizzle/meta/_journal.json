@@ -162,6 +162,13 @@
       "when": 1783469664223,
       "tag": "0022_nappy_alice",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1783642219386,
+      "tag": "0023_safe_puck",
+      "breakpoints": true
     }
   ]
 }
