@@ -3,6 +3,8 @@
 // get_body_trends, get_nutrition, get_health_metrics) let Claude review the
 // user's nutrition & health data and suggest improvements. Sleep is sourced
 // elsewhere (Google Health); tools degrade gracefully when a metric has no data.
+// list_chats / get_chat / get_goal_report expose past assistant conversations,
+// generated reports, and the app's own goal scorecard (all read-only).
 import { json } from '@sveltejs/kit';
 import { timingSafeEqual } from 'node:crypto';
 import { env } from '$env/dynamic/private';
@@ -32,9 +34,10 @@ import { getFiberMode } from '$lib/server/prefs';
 import { periodRange } from '$lib/period';
 import { healthReview } from '$lib/server/healthMetrics';
 import { runExport, EXPORT_CATEGORY_NAMES } from '$lib/server/healthExport';
+import { buildGoalsView } from '$lib/server/goals';
 import { db } from '$lib/server/db';
-import { reports } from '$lib/server/db/schema';
-import { eq, desc } from 'drizzle-orm';
+import { chats, reports, type ChatMessage } from '$lib/server/db/schema';
+import { and, eq, desc, sql } from 'drizzle-orm';
 
 const PROTOCOL_VERSION = '2025-03-26';
 
@@ -627,8 +630,9 @@ const CORRECT_LOG_ENTRY_TOOL = {
 	}
 };
 
-// Catalog of the daily_metrics keys the iOS app syncs, so Claude can interpret
-// the opaque keys + units. Keep in sync with HealthSync.swift's metric names.
+// Catalog of the daily_metrics keys the iOS app (and server-side rollups) write,
+// so Claude can interpret the opaque keys + units. Keep in sync with
+// HealthSync.swift's metric names and the Dexcom rollup.
 const HEALTH_METRIC_CATALOG =
 	'CORE (Apple, daily) — water_l (L), resting_hr, hr_avg, hr_min, hr_max (bpm), hrv_ms (ms), ' +
 	'spo2_pct (%), resp_rate (breaths/min), vo2max (ml/kg·min), bmi. ' +
@@ -650,6 +654,9 @@ const HEALTH_METRIC_CATALOG =
 	'EVENTS (daily counts) — mindful_min (min/day), stand_hours, low_hr_events, high_hr_events, ' +
 	'irregular_rhythm_events, low_cardio_events, env_audio_events, headphone_audio_events, ' +
 	'walking_steadiness_events, handwashing_events, toothbrushing_events. ' +
+	'GLUCOSE (Dexcom CGM daily rollup) — glucose_tir_pct (% of the day’s CGM readings in range ' +
+	'70–180 mg/dL), glucose_gmi_pct (%, Glucose Management Indicator — estimated A1C from mean CGM ' +
+	'glucose). ' +
 	'SLEEP (Fitbit via Google Health API, nightly) — sleep_min, time_in_bed_min, sleep_deep_min, sleep_light_min, ' +
 	'sleep_rem_min, sleep_awake_min (min), sleep_efficiency_pct (%), sleep_resting_hr (bpm), ' +
 	'sleep_hrv_ms (ms), sleep_spo2_pct (%), sleep_resp_rate (breaths/min), ' +
@@ -706,6 +713,48 @@ async function callGetHealthMetrics(id: Id, args: Record<string, unknown>) {
 		}
 		console.error('get_health_metrics failed:', e);
 		return toolResult(id, 'Could not load health metrics: an internal error occurred.', true);
+	}
+}
+
+const GET_GOAL_REPORT_TOOL = {
+	name: 'get_goal_report',
+	description:
+		'Read-only. The app’s OWN goal scoring for a day — THE tool for "how are my goals going". ' +
+		'Returns the day’s 0–100 score + letter grade built from per-goal attainment (glucose ' +
+		'TIR/GMI/lows/highs, steps, sleep, calorie deficit, protein, water — each with value vs ' +
+		'target, points, and met/not), the current perfect-day streak, any bank/debt bonus carried ' +
+		'from earlier in the week, and week + month rollups (daily goals averaged over completed ' +
+		'days; weekly strength/running goals prorated to days elapsed). Scores are null when ' +
+		'nothing was logged; days inside a trip score against relaxed vacation targets.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			date: { type: 'string', description: 'Day to score, YYYY-MM-DD (default today)' }
+		}
+	}
+};
+
+async function callGetGoalReport(id: Id, args: Record<string, unknown>) {
+	const date = typeof args.date === 'string' ? args.date.trim() : todayLabel();
+	// Round-trip through Date (UTC) like periodRange: reject malformed or impossible
+	// calendar dates instead of letting them misbehave deep inside the scorer.
+	const d = new Date(`${date}T00:00:00Z`);
+	if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== date) {
+		return toolResult(id, 'Invalid `date` — use YYYY-MM-DD.', true);
+	}
+	try {
+		const view = await buildGoalsView(date);
+		// weekDayMetrics is /goals-loader plumbing (raw per-day rows) — not returned.
+		const report = { date: view.date, day: view.day, week: view.week, month: view.month };
+		const line =
+			view.day.score == null
+				? `Goals ${date}: no scoreable data for this day.`
+				: `Goals ${date}: day ${view.day.score}/100 (${view.day.grade}), streak ${view.day.streak}, ` +
+					`week ${view.week.score ?? 'n/a'}, month ${view.month.score ?? 'n/a'}.`;
+		return toolResult(id, `${line}\n${JSON.stringify(report, null, 2)}`);
+	} catch (e) {
+		console.error('get_goal_report failed:', e);
+		return toolResult(id, 'Could not load the goal report: an internal error occurred.', true);
 	}
 }
 
@@ -864,6 +913,9 @@ async function callListReports(id: Id, args: Record<string, unknown>) {
 	}
 }
 
+// Shared uuid-shape guard so a malformed id is a clean "not found", not a DB cast error.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const GET_REPORT_TOOL = {
 	name: 'get_report',
 	description:
@@ -881,8 +933,7 @@ const GET_REPORT_TOOL = {
 async function callGetReport(id: Id, args: Record<string, unknown>) {
 	const reportId = typeof args.id === 'string' ? args.id.trim() : '';
 	if (!reportId) return toolResult(id, 'Provide the report `id`.', true);
-	// Guard the uuid shape so a malformed id is a clean "not found", not a DB cast error.
-	if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(reportId)) {
+	if (!UUID_RE.test(reportId)) {
 		return toolResult(id, `No report found with id ${reportId}.`, true);
 	}
 	try {
@@ -893,6 +944,168 @@ async function callGetReport(id: Id, args: Record<string, unknown>) {
 	} catch (e) {
 		console.error('get_report failed:', e);
 		return toolResult(id, 'Could not load the report: an internal error occurred.', true);
+	}
+}
+
+// ── Assistant chats (read-only) ───────────────────────────────────────────────
+// Chat rows double as generated reports (kind daily|weekly|monthly): list_chats is
+// the index, get_chat the transcript. Image DATA is never persisted, so user turns
+// carry only text + a photo count; action rows (propose-to-confirm food logging)
+// flatten to bracketed status lines.
+
+const LIST_CHATS_TOOL = {
+	name: 'list_chats',
+	description:
+		'Read-only. List saved assistant conversations AND generated daily/weekly/monthly reports ' +
+		'(newest first) WITHOUT transcripts — the index for looking up a past conversation or past ' +
+		'report. Each row has id, title, kind (chat|daily|weekly|monthly), dateLabel (the day a ' +
+		'report covers; null for plain chats), updatedAt, and a short preview of the last message. ' +
+		'Filter with `kind` (e.g. "weekly" for weekly reports). Use get_chat with an id to read one.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			limit: { type: 'number', description: 'Max rows to return (default 20, max 50)' },
+			kind: {
+				type: 'string',
+				enum: ['chat', 'daily', 'weekly', 'monthly'],
+				description: 'Only rows of this kind: plain chats, or daily/weekly/monthly reports'
+			}
+		}
+	}
+};
+
+const CHAT_KINDS = ['chat', 'daily', 'weekly', 'monthly'];
+
+// Flatten a stored ChatMessage to {role, text}: photo chips become a text suffix,
+// action rows a bracketed "[Logged: …]" status line attributed to the assistant.
+function flattenChatMessage(m: ChatMessage): { role: 'user' | 'assistant'; text: string } {
+	if (m.role === 'user') {
+		return {
+			role: 'user',
+			text: m.imageCount
+				? `${m.text} [${m.imageCount} photo${m.imageCount === 1 ? '' : 's'} attached]`
+				: m.text
+		};
+	}
+	if (m.role === 'assistant') return { role: 'assistant', text: m.text };
+	const verb = m.status === 'done' ? 'Logged' : m.status === 'cancelled' ? 'Cancelled' : 'Proposed';
+	return {
+		role: 'assistant',
+		text:
+			`[${verb}: ${m.name} — ${Math.round(m.macros.calories)} kcal, ` +
+			`${round1(m.macros.proteinG)}p/${round1(m.macros.carbsG)}c/${round1(m.macros.fatG)}f` +
+			`${m.scheduled ? ' (scheduled)' : ''}]`
+	};
+}
+
+// Preview = the last message's text on one line, ~140 chars; action rows compress
+// to just the food + calories.
+function chatPreview(messages: ChatMessage[]): string {
+	const last = messages[messages.length - 1];
+	if (!last) return '';
+	const text =
+		last.role === 'action'
+			? `[${last.name} — ${Math.round(last.macros.calories)} kcal]`
+			: last.text;
+	const flat = text.replace(/\s+/g, ' ').trim();
+	return flat.length > 140 ? `${flat.slice(0, 140)}…` : flat;
+}
+
+async function callListChats(id: Id, args: Record<string, unknown>) {
+	let limit = typeof args.limit === 'number' ? Math.floor(args.limit) : 20;
+	if (!Number.isFinite(limit) || limit < 1) limit = 20;
+	if (limit > 50) limit = 50;
+	const kind = typeof args.kind === 'string' ? args.kind : undefined;
+	if (kind && !CHAT_KINDS.includes(kind)) {
+		return toolResult(id, `Unknown kind "${kind}". Valid: ${CHAT_KINDS.join(', ')}.`, true);
+	}
+	try {
+		// Empty chats (opened but never messaged) are noise — excluded in SQL so
+		// `limit` still means "N listable rows".
+		const notEmpty = sql`jsonb_array_length(${chats.messages}) > 0`;
+		const rows = await db
+			.select({
+				id: chats.id,
+				title: chats.title,
+				kind: chats.kind,
+				dateLabel: chats.dateLabel,
+				updatedAt: chats.updatedAt,
+				messages: chats.messages
+			})
+			.from(chats)
+			.where(kind ? and(notEmpty, eq(chats.kind, kind)) : notEmpty)
+			.orderBy(desc(chats.updatedAt))
+			.limit(limit);
+		const list = rows.map(({ messages, ...r }) => ({
+			...r,
+			updatedAt: r.updatedAt.toISOString(),
+			preview: chatPreview(messages)
+		}));
+		const line = list.length
+			? `${list.length} chat${list.length === 1 ? '' : 's'}${kind ? ` (kind ${kind})` : ''} (newest first).`
+			: `No ${kind ? `${kind} ` : ''}chats saved yet.`;
+		return toolResult(id, `${line}\n${JSON.stringify({ chats: list }, null, 2)}`);
+	} catch (e) {
+		console.error('list_chats failed:', e);
+		return toolResult(id, 'Could not list chats: an internal error occurred.', true);
+	}
+}
+
+const GET_CHAT_TOOL = {
+	name: 'get_chat',
+	description:
+		'Read-only. Fetch one saved conversation or generated report by id, its messages flattened ' +
+		'to {role, text} (food-logging action rows become bracketed "[Logged: …]" lines). Use ' +
+		'list_chats first to find the id. Very long chats keep only the newest messages, with a ' +
+		'note when earlier ones were omitted.',
+	inputSchema: {
+		type: 'object',
+		properties: {
+			id: { type: 'string', description: 'The chat id (uuid) from list_chats' }
+		},
+		required: ['id']
+	}
+};
+
+// Keep a transcript under ~20k serialized chars by dropping the OLDEST messages
+// first; the newest message always survives, even if it alone busts the budget.
+const CHAT_CHAR_BUDGET = 20_000;
+
+async function callGetChat(id: Id, args: Record<string, unknown>) {
+	const chatId = typeof args.id === 'string' ? args.id.trim() : '';
+	if (!chatId) return toolResult(id, 'Provide the chat `id`.', true);
+	if (!UUID_RE.test(chatId)) {
+		return toolResult(id, `No chat found with id ${chatId}.`, true);
+	}
+	try {
+		const [row] = await db.select().from(chats).where(eq(chats.id, chatId)).limit(1);
+		if (!row) return toolResult(id, `No chat found with id ${chatId}.`, true);
+		const flat = row.messages.map(flattenChatMessage);
+		let cut = 0; // count of oldest messages dropped
+		let size = 0;
+		for (let i = flat.length - 1; i >= 0; i--) {
+			size += JSON.stringify(flat[i]).length + 1;
+			if (size > CHAT_CHAR_BUDGET && i < flat.length - 1) {
+				cut = i + 1;
+				break;
+			}
+		}
+		const messages = flat.slice(cut);
+		const payload = {
+			id: row.id,
+			title: row.title,
+			kind: row.kind,
+			dateLabel: row.dateLabel,
+			...(cut > 0 && { note: `...earlier messages omitted (${cut} of ${flat.length})` }),
+			messages
+		};
+		const line =
+			`Chat "${row.title}" (${row.kind}${row.dateLabel ? ` ${row.dateLabel}` : ''}): ` +
+			`${flat.length} message${flat.length === 1 ? '' : 's'}${cut ? `, oldest ${cut} omitted` : ''}.`;
+		return toolResult(id, `${line}\n${JSON.stringify(payload, null, 2)}`);
+	} catch (e) {
+		console.error('get_chat failed:', e);
+		return toolResult(id, 'Could not load the chat: an internal error occurred.', true);
 	}
 }
 
@@ -1133,12 +1346,15 @@ export async function POST({ request, url }) {
 					GET_NUTRITION_TOOL,
 					GET_HEALTH_METRICS_TOOL,
 					GET_DAY_LOG_TOOL,
+					GET_GOAL_REPORT_TOOL,
 					CORRECT_FOOD_NUTRIENTS_TOOL,
 					CORRECT_LOG_ENTRY_TOOL,
 					EXPORT_DATA_TOOL,
 					SAVE_REPORT_TOOL,
 					LIST_REPORTS_TOOL,
-					GET_REPORT_TOOL
+					GET_REPORT_TOOL,
+					LIST_CHATS_TOOL,
+					GET_CHAT_TOOL
 				]
 			});
 		case 'tools/call': {
@@ -1157,12 +1373,15 @@ export async function POST({ request, url }) {
 			if (name === 'get_nutrition') return callGetNutrition(id, args);
 			if (name === 'get_health_metrics') return callGetHealthMetrics(id, args);
 			if (name === 'get_day_log') return callGetDayLog(id, args);
+			if (name === 'get_goal_report') return callGetGoalReport(id, args);
 			if (name === 'correct_food_nutrients') return callCorrectFoodNutrients(id, args);
 			if (name === 'correct_log_entry') return callCorrectLogEntry(id, args);
 			if (name === 'export_data') return callExportData(id, args);
 			if (name === 'save_report') return callSaveReport(id, args);
 			if (name === 'list_reports') return callListReports(id, args);
 			if (name === 'get_report') return callGetReport(id, args);
+			if (name === 'list_chats') return callListChats(id, args);
+			if (name === 'get_chat') return callGetChat(id, args);
 			return rpcError(id, -32602, `Unknown tool: ${String(name)}`);
 		}
 		case 'ping':
