@@ -114,6 +114,15 @@ async function buildPrompt(kind: ReportKind, from: string, to: string, today: st
 			'get_day_log, get_health_metrics for sleep/activity/glucose incl. glucose_gmi_pct and ' +
 			'glucose_tir_pct, get_body_trends).'
 	];
+	// Settings → Notes is the user's standing context (supplements, open questions); the
+	// settings UI promises it reaches the scheduled review, so pass it explicitly.
+	const notes = cfg?.notes?.trim();
+	if (notes) {
+		parts.push(
+			`The user's standing notes from Settings (supplements, context, questions they want ` +
+				`considered):\n${trunc(notes, 2000)}`
+		);
+	}
 	const history = await priorContext(kind, today);
 	if (history) {
 		parts.push(

@@ -45,6 +45,18 @@ export async function POST({ request }) {
 	const title = explicit ?? deriveTitle(messages);
 
 	if (typeof body.id === 'string' && body.id) {
+		// Opening a saved chat and closing it re-POSTs the unchanged transcript. Bumping
+		// updatedAt there would reorder the Assistant list just for reading a report —
+		// so a no-op save writes nothing (the mark-read PATCH deliberately doesn't bump
+		// updatedAt either).
+		const [existing] = await db
+			.select({ id: chats.id, messages: chats.messages })
+			.from(chats)
+			.where(eq(chats.id, body.id));
+		if (!existing) throw error(404, 'chat not found');
+		if (!explicit && JSON.stringify(existing.messages) === JSON.stringify(messages))
+			return json({ id: existing.id });
+
 		const [row] = await db
 			.update(chats)
 			.set({
