@@ -58,6 +58,17 @@ export async function PUT({ request }) {
 		if (trimmed != null && trimmed.length > 4000) throw error(400, 'notes too long (max 4000)');
 		profile.notes = trimmed && trimmed.length ? trimmed : null;
 	}
+	// Editable instruction bodies for the scheduled report chats. Same rules as
+	// notes: trim, cap length, blank → null (null = built-in default in reportChats.ts).
+	for (const k of ['dailyReportPrompt', 'weeklyReportPrompt', 'monthlyReportPrompt'] as const) {
+		if (k in body) {
+			const p = body[k];
+			if (p !== null && typeof p !== 'string') throw error(400, `invalid ${k}`);
+			const trimmed = p == null ? null : p.trim();
+			if (trimmed != null && trimmed.length > 4000) throw error(400, `${k} too long (max 4000)`);
+			profile[k] = trimmed && trimmed.length ? trimmed : null;
+		}
+	}
 
 	const set = { ...targets, ...profile };
 	await db

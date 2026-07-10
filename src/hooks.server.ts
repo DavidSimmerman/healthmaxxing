@@ -1,9 +1,10 @@
 import { json, type Handle } from '@sveltejs/kit';
-import { dev } from '$app/environment';
+import { building, dev } from '$app/environment';
 import { env } from '$env/dynamic/private';
 import { authEnabled, sessionValid, SESSION_COOKIE } from '$lib/server/session';
 import { apiTokenOk } from '$lib/server/auth';
 import { keycloakEnabled } from '$lib/server/keycloak';
+import { startScheduler } from '$lib/server/scheduler';
 
 // Fail-open tripwire. Auth is DELIBERATELY fail-open when unconfigured (dev
 // convenience), so losing the env vars in prod would silently publish every page
@@ -23,6 +24,10 @@ if (!dev && !authEnabled()) {
 		].join('\n')
 	);
 }
+
+// In-app scheduler (daily/weekly/monthly report chats). `building` guard: the
+// SvelteKit postbuild analyse step imports server modules; never tick there.
+if (!building) startScheduler();
 
 // Paths that participate in the OAuth + MCP flow and need permissive CORS so
 // Claude.ai (web) can complete discovery, registration, and token exchange.
