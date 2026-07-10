@@ -1,6 +1,12 @@
 import { and, gte, lte, inArray, sql } from 'drizzle-orm';
 import { db } from '$lib/server/db';
-import { activityDays, dailyMetrics, glucoseReadings, pumpGlucose, workouts } from '$lib/server/db/schema';
+import {
+	activityDays,
+	dailyMetrics,
+	glucoseReadings,
+	pumpGlucose,
+	workouts
+} from '$lib/server/db/schema';
 import { deficitDays } from '$lib/server/deficit';
 import { APP_TZ, todayLabel } from '$lib/server/day';
 import { addDays } from '$lib/energy';
@@ -181,6 +187,10 @@ export type GoalsView = {
 	};
 	week: PeriodSummary;
 	month: PeriodSummary;
+	// The week's per-day metrics (Sun–Sat) the week rollup was scored from —
+	// returned so the /goals loader can build its week strip without re-querying
+	// the same range. The loader strips this before the client payload.
+	weekDayMetrics: DayMetrics[];
 };
 
 // Score a calendar period [from, to]. Daily goals are averaged over COMPLETED days
@@ -191,10 +201,14 @@ async function periodSummary(
 	from: string,
 	to: string,
 	periodDays: number,
-	specsFor: (date: string) => SpecMap
+	specsFor: (date: string) => SpecMap,
+	// Caller-prefetched day metrics for [from, to], to avoid a duplicate range query.
+	prefetched?: DayMetrics[] | Promise<DayMetrics[]>
 ): Promise<PeriodSummary> {
 	const today = todayLabel();
-	const completed = (await dayMetricsForRange(from, to)).filter((d) => d.date < today);
+	const completed = (await (prefetched ?? dayMetricsForRange(from, to))).filter(
+		(d) => d.date < today
+	);
 	const extraTo = to < today ? to : today;
 	const extras =
 		extraTo >= from ? await periodExtras(from, extraTo) : { strengthCount: 0, runningMiles: 0 };
@@ -263,12 +277,18 @@ export async function buildGoalsView(anchor: string): Promise<GoalsView> {
 	}
 
 	const weekStart = weekToDate(anchor).from; // Sunday
+	const weekEnd = addDays(weekStart, 6);
 	const ym = anchor.slice(0, 7);
 	const [y, mo] = anchor.split('-').map(Number);
 	const lastDom = new Date(Date.UTC(y, mo, 0)).getUTCDate(); // last day of anchor's month
-	const [week, month] = await Promise.all([
-		periodSummary(weekStart, addDays(weekStart, 6), 7, specsFor),
-		periodSummary(`${ym}-01`, `${ym}-${String(lastDom).padStart(2, '0')}`, lastDom, specsFor)
+	// Fetch the week's day metrics ONCE (dayMetricsForRange is an async fn → a real
+	// promise, safe to await both here and inside periodSummary) and hand them to
+	// the week rollup; they're also returned for the /goals loader to reuse.
+	const weekMetricsP = dayMetricsForRange(weekStart, weekEnd);
+	const [week, month, weekDayMetrics] = await Promise.all([
+		periodSummary(weekStart, weekEnd, 7, specsFor, weekMetricsP),
+		periodSummary(`${ym}-01`, `${ym}-${String(lastDom).padStart(2, '0')}`, lastDom, specsFor),
+		weekMetricsP
 	]);
 
 	return {
@@ -284,6 +304,7 @@ export async function buildGoalsView(anchor: string): Promise<GoalsView> {
 			vacation: specsFor(anchor) === VACATION_SPECS
 		},
 		week,
-		month
+		month,
+		weekDayMetrics
 	};
 }

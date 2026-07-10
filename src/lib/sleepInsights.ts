@@ -62,7 +62,8 @@ export function sleepInsights(a: SleepAverages): Insight[] {
 	}
 
 	// Stage percentages of time asleep.
-	const pctOf = (min: number | null) => (a.sleepMin && min != null ? (min / a.sleepMin) * 100 : null);
+	const pctOf = (min: number | null) =>
+		a.sleepMin && min != null ? (min / a.sleepMin) * 100 : null;
 	const deepPct = pctOf(a.deepMin);
 	const remPct = pctOf(a.remMin);
 	const lightPct = pctOf(a.lightMin);
@@ -179,7 +180,9 @@ export function clockStddevNoonOrigin(clockMins: number[]): number | null {
 // Older-half avg vs newer-half avg of a newest-first series. `delta = newer −
 // older`. Needs ≥2 values each side (so ≥4 total); returns null otherwise.
 // Exported for the selfcheck.
-export function halfSplitDelta(newestFirst: number[]): { older: number; newer: number; delta: number } | null {
+export function halfSplitDelta(
+	newestFirst: number[]
+): { older: number; newer: number; delta: number } | null {
 	const xs = newestFirst.filter((x) => typeof x === 'number' && !Number.isNaN(x));
 	if (xs.length < 4) return null;
 	const half = Math.floor(xs.length / 2);
@@ -213,7 +216,9 @@ function weekdayOf(date: string): number {
 
 export function sleepTrends(nights: Night[], stagesByDate: StagesByDate, tz: string): Insight[] {
 	const out: Insight[] = [];
-	const nightsWithStages = nights.map((n) => stagesByDate[n.date]).filter((s): s is NightStages => !!s);
+	const nightsWithStages = nights
+		.map((n) => stagesByDate[n.date])
+		.filter((s): s is NightStages => !!s);
 
 	// 1. Awakenings (fragmentation) — honest stand-in for Fitbit "restlessness".
 	if (nightsWithStages.length > 0) {
@@ -260,7 +265,9 @@ export function sleepTrends(nights: Night[], stagesByDate: StagesByDate, tz: str
 
 	// 3. Sleep debt — cumulative shortfall vs a 7h (420m) floor over the slice.
 	{
-		const sleeps = nights.map((n) => n.m.sleep_min).filter((x): x is number => typeof x === 'number');
+		const sleeps = nights
+			.map((n) => n.m.sleep_min)
+			.filter((x): x is number => typeof x === 'number');
 		if (sleeps.length > 0) {
 			const debt = sleeps.reduce((s, m) => s + Math.max(0, 420 - m), 0);
 			const status: Status = debt < 60 ? 'good' : debt < 240 ? 'low' : 'high';
@@ -277,7 +284,9 @@ export function sleepTrends(nights: Night[], stagesByDate: StagesByDate, tz: str
 
 	// 4a. Resting-HR trend — newer half vs older half. Down = improving.
 	{
-		const rhr = nights.map((n) => n.m.sleep_resting_hr).filter((x): x is number => typeof x === 'number');
+		const rhr = nights
+			.map((n) => n.m.sleep_resting_hr)
+			.filter((x): x is number => typeof x === 'number');
 		const d = halfSplitDelta(rhr);
 		if (d) {
 			const rounded = Math.round(Math.abs(d.delta));
@@ -297,7 +306,9 @@ export function sleepTrends(nights: Night[], stagesByDate: StagesByDate, tz: str
 
 	// 4b. HRV trend — newer half vs older half. Up = improving.
 	{
-		const hrv = nights.map((n) => n.m.sleep_hrv_ms).filter((x): x is number => typeof x === 'number');
+		const hrv = nights
+			.map((n) => n.m.sleep_hrv_ms)
+			.filter((x): x is number => typeof x === 'number');
 		const d = halfSplitDelta(hrv);
 		if (d) {
 			const rounded = Math.round(Math.abs(d.delta));

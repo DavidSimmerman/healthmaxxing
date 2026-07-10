@@ -24,7 +24,11 @@ export async function load() {
 
 	const stagesByDate: Record<
 		string,
-		{ startAt: string; endAt: string; segments: { stage: string; startMin: number; durationMin: number }[] }
+		{
+			startAt: string;
+			endAt: string;
+			segments: { stage: string; startMin: number; durationMin: number }[];
+		}
 	> = {};
 	for (const s of stages) {
 		stagesByDate[s.date] = {

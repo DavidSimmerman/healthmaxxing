@@ -22,6 +22,7 @@
 		scheduled?: boolean;
 		perServing?: boolean;
 		makesServings?: number | null;
+		macroCheck?: string | null; // web-verification caveat, shown as an amber line
 	};
 	type Item =
 		| { type: 'user'; text: string; images?: string[]; imageCount?: number }
@@ -45,6 +46,7 @@
 	let curAssistant = $state(-1);
 	let ac: AbortController | null = null;
 	let scroller = $state<HTMLElement | undefined>(undefined);
+	let sheetEl = $state<HTMLElement | undefined>(undefined);
 	let revealRAF = 0;
 
 	// Track the on-screen keyboard via the visual viewport so the sheet occupies exactly the
@@ -82,6 +84,7 @@
 		if (s && s !== loadedRef) {
 			loadedRef = s;
 			loadSession(s.messages ?? [], s.id ?? null);
+			sheetEl?.focus(); // initial focus into the dialog (container — no keyboard pop)
 		} else if (!s) {
 			loadedRef = null;
 		}
@@ -164,9 +167,9 @@
 		}
 	}
 
-	async function scrollToEnd() {
+	async function scrollToEnd(behavior: ScrollBehavior = 'smooth') {
 		await tick();
-		scroller?.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' });
+		scroller?.scrollTo({ top: scroller.scrollHeight, behavior });
 	}
 
 	async function onPick(e: Event) {
@@ -205,11 +208,21 @@
 				const remaining = m.target.length - m.text.length;
 				const n = Math.max(2, Math.ceil(remaining / 5)); // quick; accelerates on backlog
 				m.text = m.target.slice(0, m.text.length + n);
-				scrollToEnd();
+				scrollToEnd('auto'); // per-frame smooth restarts the animation 60×/s — jank on phones
 				revealRAF = requestAnimationFrame(step);
+			} else {
+				scrollToEnd(); // reveal finished — one smooth settle
 			}
 		};
 		revealRAF = requestAnimationFrame(step);
+	}
+
+	// Anything that repoints curAssistant mid-reveal must flush first: the rAF loop
+	// stops rescheduling once curAssistant moves, stranding the bubble truncated on
+	// screen (target already holds the full streamed text).
+	function flushReveal() {
+		const m = messages[curAssistant];
+		if (m?.type === 'assistant' && m.target != null) m.text = m.target;
 	}
 
 	function handleEvent(raw: string) {
@@ -229,10 +242,15 @@
 		if (event === 'session') sessionId = payload.sessionId ?? sessionId;
 		else if (event === 'delta') appendDelta(payload.text ?? '');
 		else if (event === 'action') {
+			flushReveal();
 			messages.push({ type: 'action', proposal: payload as Proposal, status: 'pending' });
 			curAssistant = -1;
 			scrollToEnd();
-		} else if (event === 'error') errorLine = payload.message ?? 'chat error';
+		} else if (event === 'error') {
+			errorLine = payload.message ?? 'chat error';
+			// A stale resume self-heals: next turn falls back to the server-side history replay.
+			sessionId = null;
+		}
 	}
 
 	async function send() {
@@ -243,6 +261,7 @@
 		messages.push({ type: 'user', text, images: imgs.length ? imgs : undefined });
 		input = '';
 		attachments = [];
+		flushReveal(); // a still-animating previous reply must not be stranded truncated
 		curAssistant = -1;
 		streaming = true;
 		scrollToEnd();
@@ -252,7 +271,12 @@
 			const res = await fetch('/api/chat', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ message: text, images: imgs.map((d) => ({ data: d })), sessionId }),
+				body: JSON.stringify({
+					message: text,
+					images: imgs.map((d) => ({ data: d })),
+					sessionId,
+					chatId // lets the server replay persisted history when the SDK session is gone
+				}),
 				signal: ac.signal
 			});
 			if (!res.ok || !res.body) throw new Error((await res.text()) || `HTTP ${res.status}`);
@@ -327,13 +351,25 @@
 	const KIND_LABEL = { track: 'Track now', recipe: 'Save recipe', schedule: 'Schedule' } as const;
 	const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
 
-	function schedTime(pr: Proposal): string {
-		const at = (pr.payload as { scheduleAt?: string })?.scheduleAt;
-		if (!at) return 'no time set';
-		const d = new Date(at);
-		return Number.isNaN(d.getTime())
-			? 'invalid time'
-			: `Today at ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+	// Local HH:MM for the editable <input type="time"> on a pending schedule card.
+	function schedHHMM(pr: Proposal): string {
+		const at = (pr.payload as { scheduleAt?: string } | null)?.scheduleAt;
+		const d = at ? new Date(at) : null;
+		if (!d || Number.isNaN(d.getTime())) return '';
+		return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+	}
+
+	// Re-point the proposal at today @ HH:MM. confirm() reads the live payload and the
+	// server re-validates (a past time surfaces on the card's error path).
+	function setSchedTime(item: Extract<Item, { type: 'action' }>, v: string) {
+		if (!/^\d{2}:\d{2}$/.test(v)) return;
+		const [h, min] = v.split(':').map(Number);
+		const now = new Date();
+		const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, min);
+		item.proposal.payload = {
+			...((item.proposal.payload as Record<string, unknown> | null) ?? {}),
+			scheduleAt: d.toISOString()
+		};
 	}
 
 	function previewMacros(pr: Proposal) {
@@ -356,10 +392,22 @@
 	}
 </script>
 
+<!-- Escape closes from anywhere while the chat is open (fullscreen sheet, no backdrop). -->
+<svelte:window
+	onkeydown={(e) => {
+		if ($chatSession && e.key === 'Escape') close();
+	}}
+/>
+
 {#if $chatSession}
 	<!-- Sized to the visual viewport so the input bar hugs the keyboard (no gap / focus jump). -->
 	<div
-		class="fixed right-0 left-0 z-50 flex flex-col"
+		bind:this={sheetEl}
+		role="dialog"
+		aria-modal="true"
+		aria-label="Assistant"
+		tabindex="-1"
+		class="fixed right-0 left-0 z-50 flex flex-col outline-none"
 		style="top: {vvH ? vvTop + 'px' : '0'}; height: {vvH
 			? vvH + 'px'
 			: '100dvh'}; background: var(--color-bg, #0a0a0c);"
@@ -448,9 +496,19 @@
 								{m.proposal.summary}
 							</p>{/if}
 						{#if m.proposal.kind === 'schedule' && m.status === 'pending'}
-							<p class="mt-1 text-xs font-medium" style="color: var(--color-accent-to, #fb923c);">
-								⏰ {schedTime(m.proposal)}
-							</p>
+							<label
+								class="mt-1.5 flex items-center gap-2 text-xs font-medium"
+								style="color: var(--color-accent-to, #fb923c);"
+							>
+								⏰
+								<input
+									type="time"
+									value={schedHHMM(m.proposal)}
+									onchange={(e) => setSchedTime(m, e.currentTarget.value)}
+									class="rounded-md bg-white/10 px-2 py-1 text-sm text-white"
+									aria-label="Scheduled time"
+								/>
+							</label>
 						{/if}
 
 						<div class="mt-3 grid grid-cols-4 gap-2 text-center">
@@ -469,6 +527,9 @@
 										? `bolusable carbs ${fmt(m.result.bolusableCarbsG)}g`
 										: ''}
 							</p>
+							{#if m.result.macroCheck}
+								<p class="mt-1 text-center text-xs text-amber-400/90">{m.result.macroCheck}</p>
+							{/if}
 						{/if}
 
 						{#if m.status === 'pending'}

@@ -10,10 +10,30 @@ import { eq } from 'drizzle-orm';
 // no script/style/iframe; links are forced to rel="noopener noreferrer".
 const SANITIZE_OPTS: sanitizeHtml.IOptions = {
 	allowedTags: [
-		'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-		'p', 'ul', 'ol', 'li', 'strong', 'em', 'code', 'pre',
-		'blockquote', 'a', 'hr', 'br',
-		'table', 'thead', 'tbody', 'tr', 'th', 'td'
+		'h1',
+		'h2',
+		'h3',
+		'h4',
+		'h5',
+		'h6',
+		'p',
+		'ul',
+		'ol',
+		'li',
+		'strong',
+		'em',
+		'code',
+		'pre',
+		'blockquote',
+		'a',
+		'hr',
+		'br',
+		'table',
+		'thead',
+		'tbody',
+		'tr',
+		'th',
+		'td'
 	],
 	// `rel` must be allowed or sanitize-html strips the rel="noopener noreferrer"
 	// forced by transformTags below (attribute filtering runs after the transform).

@@ -71,7 +71,7 @@
 				{score == null ? '—' : Math.round(score)}
 			</div>
 			<div
-				class="font-semibold leading-none"
+				class="leading-none font-semibold"
 				style="font-size: {Math.round(size * 0.11)}px; margin-top: {Math.round(
 					size * 0.03
 				)}px; color: {score == null ? 'var(--color-text-subtle)' : arcColor};"

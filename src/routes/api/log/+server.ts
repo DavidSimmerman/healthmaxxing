@@ -2,9 +2,11 @@ import { json, error } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { foods, dailyLog } from '$lib/server/db/schema';
 import { eq } from 'drizzle-orm';
-import { toServings, type Unit } from '$lib/units';
+import type { Unit } from '$lib/units';
 import { bolusableForLoggedEntry } from '$lib/netCarbs';
 import { getFiberMode } from '$lib/server/prefs';
+import { FoodInputError, resolveServings } from '$lib/server/foods';
+import { UUID_RE } from '$lib/uuid';
 
 export async function POST({ request }) {
 	const body = await request.json();
@@ -15,6 +17,8 @@ export async function POST({ request }) {
 		loggedAt?: string;
 	};
 	if (!foodId) throw error(400, 'foodId required');
+	// Malformed uuid → clean 404, not a Postgres uuid-cast 500.
+	if (!UUID_RE.test(foodId)) throw error(404, 'food not found');
 
 	// Optional explicit log time (past/now). A future time belongs on /api/planned
 	// as a pending row, so reject it here to keep logged rows non-future.
@@ -22,44 +26,32 @@ export async function POST({ request }) {
 	if (loggedAt != null) {
 		when = new Date(loggedAt);
 		if (Number.isNaN(when.getTime())) throw error(400, 'valid loggedAt required');
-		if (when.getTime() > Date.now()) throw error(400, 'loggedAt cannot be in the future — schedule it instead');
+		if (when.getTime() > Date.now())
+			throw error(400, 'loggedAt cannot be in the future — schedule it instead');
 	}
 
 	const [food] = await db.select().from(foods).where(eq(foods.id, foodId));
 	if (!food) throw error(404, 'food not found');
 
-	// Gram/volume units need a serving weight to convert; without one, toServings
-	// would treat the amount as servings (188g → 188 servings). A food can lose its
-	// serving weight after a barcode source sync, so reject rather than misread it.
-	if (
-		amount != null &&
-		unit &&
-		unit !== 'serving' &&
-		!(food.servingGrams && food.servingGrams > 0)
-	) {
-		throw error(400, `Cannot log "${food.name}" by ${unit}: it has no serving weight.`);
+	// Shared quantity resolution (rejects 0/negative/NaN amounts and servings,
+	// unknown units, gram/volume logging without a serving weight) — same rules as
+	// the MCP log_food path, so validation can't drift between them.
+	let resolved: ReturnType<typeof resolveServings>;
+	try {
+		resolved = resolveServings(food, { amount, unit, servings: body.servings });
+	} catch (e) {
+		if (e instanceof FoodInputError) throw error(400, e.message);
+		throw e;
 	}
-
-	let servings: number;
-	let storedAmount: number | null;
-	let storedUnit: Unit | null;
-	if (amount != null && unit) {
-		servings = toServings(amount, unit, food.servingGrams);
-		storedAmount = amount;
-		storedUnit = unit;
-	} else {
-		servings = body.servings ?? 1;
-		storedAmount = null;
-		storedUnit = null;
-	}
+	const { servings } = resolved;
 
 	const [entry] = await db
 		.insert(dailyLog)
 		.values({
 			foodId,
 			servings,
-			amount: storedAmount,
-			unit: storedUnit,
+			amount: resolved.amount,
+			unit: resolved.unit,
 			...(when ? { loggedAt: when } : {}),
 			calories: food.calories * servings,
 			proteinG: food.proteinG * servings,

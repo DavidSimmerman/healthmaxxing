@@ -175,7 +175,9 @@ export function parseHealthData(
 	);
 	// floor 70%: a real sleeping SpO2 below 70 is non-physiological — those reads
 	// are sensor noise / non-wear (Fitbit emits ~50), and would bias the mean low.
-	rows.push(...avgSamples(fitPoints(r.spo2), 'oxygenSaturation', 'percentage', 'sleep_spo2_pct', tz, 70));
+	rows.push(
+		...avgSamples(fitPoints(r.spo2), 'oxygenSaturation', 'percentage', 'sleep_spo2_pct', tz, 70)
+	);
 
 	return foldDaily(rows);
 }

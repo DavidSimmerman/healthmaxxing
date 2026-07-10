@@ -221,15 +221,23 @@
 	async function lookup(code: string) {
 		status = 'looking_up';
 		sourceUpdate = null;
-		const res = await fetch(`/api/barcode/${code}`);
-		const body = await res.json();
-		if (body.food) {
-			result = body.food;
-			sourceUpdate = body.sourceUpdate ?? null;
-			status = 'found';
-		} else {
-			status = 'not_found';
-			message = body.message ?? '';
+		try {
+			const res = await fetch(`/api/barcode/${code}`);
+			const body = await res.json();
+			if (body.food) {
+				result = body.food;
+				sourceUpdate = body.sourceUpdate ?? null;
+				status = 'found';
+			} else {
+				status = 'not_found';
+				message = body.message ?? '';
+			}
+		} catch {
+			// Live-scan path awaits this AFTER stopCamera() with no outer catch — a
+			// network failure would strand 'looking_up' with a dead camera. Surface
+			// the same error/retry UI the file-picker path shows.
+			status = 'error';
+			message = "Couldn't look up that barcode — check your connection and try again.";
 		}
 	}
 
@@ -374,7 +382,6 @@
 {#if status === 'scanning' || status === 'decoding_file'}
 	{#if status === 'scanning'}
 		<div class="relative mt-4 overflow-hidden rounded-2xl bg-black" style="aspect-ratio: 3 / 4;">
-			<!-- svelte-ignore a11y_media_has_caption -->
 			<video bind:this={video} autoplay playsinline muted class="h-full w-full object-cover"
 			></video>
 			<!-- Aiming guide only — the full frame is decoded, any angle works -->

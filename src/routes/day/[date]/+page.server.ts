@@ -1,5 +1,5 @@
 import { error } from '@sveltejs/kit';
-import { sql, eq, and, asc, desc } from 'drizzle-orm';
+import { sql, eq, asc, desc } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import {
 	dailyLog,
@@ -20,7 +20,15 @@ import { getFiberMode } from '$lib/server/prefs';
 
 export async function load({ params }) {
 	const { date } = params;
-	if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw error(404, 'bad date');
+	// Round-trip through Date so impossible-but-well-formed values (2026-02-31)
+	// 404 cleanly instead of blowing up in Postgres' ::date cast (same guard as /goals).
+	const parsed = new Date(`${date}T00:00:00Z`);
+	if (
+		!/^\d{4}-\d{2}-\d{2}$/.test(date) ||
+		Number.isNaN(parsed.getTime()) ||
+		parsed.toISOString().slice(0, 10) !== date
+	)
+		throw error(404, 'bad date');
 	// No future days — deficitDays would synthesize a BMR-only "deficit" against
 	// zero intake, which is fake data, not a real day.
 	const today = todayLabel();

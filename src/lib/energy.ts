@@ -76,9 +76,7 @@ export function linearRegression(points: Point[]): { slope: number; intercept: n
 
 // Whole days from `from` to `to` (YYYY-MM-DD). UTC noon avoids DST off-by-one.
 export function daysBetween(from: string, to: string): number {
-	return Math.round(
-		(Date.parse(`${to}T12:00:00Z`) - Date.parse(`${from}T12:00:00Z`)) / 86_400_000
-	);
+	return Math.round((Date.parse(`${to}T12:00:00Z`) - Date.parse(`${from}T12:00:00Z`)) / 86_400_000);
 }
 
 // The YYYY-MM-DD `n` days after `from`.
@@ -93,10 +91,15 @@ export function interpolateGaps(values: (number | null)[]): (number | null)[] {
 	const out = values.slice();
 	const known = values.flatMap((v, i) => (v == null ? [] : [i]));
 	if (known.length === 0) return out;
+	// Two-pointer walk (known is ascending): ki is the last known index < i.
+	let ki = -1;
 	for (let i = 0; i < out.length; i++) {
-		if (out[i] != null) continue;
-		const prev = [...known].reverse().find((k) => k < i);
-		const next = known.find((k) => k > i);
+		if (out[i] != null) {
+			ki++;
+			continue;
+		}
+		const prev = ki >= 0 ? known[ki] : undefined;
+		const next = ki + 1 < known.length ? known[ki + 1] : undefined;
 		if (prev !== undefined && next !== undefined) {
 			const t = (i - prev) / (next - prev);
 			out[i] = values[prev]! + t * (values[next]! - values[prev]!);
@@ -107,11 +110,7 @@ export function interpolateGaps(values: (number | null)[]): (number | null)[] {
 
 // Days until `current` reaches `goal` at `ratePerDay` (signed change per day).
 // Null if already met within tolerance, the rate is ~0, or it moves away.
-export function etaDaysToGoal(
-	current: number,
-	goal: number,
-	ratePerDay: number
-): number | null {
+export function etaDaysToGoal(current: number, goal: number, ratePerDay: number): number | null {
 	const remaining = goal - current;
 	if (Math.abs(remaining) < 1e-9) return 0;
 	if (!Number.isFinite(ratePerDay) || Math.abs(ratePerDay) < 1e-9) return null;

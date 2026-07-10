@@ -2,6 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import { requireApiToken } from '$lib/server/auth';
 import { authEnabled, sessionValid, SESSION_COOKIE } from '$lib/server/session';
 import { tandemEnabled, syncInsulin, peekInsulin } from '$lib/server/tandem';
+import { recordSync, syncDetail } from '$lib/server/syncStatus';
 
 // Pull the Tandem insulin trace (basal + boluses) via the Python sidecar. Hit by
 // a cron with the API token. The pump uploads via the phone app every few minutes
@@ -33,9 +34,13 @@ export async function POST({ request, cookies }) {
 	}
 
 	try {
-		return json(debug ? { debug: await peekInsulin(days) } : await syncInsulin(days));
+		if (debug) return json({ debug: await peekInsulin(days) });
+		const r = await syncInsulin(days);
+		await recordSync('tandem', true, syncDetail(r));
+		return json(r);
 	} catch (e) {
 		console.error('tandem sync failed:', e);
+		await recordSync('tandem', false, e instanceof Error ? e.message : 'Sync failed.');
 		throw error(502, e instanceof Error ? e.message : 'Sync failed.');
 	}
 }

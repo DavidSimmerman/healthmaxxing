@@ -30,11 +30,13 @@
 		bolusableCarbsG: number;
 		bolusableLowConfidence: boolean;
 		source: string;
+		macroCheck?: string | null; // web-verification caveat, shown as an amber line
 	};
 
 	let {
 		onback,
-		onadd
+		onadd,
+		mealCount
 	}: { onback: () => void; onadd: (item: StagedItem) => void; mealCount: number } = $props();
 
 	let text = $state('');
@@ -167,6 +169,9 @@
 			per serving{#if food.servingSize}
 				· {food.servingSize}{/if}
 		</p>
+		{#if food.macroCheck}
+			<p class="mt-1 text-xs text-amber-400/90">{food.macroCheck}</p>
+		{/if}
 
 		<label for="ai-servings" class="mt-4 block text-xs" style="color: var(--color-text-subtle);"
 			>Servings ({UNIT_LABEL['serving']})</label
@@ -186,10 +191,12 @@
 				class="flex-1 rounded-xl py-3 text-sm font-semibold text-white/80"
 				style="background: rgba(255,255,255,0.06);">Redo</button
 			>
+			<!-- Mirrors BarcodeScan: staging into an empty meal reads as a direct log. -->
 			<button
 				onclick={add}
 				class="flex-1 rounded-xl py-3 text-sm font-semibold text-white"
-				style="background: var(--color-accent, #6366f1);">Add to meal</button
+				style="background: var(--color-accent, #6366f1);"
+				>{mealCount > 0 ? 'Add to meal' : 'Log to today'}</button
 			>
 		</div>
 	</div>

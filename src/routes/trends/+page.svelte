@@ -2,6 +2,7 @@
 	import { goto, invalidateAll } from '$app/navigation';
 	import { pullToRefresh } from '$lib/actions/pullToRefresh';
 	import { addDays, kgToLb, lbToKg, LB_PER_KG } from '$lib/energy';
+	import { halfSplitDelta } from '$lib/sleepInsights';
 	import WeightChart from '$lib/components/WeightChart.svelte';
 
 	let { data } = $props();
@@ -16,7 +17,11 @@
 		energy.methods.find((m) => m.method === method) ?? energy.methods[energy.methods.length - 1]
 	);
 	// Short tab labels so the segmented control fits on a phone.
-	const methodLabel: Record<string, string> = { trend: 'Trend', deficit: 'Deficit', combined: 'Smart' };
+	const methodLabel: Record<string, string> = {
+		trend: 'Trend',
+		deficit: 'Deficit',
+		combined: 'Smart'
+	};
 
 	const WINDOWS = [
 		{ days: 7, label: '1W' },
@@ -39,9 +44,12 @@
 
 	// What-if deficit explorer — prefill with the scenario being shown (defaults
 	// to the current real deficit server-side).
-	let whatIfInput = $state<number | ''>(energy.whatIf?.deficitKcal ?? energy.currentDeficitKcal ?? 500);
+	let whatIfInput = $state<number | ''>(
+		energy.whatIf?.deficitKcal ?? energy.currentDeficitKcal ?? 500
+	);
 	function applyWhatIf() {
 		if (whatIfInput === '' || !Number.isFinite(Number(whatIfInput))) return;
+		// eslint-disable-next-line svelte/prefer-svelte-reactivity -- local: built, serialized into the goto URL, discarded
 		const p = new URLSearchParams();
 		p.set('window', String(data.windowDays));
 		if (data.target) p.set('target', data.target);
@@ -82,6 +90,7 @@
 	}
 
 	function setWindow(days: number) {
+		// eslint-disable-next-line svelte/prefer-svelte-reactivity -- local: built, serialized into the goto URL, discarded
 		const p = new URLSearchParams();
 		p.set('window', String(days));
 		if (data.target) p.set('target', data.target);
@@ -91,11 +100,54 @@
 		const v = (e.currentTarget as HTMLInputElement).value;
 		// Navigate on clear too — dropping ?target removes the custom projection
 		// (otherwise "reset" in the picker appeared not to take effect).
+		// eslint-disable-next-line svelte/prefer-svelte-reactivity -- local: built, serialized into the goto URL, discarded
 		const p = new URLSearchParams();
 		p.set('window', String(data.windowDays));
 		if (v) p.set('target', v);
 		goto(`/trends?${p}`, { noScroll: true, keepFocus: true, replaceState: true });
 	}
+
+	// Glucose control — older-half vs newer-half average over the window. halfSplitDelta
+	// wants NEWEST-first; data.glucose arrives oldest-first from healthReview → reverse.
+	let gmiSplit = $derived(
+		halfSplitDelta(
+			data.glucose
+				.map((g) => g.gmi)
+				.filter((v): v is number => v != null)
+				.reverse()
+		)
+	);
+	let tirSplit = $derived(
+		halfSplitDelta(
+			data.glucose
+				.map((g) => g.tir)
+				.filter((v): v is number => v != null)
+				.reverse()
+		)
+	);
+	// Verdict off the ROUNDED halves so the arrow always agrees with the shown numbers.
+	// Colors mirror the sleep-insight statuses (good / warn / neutral).
+	function glucoseRow(
+		split: { older: number; newer: number } | null,
+		digits: number,
+		lowerIsBetter: boolean
+	) {
+		if (!split) return null;
+		const f = 10 ** digits;
+		const older = Math.round(split.older * f) / f;
+		const newer = Math.round(split.newer * f) / f;
+		const status =
+			newer === older ? 'steady' : newer < older === lowerIsBetter ? 'improving' : 'worsening';
+		return {
+			older: older.toFixed(digits),
+			newer: newer.toFixed(digits),
+			arrow: newer === older ? '→' : newer < older ? '↓' : '↑',
+			status,
+			color: status === 'improving' ? '#34d399' : status === 'steady' ? '#a1a1aa' : '#fbbf24'
+		};
+	}
+	let gmiRow = $derived(glucoseRow(gmiSplit, 1, true)); // GMI: lower is better
+	let tirRow = $derived(glucoseRow(tirSplit, 0, false)); // TIR: higher is better
 
 	// "Am I on pace?" verdict copy.
 	let paceText = $derived.by(() => {
@@ -140,13 +192,35 @@
 	}
 </script>
 
-<main class="mx-auto max-w-md p-6 pb-12" style="padding-bottom: calc(3rem + env(safe-area-inset-bottom));" use:pullToRefresh>
+<main
+	class="mx-auto max-w-md p-6 pb-12"
+	style="padding-bottom: calc(3rem + env(safe-area-inset-bottom));"
+	use:pullToRefresh
+>
 	<header class="mb-4 flex items-center gap-3">
-		<a href="/deficit" class="card-sm flex h-9 w-9 items-center justify-center text-white transition hover:brightness-125" aria-label="Back to energy balance">
-			<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
+		<a
+			href="/deficit"
+			class="card-sm flex h-9 w-9 items-center justify-center text-white transition hover:brightness-125"
+			aria-label="Back to energy balance"
+		>
+			<svg
+				width="16"
+				height="16"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="2.5"
+				stroke-linecap="round"
+				stroke-linejoin="round"><path d="M15 18l-6-6 6-6" /></svg
+			>
 		</a>
 		<div>
-			<p class="text-xs font-semibold tracking-widest uppercase" style="color: var(--color-text-subtle);">Body composition</p>
+			<p
+				class="text-xs font-semibold tracking-widest uppercase"
+				style="color: var(--color-text-subtle);"
+			>
+				Body composition
+			</p>
 			<h1 class="text-2xl font-bold text-white">Trends</h1>
 		</div>
 	</header>
@@ -154,7 +228,11 @@
 	<!-- Lookback window (drives chart range + trend/projection calc) -->
 	<div class="seg mb-3 flex w-full" role="group" aria-label="Lookback window">
 		{#each WINDOWS as w (w.days)}
-			<button class="seg-btn flex-1" class:seg-on={data.windowDays === w.days} onclick={() => setWindow(w.days)}>{w.label}</button>
+			<button
+				class="seg-btn flex-1"
+				class:seg-on={data.windowDays === w.days}
+				onclick={() => setWindow(w.days)}>{w.label}</button
+			>
 		{/each}
 	</div>
 
@@ -174,50 +252,158 @@
 						aria-pressed={visible[m.key]}
 						onclick={() => (visible = { ...visible, [m.key]: !visible[m.key] })}
 					>
-						<span class="chip-dot" style="background: {visible[m.key] ? m.color : 'transparent'}; border-color: {m.color};"></span>
+						<span
+							class="chip-dot"
+							style="background: {visible[m.key]
+								? m.color
+								: 'transparent'}; border-color: {m.color};"
+						></span>
 						{m.label}
 					</button>
 				{/each}
 			</div>
-			<WeightChart {series} weight={insights.weight} leanMass={insights.leanMass} bodyFat={insights.bodyFat} today={insights.asOf} show={visible} />
-			<p class="mt-1 text-center text-[11px]" style="color: var(--color-text-subtle);">% change since {fmtDate(series[0].date)} — dashed = trend. Tap or hover for values.</p>
+			<WeightChart
+				{series}
+				weight={insights.weight}
+				leanMass={insights.leanMass}
+				bodyFat={insights.bodyFat}
+				today={insights.asOf}
+				show={visible}
+			/>
+			<p class="mt-1 text-center text-[11px]" style="color: var(--color-text-subtle);">
+				% change since {fmtDate(series[0].date)} — dashed = trend. Tap or hover for values.
+			</p>
 		</section>
 
 		<!-- Current trend (kept) -->
 		<section class="card mt-3 p-5">
-			<h2 class="mb-3 text-xs font-semibold tracking-widest uppercase" style="color: var(--color-text-subtle);">Current trend <span class="normal-case" style="font-weight:400;">· last {data.windowDays === 9999 ? 'all' : data.windowDays + 'd'}</span></h2>
-			<div class="trend-row"><span>Weight</span><b>{insights.weight ? rateLb(insights.weight.ratePerWeek) : '—'}</b></div>
-			<div class="trend-row"><span>Body fat</span><b style="color: var(--color-fat);">{insights.bodyFat ? rateLabel(insights.bodyFat.ratePerWeek, '%') : '—'}</b></div>
-			<div class="trend-row"><span>Lean mass</span><b>{insights.leanMass ? rateLb(insights.leanMass.ratePerWeek) : '—'}</b></div>
+			<h2
+				class="mb-3 text-xs font-semibold tracking-widest uppercase"
+				style="color: var(--color-text-subtle);"
+			>
+				Current trend <span class="normal-case" style="font-weight:400;"
+					>· last {data.windowDays === 9999 ? 'all' : data.windowDays + 'd'}</span
+				>
+			</h2>
+			<div class="trend-row">
+				<span>Weight</span><b>{insights.weight ? rateLb(insights.weight.ratePerWeek) : '—'}</b>
+			</div>
+			<div class="trend-row">
+				<span>Body fat</span><b style="color: var(--color-fat);"
+					>{insights.bodyFat ? rateLabel(insights.bodyFat.ratePerWeek, '%') : '—'}</b
+				>
+			</div>
+			<div class="trend-row">
+				<span>Lean mass</span><b
+					>{insights.leanMass ? rateLb(insights.leanMass.ratePerWeek) : '—'}</b
+				>
+			</div>
 		</section>
+
+		<!-- Glucose control (GMI / TIR, older half vs newer half of the window) -->
+		{#if data.glucose.length > 0}
+			<section class="card mt-3 p-5">
+				<h2
+					class="mb-3 text-xs font-semibold tracking-widest uppercase"
+					style="color: var(--color-text-subtle);"
+				>
+					Glucose control
+				</h2>
+				{#if gmiRow || tirRow}
+					{#if gmiRow}
+						<div class="trend-row">
+							<span>GMI</span><b
+								>{gmiRow.older}% → {gmiRow.newer}%
+								<span style="color: {gmiRow.color};">{gmiRow.arrow} {gmiRow.status}</span></b
+							>
+						</div>
+					{/if}
+					{#if tirRow}
+						<div class="trend-row">
+							<span>Time in range</span><b
+								>{tirRow.older}% → {tirRow.newer}%
+								<span style="color: {tirRow.color};">{tirRow.arrow} {tirRow.status}</span></b
+							>
+						</div>
+					{/if}
+				{:else}
+					<p class="text-xs" style="color: var(--color-text-subtle);">
+						Not enough glucose days in this window to compare halves yet.
+					</p>
+				{/if}
+			</section>
+		{/if}
 
 		<!-- Pace vs deficit (NEW) -->
 		<section class="card mt-3 p-5">
-			<h2 class="mb-3 text-xs font-semibold tracking-widest uppercase" style="color: var(--color-text-subtle);">Are you on pace?</h2>
-			<div class="trend-row"><span>Actual loss</span><b>{rateLb(energy.measuredRatePerWeekKg)}</b></div>
-			<div class="trend-row"><span>Deficit predicts</span><b>{rateLb(energy.expectedRatePerWeekKg)}</b></div>
-			<div class="trend-row" style="border-top: 1px solid var(--color-border); margin-top: 4px; padding-top: 8px;">
-				<span>Real maintenance <span style="color: var(--color-text-subtle);">measured</span></span>
-				<b>{energy.calibratedTdee != null ? energy.calibratedTdee.toLocaleString() + ' kcal' : '—'}</b>
+			<h2
+				class="mb-3 text-xs font-semibold tracking-widest uppercase"
+				style="color: var(--color-text-subtle);"
+			>
+				Are you on pace?
+			</h2>
+			<div class="trend-row">
+				<span>Actual loss</span><b>{rateLb(energy.measuredRatePerWeekKg)}</b>
 			</div>
-			<div class="trend-row"><span>Est. maintenance <span style="color: var(--color-text-subtle);">formula</span></span><b style="color: var(--color-text-muted);">{energy.estimatedTdee != null ? energy.estimatedTdee.toLocaleString() + ' kcal' : '—'}</b></div>
+			<div class="trend-row">
+				<span>Deficit predicts</span><b>{rateLb(energy.expectedRatePerWeekKg)}</b>
+			</div>
+			<div
+				class="trend-row"
+				style="border-top: 1px solid var(--color-border); margin-top: 4px; padding-top: 8px;"
+			>
+				<span>Real maintenance <span style="color: var(--color-text-subtle);">measured</span></span>
+				<b
+					>{energy.calibratedTdee != null
+						? energy.calibratedTdee.toLocaleString() + ' kcal'
+						: '—'}</b
+				>
+			</div>
+			<div class="trend-row">
+				<span>Est. maintenance <span style="color: var(--color-text-subtle);">formula</span></span
+				><b style="color: var(--color-text-muted);"
+					>{energy.estimatedTdee != null ? energy.estimatedTdee.toLocaleString() + ' kcal' : '—'}</b
+				>
+			</div>
 			{#if energy.avgIntakeKcal != null}
-				<div class="trend-row"><span>Avg intake · protein</span><b>{energy.avgIntakeKcal.toLocaleString()} · {energy.avgProteinG ?? '—'}g {#if energy.proteinPerKg}<span class="text-xs" style="color: {energy.proteinAdequate ? '#4ade80' : '#fbbf24'};">({energy.proteinPerKg}g/kg{energy.proteinAdequate ? '' : ' low'})</span>{/if}</b></div>
+				<div class="trend-row">
+					<span>Avg intake · protein</span><b
+						>{energy.avgIntakeKcal.toLocaleString()} · {energy.avgProteinG ?? '—'}g {#if energy.proteinPerKg}<span
+								class="text-xs"
+								style="color: {energy.proteinAdequate ? '#4ade80' : '#fbbf24'};"
+								>({energy.proteinPerKg}g/kg{energy.proteinAdequate ? '' : ' low'})</span
+							>{/if}</b
+					>
+				</div>
 			{/if}
-			<p class="mt-3 text-xs leading-relaxed" style="color: var(--color-text-subtle);">{paceText}</p>
+			<p class="mt-3 text-xs leading-relaxed" style="color: var(--color-text-subtle);">
+				{paceText}
+			</p>
 		</section>
 
 		<!-- Projections, method-selectable (NEW) -->
 		<section class="card mt-3 p-5">
-			<h2 class="mb-3 text-xs font-semibold tracking-widest uppercase" style="color: var(--color-text-subtle);">Projections</h2>
+			<h2
+				class="mb-3 text-xs font-semibold tracking-widest uppercase"
+				style="color: var(--color-text-subtle);"
+			>
+				Projections
+			</h2>
 			<div class="seg mb-3 flex w-full" role="group" aria-label="Projection method">
 				{#each energy.methods as m (m.method)}
-					<button class="seg-btn flex-1" class:seg-on={selectedMethod?.method === m.method} onclick={() => (method = m.method)}>{methodLabel[m.method] ?? m.label}</button>
+					<button
+						class="seg-btn flex-1"
+						class:seg-on={selectedMethod?.method === m.method}
+						onclick={() => (method = m.method)}>{methodLabel[m.method] ?? m.label}</button
+					>
 				{/each}
 			</div>
 
 			{#if selectedMethod}
-				<p class="mb-2 text-xs leading-relaxed" style="color: var(--color-text-subtle);">{selectedMethod.note}{#if selectedMethod.ratePerWeekKg != null} <span class="text-white">{rateLb(selectedMethod.ratePerWeekKg)}.</span>{/if}</p>
+				<p class="mb-2 text-xs leading-relaxed" style="color: var(--color-text-subtle);">
+					{selectedMethod.note}{#if selectedMethod.ratePerWeekKg != null}
+						<span class="text-white">{rateLb(selectedMethod.ratePerWeekKg)}.</span>{/if}
+				</p>
 				<table class="w-full text-sm">
 					<thead>
 						<tr style="color: var(--color-text-subtle);" class="text-[11px] uppercase">
@@ -230,9 +416,18 @@
 					<tbody>
 						{#each selectedMethod.rows as p (p.date)}
 							<tr style="border-top: 1px solid var(--color-border);">
-								<td class="py-1.5"><div class="text-white">{p.label === data.target ? 'Target' : p.label}</div><div class="text-[11px]" style="color: var(--color-text-subtle);">{fmtDate(p.date)}</div></td>
-								<td class="py-1.5 text-right font-semibold" style="color: var(--color-accent-from);">{fmtLb(p.weightKg)}</td>
-								<td class="py-1.5 text-right font-semibold" style="color: var(--color-fat);">{fmt(p.bodyFatPct)}</td>
+								<td class="py-1.5"
+									><div class="text-white">{p.label === data.target ? 'Target' : p.label}</div>
+									<div class="text-[11px]" style="color: var(--color-text-subtle);">
+										{fmtDate(p.date)}
+									</div></td
+								>
+								<td class="py-1.5 text-right font-semibold" style="color: var(--color-accent-from);"
+									>{fmtLb(p.weightKg)}</td
+								>
+								<td class="py-1.5 text-right font-semibold" style="color: var(--color-fat);"
+									>{fmt(p.bodyFatPct)}</td
+								>
 								<td class="py-1.5 text-right text-white">{fmtLb(p.leanMassKg)}</td>
 							</tr>
 						{/each}
@@ -241,23 +436,44 @@
 			{/if}
 
 			<label class="mt-4 flex flex-col gap-1">
-				<span class="text-xs font-medium" style="color: var(--color-text-subtle);">Project to a specific date</span>
-				<input type="date" min={tomorrow} value={data.target ?? ''} onchange={onTargetChange} class="card-sm block w-full min-w-0 px-3 py-2 text-sm text-white" style="color-scheme: dark; background: var(--color-bg-elevated); width: 100%; max-width: 100%; box-sizing: border-box; -webkit-appearance: none; appearance: none;" />
+				<span class="text-xs font-medium" style="color: var(--color-text-subtle);"
+					>Project to a specific date</span
+				>
+				<input
+					type="date"
+					min={tomorrow}
+					value={data.target ?? ''}
+					onchange={onTargetChange}
+					class="card-sm block w-full min-w-0 px-3 py-2 text-sm text-white"
+					style="color-scheme: dark; background: var(--color-bg-elevated); width: 100%; max-width: 100%; box-sizing: border-box; -webkit-appearance: none; appearance: none;"
+				/>
 			</label>
 		</section>
 
 		<!-- What-if deficit (NEW) -->
 		<section class="card mt-3 p-5">
-			<h2 class="mb-1 text-xs font-semibold tracking-widest uppercase" style="color: var(--color-text-subtle);">What if my deficit were…</h2>
+			<h2
+				class="mb-1 text-xs font-semibold tracking-widest uppercase"
+				style="color: var(--color-text-subtle);"
+			>
+				What if my deficit were…
+			</h2>
 			<p class="mb-3 text-xs leading-relaxed" style="color: var(--color-text-subtle);">
 				{#if energy.currentDeficitKcal != null}
-					Your current average is a <b class="text-white">{energy.currentDeficitKcal >= 0 ? '−' : '+'}{Math.abs(energy.currentDeficitKcal).toLocaleString()}</b>
-					kcal/day {energy.currentDeficitKcal >= 0 ? 'deficit' : 'surplus'} (prefilled below). Try a different one:
+					Your current average is a <b class="text-white"
+						>{energy.currentDeficitKcal >= 0 ? '−' : '+'}{Math.abs(
+							energy.currentDeficitKcal
+						).toLocaleString()}</b
+					>
+					kcal/day {energy.currentDeficitKcal >= 0 ? 'deficit' : 'surplus'} (prefilled below). Try a different
+					one:
 				{:else}
 					Log more days of food so we can estimate your maintenance first.
 				{/if}
 			</p>
-			<span class="mb-1 block text-xs font-medium" style="color: var(--color-text-subtle);">Daily deficit (kcal)</span>
+			<span class="mb-1 block text-xs font-medium" style="color: var(--color-text-subtle);"
+				>Daily deficit (kcal)</span
+			>
 			<div class="flex items-stretch gap-2">
 				<input
 					type="number"
@@ -269,18 +485,28 @@
 					class="min-w-0 flex-1 rounded-lg border bg-transparent px-3 py-2 text-white outline-none focus:border-orange-400"
 					style="border-color: var(--color-border);"
 				/>
-				<button onclick={applyWhatIf} class="shrink-0 rounded-lg px-4 text-sm font-semibold text-black" style="background: #fb923c;">Project</button>
+				<button
+					onclick={applyWhatIf}
+					class="shrink-0 rounded-lg px-4 text-sm font-semibold text-black"
+					style="background: #fb923c;">Project</button
+				>
 			</div>
 
 			{#if energy.whatIf}
-				<div class="trend-row mt-4"><span>Projected loss</span><b>{rateLb(energy.whatIf.ratePerWeekKg)}</b></div>
-				<div class="trend-row"><span>Means eating</span><b>{energy.whatIf.plannedIntakeKcal.toLocaleString()} kcal/day</b></div>
+				<div class="trend-row mt-4">
+					<span>Projected loss</span><b>{rateLb(energy.whatIf.ratePerWeekKg)}</b>
+				</div>
+				<div class="trend-row">
+					<span>Means eating</span><b>{energy.whatIf.plannedIntakeKcal.toLocaleString()} kcal/day</b
+					>
+				</div>
 				<div class="mt-4 border-t pt-3" style="border-color: var(--color-border);">
 					{#if insights.goal.weight}
 						<p class="text-sm" style="color: var(--color-text-muted);">
 							{#if energy.whatIf.goalWeightEtaDate}
 								Reach <b class="text-white">{fmtLb(insights.goal.weight.goal)} lb</b> by
-								<b class="text-white">{fmtDate(energy.whatIf.goalWeightEtaDate)}</b> (~{energy.whatIf.goalWeightEtaDays} days).
+								<b class="text-white">{fmtDate(energy.whatIf.goalWeightEtaDate)}</b> (~{energy
+									.whatIf.goalWeightEtaDays} days).
 							{:else}
 								Won't reach your {fmtLb(insights.goal.weight.goal)} lb goal at this deficit.
 							{/if}
@@ -289,11 +515,14 @@
 					{#if insights.goal.bodyFat && energy.whatIf.goalBodyFatEtaDate}
 						<p class="mt-1 text-sm" style="color: var(--color-text-muted);">
 							Hit <b class="text-white">{fmt(insights.goal.bodyFat.goal)}% body fat</b> by
-							<b class="text-white">{fmtDate(energy.whatIf.goalBodyFatEtaDate)}</b> (~{energy.whatIf.goalBodyFatEtaDays} days).
+							<b class="text-white">{fmtDate(energy.whatIf.goalBodyFatEtaDate)}</b> (~{energy.whatIf
+								.goalBodyFatEtaDays} days).
 						</p>
 					{/if}
 					{#if !insights.goal.weight && !insights.goal.bodyFat}
-						<p class="text-xs" style="color: var(--color-text-subtle);">Set a goal below to see time-to-goal at this deficit.</p>
+						<p class="text-xs" style="color: var(--color-text-subtle);">
+							Set a goal below to see time-to-goal at this deficit.
+						</p>
 					{/if}
 				</div>
 			{/if}
@@ -302,23 +531,54 @@
 
 	<!-- Goals (kept) -->
 	<section class="card mt-3 p-5">
-		<h2 class="mb-3 text-xs font-semibold tracking-widest uppercase" style="color: var(--color-text-subtle);">Goal</h2>
+		<h2
+			class="mb-3 text-xs font-semibold tracking-widest uppercase"
+			style="color: var(--color-text-subtle);"
+		>
+			Goal
+		</h2>
 		<form onsubmit={saveGoals}>
 			<div class="grid grid-cols-2 gap-3">
 				<label class="flex flex-col gap-1">
-					<span class="text-xs font-medium" style="color: var(--color-text-subtle);">Goal weight (lb)</span>
-					<input type="number" min="44" max="880" step="0.1" bind:value={goalWeightLb} class="rounded-lg border bg-transparent px-3 py-2 text-white outline-none focus:border-orange-400" style="border-color: var(--color-border);" />
+					<span class="text-xs font-medium" style="color: var(--color-text-subtle);"
+						>Goal weight (lb)</span
+					>
+					<input
+						type="number"
+						min="44"
+						max="880"
+						step="0.1"
+						bind:value={goalWeightLb}
+						class="rounded-lg border bg-transparent px-3 py-2 text-white outline-none focus:border-orange-400"
+						style="border-color: var(--color-border);"
+					/>
 				</label>
 				<label class="flex flex-col gap-1">
-					<span class="text-xs font-medium" style="color: var(--color-text-subtle);">Goal body fat %</span>
-					<input type="number" min="1" max="75" step="0.1" bind:value={goalBodyFatPct} class="rounded-lg border bg-transparent px-3 py-2 text-white outline-none focus:border-orange-400" style="border-color: var(--color-border);" />
+					<span class="text-xs font-medium" style="color: var(--color-text-subtle);"
+						>Goal body fat %</span
+					>
+					<input
+						type="number"
+						min="1"
+						max="75"
+						step="0.1"
+						bind:value={goalBodyFatPct}
+						class="rounded-lg border bg-transparent px-3 py-2 text-white outline-none focus:border-orange-400"
+						style="border-color: var(--color-border);"
+					/>
 				</label>
 			</div>
 			<div class="mt-4 flex items-center justify-between gap-3">
 				<div class="text-xs" style="color: var(--color-text-subtle);">
-					{#if saveError}<span class="text-red-300">{saveError}</span>{:else if savedAt}Saved{:else}Leave blank to clear a goal{/if}
+					{#if saveError}<span class="text-red-300">{saveError}</span
+						>{:else if savedAt}Saved{:else}Leave blank to clear a goal{/if}
 				</div>
-				<button type="submit" disabled={saving} class="rounded-lg px-4 py-2 text-sm font-semibold text-black transition disabled:opacity-40" style="background: #fb923c;">{saving ? 'Saving…' : 'Save'}</button>
+				<button
+					type="submit"
+					disabled={saving}
+					class="rounded-lg px-4 py-2 text-sm font-semibold text-black transition disabled:opacity-40"
+					style="background: #fb923c;">{saving ? 'Saving…' : 'Save'}</button
+				>
 			</div>
 		</form>
 
@@ -327,7 +587,9 @@
 				{#if insights.goal.weight}
 					<p class="text-sm" style="color: var(--color-text-muted);">
 						{#if insights.goal.weight.etaDate}
-							On track to hit <b class="text-white">{fmtLb(insights.goal.weight.goal)} lb</b> around <b class="text-white">{fmtDate(insights.goal.weight.etaDate)}</b> (~{insights.goal.weight.etaDays} days).
+							On track to hit <b class="text-white">{fmtLb(insights.goal.weight.goal)} lb</b> around
+							<b class="text-white">{fmtDate(insights.goal.weight.etaDate)}</b>
+							(~{insights.goal.weight.etaDays} days).
 						{:else}
 							Weight is not currently trending toward your {fmtLb(insights.goal.weight.goal)} lb goal.
 						{/if}
@@ -336,9 +598,12 @@
 				{#if insights.goal.bodyFat}
 					<p class="mt-2 text-sm" style="color: var(--color-text-muted);">
 						{#if insights.goal.bodyFat.etaDate}
-							On track to hit <b class="text-white">{fmt(insights.goal.bodyFat.goal)}% body fat</b> around <b class="text-white">{fmtDate(insights.goal.bodyFat.etaDate)}</b> (~{insights.goal.bodyFat.etaDays} days).
+							On track to hit <b class="text-white">{fmt(insights.goal.bodyFat.goal)}% body fat</b>
+							around <b class="text-white">{fmtDate(insights.goal.bodyFat.etaDate)}</b> (~{insights
+								.goal.bodyFat.etaDays} days).
 						{:else}
-							Body fat is not currently trending toward your {fmt(insights.goal.bodyFat.goal)}% goal.
+							Body fat is not currently trending toward your {fmt(insights.goal.bodyFat.goal)}%
+							goal.
 						{/if}
 					</p>
 				{/if}

@@ -1,8 +1,10 @@
 import { energyInsights } from '$lib/server/projections';
+import { healthReview } from '$lib/server/healthMetrics';
 import { db } from '$lib/server/db';
 import { settings } from '$lib/server/db/schema';
 import { eq } from 'drizzle-orm';
 import { todayLabel } from '$lib/server/day';
+import { addDays } from '$lib/energy';
 
 // Allowed lookback windows (days). Drives BOTH the chart range and the trend /
 // projection calculations, so projections reflect a recent diet rather than
@@ -29,6 +31,17 @@ export async function load({ url }) {
 
 	const energy = await energyInsights({ windowDays, targetDate, whatIfDeficitKcal });
 
+	// Glucose-control card: GMI/TIR by day over the SAME lookback window energyInsights
+	// uses internally (from = today − windowDays; see projections.ts). Days with neither
+	// metric are dropped so the card can hide itself when there's no CGM data at all.
+	const glucose = (await healthReview(addDays(today, -windowDays), today))
+		.map((d) => ({
+			date: d.date,
+			gmi: d.metrics.glucose_gmi_pct ?? null,
+			tir: d.metrics.glucose_tir_pct ?? null
+		}))
+		.filter((g) => g.gmi != null || g.tir != null);
+
 	const [s] = await db.select().from(settings).where(eq(settings.id, 1));
 	const goals = {
 		goalWeightKg: s?.goalWeightKg ?? null,
@@ -40,6 +53,7 @@ export async function load({ url }) {
 		insights: energy.body,
 		energy,
 		goals,
+		glucose,
 		windowDays,
 		target: targetDate ?? null,
 		whatIfDeficit: whatIfDeficitKcal ?? null

@@ -26,7 +26,13 @@ import {
 }
 // degenerate inputs → null
 assert.equal(linearRegression([{ x: 1, y: 1 }]), null);
-assert.equal(linearRegression([{ x: 5, y: 1 }, { x: 5, y: 9 }]), null); // all x equal
+assert.equal(
+	linearRegression([
+		{ x: 5, y: 1 },
+		{ x: 5, y: 9 }
+	]),
+	null
+); // all x equal
 
 // interpolateGaps fills the middle and carries the ends
 assert.deepEqual(interpolateGaps([1, null, 3]), [1, 2, 3]);

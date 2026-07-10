@@ -1,5 +1,13 @@
 import { db } from '$lib/server/db';
-import { settings, quickAdds, foods, dexcomAuth, fitbitAuth, vacations } from '$lib/server/db/schema';
+import {
+	settings,
+	quickAdds,
+	foods,
+	dexcomAuth,
+	fitbitAuth,
+	vacations,
+	syncStatus
+} from '$lib/server/db/schema';
 import { asc, eq } from 'drizzle-orm';
 import { fail } from '@sveltejs/kit';
 import { listVacations } from '$lib/server/vacations';
@@ -7,6 +15,7 @@ import { authEnabled } from '$lib/server/session';
 import { dexcomEnabled } from '$lib/server/dexcom';
 import { googleHealthEnabled } from '$lib/server/fitbit';
 import { tandemEnabled, tandemConnected, connectAndVerify } from '$lib/server/tandem';
+import { DEFAULT_REPORT_PROMPTS } from '$lib/server/reportChats';
 
 export async function load() {
 	const [settingsRow] = await db.select().from(settings).where(eq(settings.id, 1));
@@ -20,6 +29,9 @@ export async function load() {
 		.select({ id: fitbitAuth.id })
 		.from(fitbitAuth)
 		.where(eq(fitbitAuth.id, 1));
+
+	// Last sync outcome per integration — drives the health line on each card.
+	const syncRows = await db.select().from(syncStatus);
 
 	const quickAddItems = await db
 		.select({
@@ -52,7 +64,15 @@ export async function load() {
 		fitbitConfigured: googleHealthEnabled(),
 		fitbitConnected: !!fitbitRow,
 		tandemConfigured: tandemEnabled(),
-		tandemConnected: await tandemConnected()
+		tandemConnected: await tandemConnected(),
+		// Scheduled-report prompt overrides (null = built-in default, shown as placeholder).
+		reportPrompts: {
+			daily: settingsRow?.dailyReportPrompt ?? null,
+			weekly: settingsRow?.weeklyReportPrompt ?? null,
+			monthly: settingsRow?.monthlyReportPrompt ?? null
+		},
+		reportPromptDefaults: DEFAULT_REPORT_PROMPTS,
+		syncStatus: syncRows
 	};
 }
 
@@ -73,7 +93,8 @@ export const actions = {
 		const to = String(form.get('to') ?? '').trim();
 		if (!validDate(from) || !validDate(to))
 			return fail(400, { vacationError: 'Enter valid start and end dates.' });
-		if (from > to) return fail(400, { vacationError: 'End date must be on or after the start date.' });
+		if (from > to)
+			return fail(400, { vacationError: 'End date must be on or after the start date.' });
 		await db.insert(vacations).values({ from, to });
 		return { vacationAdded: true };
 	},

@@ -1,11 +1,12 @@
 import { env } from '$env/dynamic/private';
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { eq, sql, inArray } from 'drizzle-orm';
+import { and, eq, gt, sql, inArray } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { dailyMetrics, dexcomAuth, glucoseReadings } from '$lib/server/db/schema';
+import { isSealed, openSecret, sealSecret, secretBoxEnabled } from '$lib/server/secretBox';
 import { todayLabel } from '$lib/server/day';
 import { addDays } from '$lib/energy';
-import { glucoseStats } from '$lib/glucose';
+import { gmiPct, TIR_HIGH, TIR_LOW } from '$lib/glucose';
 
 // Dexcom CGM → dashboard, via the official Dexcom v3 API (OAuth 2.0). We pull the
 // EGV trace (every ~5 min) into glucose_readings, and roll each day up into
@@ -67,7 +68,10 @@ async function tokenRequest(params: Record<string, string>): Promise<{
 			client_id: env.DEXCOM_CLIENT_ID ?? '',
 			client_secret: env.DEXCOM_CLIENT_SECRET ?? '',
 			...params
-		})
+		}),
+		// Generous bound: hanging forever is worse, but aborting a refresh that
+		// Dexcom already processed burns the rotated token, so don't be twitchy.
+		signal: AbortSignal.timeout(15_000)
 	});
 	if (!res.ok) {
 		const detail = (await res.text().catch(() => '')).slice(0, 200);
@@ -77,13 +81,40 @@ async function tokenRequest(params: Record<string, string>): Promise<{
 }
 
 async function storeRefresh(refreshToken: string): Promise<void> {
+	// Encrypted at rest when the deployment has a secretBox key; plaintext rows
+	// from before encryption still read fine (see accessToken) and get sealed here
+	// on the next rotation.
+	const stored = secretBoxEnabled() ? sealSecret(refreshToken) : refreshToken;
 	await db
 		.insert(dexcomAuth)
-		.values({ id: 1, refreshToken })
+		.values({ id: 1, refreshToken: stored })
 		.onConflictDoUpdate({
 			target: dexcomAuth.id,
 			set: { refreshToken: sql`excluded.refresh_token`, updatedAt: new Date() }
 		});
+}
+
+// By the time this runs Dexcom has ALREADY invalidated the previous refresh
+// token — losing this write orphans the connection (manual re-auth). Retry the
+// store hard; on final failure scream but let the sync finish on the access
+// token we do have.
+async function storeRefreshGuarded(refreshToken: string): Promise<void> {
+	const delaysMs = [100, 500, 2000];
+	for (let attempt = 0; ; attempt++) {
+		try {
+			return await storeRefresh(refreshToken);
+		} catch (e) {
+			if (attempt >= delaysMs.length) {
+				console.error(
+					`CRITICAL dexcom: failed to persist the rotated refresh token after ${attempt + 1} attempts — ` +
+						'the stored token is now dead; re-connect via /api/integrations/dexcom/authorize.',
+					e
+				);
+				return;
+			}
+			await new Promise((r) => setTimeout(r, delaysMs[attempt]));
+		}
+	}
 }
 
 // One-time: exchange the authorization code for tokens and persist the refresh token.
@@ -98,17 +129,50 @@ export async function exchangeCode(code: string, redirectUri: string): Promise<v
 }
 
 // Refresh → fresh access token. Dexcom ROTATES the refresh token on every use, so
-// we ALWAYS persist the new one (a missed rotation locks us out → re-auth).
+// we ALWAYS persist the new one (a missed rotation locks us out → re-auth). The
+// access token is cached in-process until ~expiry and the refresh is
+// single-flighted: refreshing per call burns a rotation every sync, and two
+// concurrent syncs (session pull + cron) racing the rotation can strand the
+// stored token.
+let tokenCache: { token: string; expiresAt: number } | null = null;
+let tokenRefresh: Promise<string> | null = null;
+
+function dropToken(): void {
+	tokenCache = null;
+}
+
 async function accessToken(): Promise<string> {
-	const [row] = await db.select().from(dexcomAuth).where(eq(dexcomAuth.id, 1));
-	if (!row)
-		throw new Error(
-			'Dexcom not connected on this server. While logged in, open /api/integrations/dexcom/authorize to link it.'
-		);
-	const tok = await tokenRequest({ grant_type: 'refresh_token', refresh_token: row.refreshToken });
-	if (!tok.refresh_token) throw new Error('Dexcom refresh did not return a new refresh token.');
-	await storeRefresh(tok.refresh_token);
-	return tok.access_token;
+	if (tokenCache && tokenCache.expiresAt - Date.now() > 60_000) return tokenCache.token;
+	if (!tokenRefresh) {
+		tokenRefresh = (async () => {
+			try {
+				const [row] = await db.select().from(dexcomAuth).where(eq(dexcomAuth.id, 1));
+				if (!row)
+					throw new Error(
+						'Dexcom not connected on this server. While logged in, open /api/integrations/dexcom/authorize to link it.'
+					);
+				// Rows written before at-rest encryption are plaintext — read either.
+				const refreshToken = isSealed(row.refreshToken)
+					? openSecret(row.refreshToken)
+					: row.refreshToken;
+				const tok = await tokenRequest({
+					grant_type: 'refresh_token',
+					refresh_token: refreshToken
+				});
+				if (!tok.refresh_token)
+					throw new Error('Dexcom refresh did not return a new refresh token.');
+				await storeRefreshGuarded(tok.refresh_token);
+				tokenCache = {
+					token: tok.access_token,
+					expiresAt: Date.now() + (tok.expires_in ?? 300) * 1000
+				};
+				return tok.access_token;
+			} finally {
+				tokenRefresh = null;
+			}
+		})();
+	}
+	return tokenRefresh;
 }
 
 // Dexcom EGV record (the fields we use). value is null on sensor gaps/warmup.
@@ -143,20 +207,34 @@ function* chunk<T>(arr: T[], size: number): Generator<T[]> {
 	for (let i = 0; i < arr.length; i += size) yield arr.slice(i, i + size);
 }
 
+// Authorized GET with one 401 retry: the cached access token can be revoked
+// out-of-band, so drop the cache, refresh once, and try once more.
+async function apiFetch(url: string): Promise<Response> {
+	const get = async () =>
+		fetch(url, {
+			headers: { Authorization: `Bearer ${await accessToken()}`, Accept: 'application/json' },
+			// 15s: a 29-day EGV window is ~8k records.
+			signal: AbortSignal.timeout(15_000)
+		});
+	let res = await get();
+	if (res.status === 401) {
+		dropToken();
+		res = await get();
+	}
+	return res;
+}
+
 export async function syncGlucose(days = 3): Promise<{ days: number; readings: number }> {
-	const token = await accessToken();
 	const endLabel = todayLabel();
 	const startLabel = addDays(endLabel, -clampDays(days));
 
-	const res = await fetch(egvUrl(startLabel, endLabel), {
-		headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }
-	});
+	const res = await apiFetch(egvUrl(startLabel, endLabel));
 	if (!res.ok) {
 		const detail = (await res.text().catch(() => '')).slice(0, 200);
 		throw new Error(`Dexcom EGV fetch failed (${res.status}): ${detail}`);
 	}
 	const body = (await res.json()) as { records?: EgvRecord[] };
-	const rows = (body.records ?? [])
+	const parsed = (body.records ?? [])
 		.filter((r) => r.systemTime && r.displayTime && typeof r.value === 'number')
 		.map((r) => ({
 			at: asUtc(r.systemTime as string),
@@ -164,6 +242,11 @@ export async function syncGlucose(days = 3): Promise<{ days: number; readings: n
 			mgdl: r.value as number,
 			trend: r.trend ?? null
 		}));
+	// Dedupe by the table's conflict key first: Dexcom can repeat a systemTime
+	// within one response (e.g. backfill overlapping realtime), and Postgres
+	// rejects a batched ON CONFLICT that touches the same key twice. Map keeps
+	// the last (same guard as tandem.ts).
+	const rows = [...new Map(parsed.map((r) => [r.at.getTime(), r] as const)).values()];
 
 	for (const part of chunk(rows, 500)) {
 		await db
@@ -188,25 +271,34 @@ export async function syncGlucose(days = 3): Promise<{ days: number; readings: n
 }
 
 async function rollUpDays(dates: string[]): Promise<void> {
-	const stored = await db
-		.select({ date: glucoseReadings.date, mgdl: glucoseReadings.mgdl })
+	// Aggregate in Postgres instead of streaming every stored reading into Node.
+	// Same stats as $lib/glucose glucoseStats: valid = mgdl > 0 (a day with no
+	// valid readings has no group → skipped), TIR inclusive [70, 180], GMI from
+	// the mean.
+	const agg = await db
+		.select({
+			date: glucoseReadings.date,
+			n: sql<number>`count(*)::int`,
+			avgMgdl: sql<number>`avg(${glucoseReadings.mgdl})::float`,
+			inRange: sql<number>`count(*) filter (where ${glucoseReadings.mgdl} between ${TIR_LOW} and ${TIR_HIGH})::int`
+		})
 		.from(glucoseReadings)
-		.where(inArray(glucoseReadings.date, dates));
-
-	const byDate = new Map<string, number[]>();
-	for (const r of stored) {
-		const arr = byDate.get(r.date) ?? [];
-		arr.push(r.mgdl);
-		byDate.set(r.date, arr);
-	}
+		.where(and(inArray(glucoseReadings.date, dates), gt(glucoseReadings.mgdl, 0)))
+		.groupBy(glucoseReadings.date);
 
 	const metrics: { date: string; metric: string; value: number }[] = [];
-	for (const [date, vals] of byDate) {
-		const s = glucoseStats(vals);
-		if (!s) continue;
-		metrics.push({ date, metric: 'blood_glucose_mgdl', value: Math.round(s.avgMgdl) });
-		metrics.push({ date, metric: 'glucose_tir_pct', value: Math.round(s.tirPct) });
-		metrics.push({ date, metric: 'glucose_gmi_pct', value: Math.round(s.gmiPct * 10) / 10 });
+	for (const r of agg) {
+		metrics.push({ date: r.date, metric: 'blood_glucose_mgdl', value: Math.round(r.avgMgdl) });
+		metrics.push({
+			date: r.date,
+			metric: 'glucose_tir_pct',
+			value: Math.round((r.inRange / r.n) * 100)
+		});
+		metrics.push({
+			date: r.date,
+			metric: 'glucose_gmi_pct',
+			value: Math.round(gmiPct(r.avgMgdl) * 10) / 10
+		});
 	}
 	if (!metrics.length) return;
 	await db
@@ -221,13 +313,10 @@ async function rollUpDays(dates: string[]): Promise<void> {
 // Debug: raw status + body, so the live EGV schema can be confirmed against the
 // sandbox/account before trusting the parser (mirrors fitbit's peekHealth).
 export async function peekGlucose(days = 2): Promise<unknown> {
-	const token = await accessToken();
 	const endLabel = todayLabel();
 	const startLabel = addDays(endLabel, -clampDays(days));
 	const url = egvUrl(startLabel, endLabel);
-	const res = await fetch(url, {
-		headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }
-	});
+	const res = await apiFetch(url);
 	const text = await res.text().catch(() => '');
 	let parsed: unknown = text;
 	try {

@@ -2,6 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import { requireApiToken } from '$lib/server/auth';
 import { authEnabled, sessionValid, SESSION_COOKIE } from '$lib/server/session';
 import { dexcomEnabled, syncGlucose, peekGlucose } from '$lib/server/dexcom';
+import { recordSync, syncDetail } from '$lib/server/syncStatus';
 
 // Pull (Dexcom EGV trace), hit by a cron with the API token. Dexcom updates every
 // ~5 min, so run it hourly:
@@ -33,9 +34,13 @@ export async function POST({ request, cookies }) {
 	}
 
 	try {
-		return json(debug ? { debug: await peekGlucose(days) } : await syncGlucose(days));
+		if (debug) return json({ debug: await peekGlucose(days) });
+		const r = await syncGlucose(days);
+		await recordSync('dexcom', true, syncDetail(r));
+		return json(r);
 	} catch (e) {
 		console.error('dexcom sync failed:', e);
+		await recordSync('dexcom', false, e instanceof Error ? e.message : 'Sync failed.');
 		throw error(502, e instanceof Error ? e.message : 'Sync failed.');
 	}
 }

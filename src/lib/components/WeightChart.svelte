@@ -92,7 +92,8 @@
 		const out: { dayIndex: number; value: number }[] = [];
 		for (const s of series) {
 			const v = pick(s);
-			if (v != null && Number.isFinite(v)) out.push({ dayIndex: daysBetween(xmin, s.date), value: v });
+			if (v != null && Number.isFinite(v))
+				out.push({ dayIndex: daysBetween(xmin, s.date), value: v });
 		}
 		return out.sort((a, b) => a.dayIndex - b.dayIndex);
 	}
@@ -143,26 +144,58 @@
 	}
 
 	let models = $derived.by<SeriesModel[]>(() => {
-		const defs: { key: SeriesModel['key']; label: string; color: string; trend: Trend | null; isMass: boolean; pick: (s: WeighIn) => number | null }[] = [
-			{ key: 'weight', label: 'Weight', color: WEIGHT_COLOR, trend: weight, isMass: true, pick: (s) => s.weightKg },
-			{ key: 'lean', label: 'Lean mass', color: LEAN_COLOR, trend: leanMass, isMass: true, pick: (s) => s.leanMassKg },
-			{ key: 'bodyFat', label: 'Body fat %', color: BF_COLOR, trend: bodyFat, isMass: false, pick: (s) => s.bodyFatPct }
+		const defs: {
+			key: SeriesModel['key'];
+			label: string;
+			color: string;
+			trend: Trend | null;
+			isMass: boolean;
+			pick: (s: WeighIn) => number | null;
+		}[] = [
+			{
+				key: 'weight',
+				label: 'Weight',
+				color: WEIGHT_COLOR,
+				trend: weight,
+				isMass: true,
+				pick: (s) => s.weightKg
+			},
+			{
+				key: 'lean',
+				label: 'Lean mass',
+				color: LEAN_COLOR,
+				trend: leanMass,
+				isMass: true,
+				pick: (s) => s.leanMassKg
+			},
+			{
+				key: 'bodyFat',
+				label: 'Body fat %',
+				color: BF_COLOR,
+				trend: bodyFat,
+				isMass: false,
+				pick: (s) => s.bodyFatPct
+			}
 		];
-		return defs.filter((d) => show[d.key]).map((d) => {
-			const actual = buildActual(d.pick);
-			return {
-				key: d.key,
-				label: d.label,
-				color: d.color,
-				trend: d.trend,
-				actual,
-				isMass: d.isMass,
-				valueAt: makeValueAt(actual, d.trend)
-			} satisfies SeriesModel;
-		});
+		return defs
+			.filter((d) => show[d.key])
+			.map((d) => {
+				const actual = buildActual(d.pick);
+				return {
+					key: d.key,
+					label: d.label,
+					color: d.color,
+					trend: d.trend,
+					actual,
+					isMass: d.isMass,
+					valueAt: makeValueAt(actual, d.trend)
+				} satisfies SeriesModel;
+			});
 	});
 
-	const modelByKey = $derived(Object.fromEntries(models.map((m) => [m.key, m])) as Record<SeriesModel['key'], SeriesModel>);
+	const modelByKey = $derived(
+		Object.fromEntries(models.map((m) => [m.key, m])) as Record<SeriesModel['key'], SeriesModel>
+	);
 
 	// ── RELATIVE view: every series as % change off its in-window baseline ─────────
 	// Baseline = first actual value within the window (native unit). pct = (v-b)/b*100.
@@ -206,7 +239,10 @@
 			const b = m.actual[0].value;
 			if (!Number.isFinite(b) || b === 0) continue;
 			const pct = (v: number) => ((v - b) / b) * 100;
-			const actualPts = m.actual.map((p) => ({ x: xOfDayIndex(p.dayIndex), y: yRel!(pct(p.value)) }));
+			const actualPts = m.actual.map((p) => ({
+				x: xOfDayIndex(p.dayIndex),
+				y: yRel!(pct(p.value))
+			}));
 			let trendLine: RelSeries['trendLine'] = null;
 			if (m.trend) {
 				const py0 = pct(trendAt(m.trend, xmin));
@@ -226,7 +262,11 @@
 		}
 		return out;
 	});
-	const relBaselineByKey = $derived(Object.fromEntries(relSeries.map((r) => [r.key, r.baseline])) as Partial<Record<SeriesModel['key'], number>>);
+	const relBaselineByKey = $derived(
+		Object.fromEntries(relSeries.map((r) => [r.key, r.baseline])) as Partial<
+			Record<SeriesModel['key'], number>
+		>
+	);
 
 	// ── Ticks ──────────────────────────────────────────────────────────────────
 	function ticks(lo: number, hi: number, n = 4): number[] {
@@ -357,7 +397,16 @@
 			let pctDelta: number | null = null;
 			const b = relBaselineByKey[m.key];
 			if (b != null && b !== 0) pctDelta = ((v - b) / b) * 100;
-			rows.push({ key: m.key, label: m.label, color: m.color, valueNative: v, isMass: m.isMass, y, display, pctDelta });
+			rows.push({
+				key: m.key,
+				label: m.label,
+				color: m.color,
+				valueNative: v,
+				isMass: m.isMass,
+				y,
+				display,
+				pctDelta
+			});
 		}
 		if (!rows.length) return null;
 		return { day, cx, date, rows };
@@ -398,12 +447,24 @@
 
 		<!-- 0% reference line (subtle, solid) -->
 		{#if yRel}
-			<line x1={x0} y1={yRel(0)} x2={x1} y2={yRel(0)} stroke="rgba(255,255,255,0.18)" stroke-width="1" />
+			<line
+				x1={x0}
+				y1={yRel(0)}
+				x2={x1}
+				y2={yRel(0)}
+				stroke="rgba(255,255,255,0.18)"
+				stroke-width="1"
+			/>
 		{/if}
 
 		<!-- each series: actual polyline + dots, then the straight regression overlay -->
 		{#each relSeries as rs (rs.key)}
-			<polyline points={rs.actualPolyline} fill="none" stroke={rs.color} stroke-width={rs.key === 'weight' ? 2.5 : 2} />
+			<polyline
+				points={rs.actualPolyline}
+				fill="none"
+				stroke={rs.color}
+				stroke-width={rs.key === 'weight' ? 2.5 : 2}
+			/>
 			{#each rs.actualPts as p (p.x + ':' + p.y)}
 				<circle cx={p.x} cy={p.y} r={rs.key === 'weight' ? 3 : 2.5} fill={rs.color} />
 			{/each}
@@ -428,9 +489,23 @@
 
 		<!-- ── Crosshair ──────────────────────────────────────────────────────── -->
 		{#if crosshair}
-			<line x1={crosshair.cx} y1={y0} x2={crosshair.cx} y2={y1} stroke="rgba(255,255,255,0.5)" stroke-width="1" />
+			<line
+				x1={crosshair.cx}
+				y1={y0}
+				x2={crosshair.cx}
+				y2={y1}
+				stroke="rgba(255,255,255,0.5)"
+				stroke-width="1"
+			/>
 			{#each crosshair.rows as row (row.key)}
-				<circle cx={crosshair.cx} cy={row.y} r="4" fill={row.color} stroke="#0a0a0c" stroke-width="1.5" />
+				<circle
+					cx={crosshair.cx}
+					cy={row.y}
+					r="4"
+					fill={row.color}
+					stroke="#0a0a0c"
+					stroke-width="1.5"
+				/>
 			{/each}
 		{/if}
 	</svg>
@@ -438,7 +513,8 @@
 	<!-- Tooltip (HTML overlay) -->
 	{#if crosshair}
 		<div
-			style="position: absolute; top: {TIP_M}px; {tipPos} width: max-content; min-width: 130px; max-width: calc(100% - {2 * TIP_M}px); pointer-events: none;
+			style="position: absolute; top: {TIP_M}px; {tipPos} width: max-content; min-width: 130px; max-width: calc(100% - {2 *
+				TIP_M}px); pointer-events: none;
 				background: rgba(12,12,16,0.94); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px;
 				padding: 7px 9px; font-size: 11px; color: var(--color-text-muted); box-shadow: 0 4px 16px rgba(0,0,0,0.4);
 				box-sizing: border-box;"
@@ -448,10 +524,14 @@
 			</div>
 			{#each crosshair.rows as row (row.key)}
 				<div style="display: flex; align-items: center; gap: 6px; margin-top: 2px;">
-					<span style="width: 9px; height: 9px; border-radius: 2px; background: {row.color}; flex: none;"></span>
+					<span
+						style="width: 9px; height: 9px; border-radius: 2px; background: {row.color}; flex: none;"
+					></span>
 					<span style="flex: 1; white-space: nowrap;">{row.label}</span>
 					<span style="color: #e4e4e7; font-variant-numeric: tabular-nums; white-space: nowrap;">
-						{row.display}{#if row.pctDelta != null}<span style="color: {SUBTLE};"> ({row.pctDelta >= 0 ? '+' : ''}{row.pctDelta.toFixed(1)}%)</span>{/if}
+						{row.display}{#if row.pctDelta != null}<span style="color: {SUBTLE};">
+								({row.pctDelta >= 0 ? '+' : ''}{row.pctDelta.toFixed(1)}%)</span
+							>{/if}
 					</span>
 				</div>
 			{/each}
@@ -459,10 +539,16 @@
 	{/if}
 
 	<!-- legend -->
-	<div style="display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; margin-top: 6px; font-size: 11px; color: var(--color-text-muted);">
+	<div
+		style="display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; margin-top: 6px; font-size: 11px; color: var(--color-text-muted);"
+	>
 		{#each relSeries as rs (rs.key)}
 			<span style="display: inline-flex; align-items: center; gap: 5px;">
-				<span style="width: 16px; height: 0; border-top: {rs.key === 'weight' ? '2.5px' : '2px'} solid {rs.color};"></span>
+				<span
+					style="width: 16px; height: 0; border-top: {rs.key === 'weight'
+						? '2.5px'
+						: '2px'} solid {rs.color};"
+				></span>
 				{modelByKey[rs.key].label}
 			</span>
 		{/each}

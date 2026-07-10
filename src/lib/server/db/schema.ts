@@ -8,8 +8,10 @@ import {
 	jsonb,
 	boolean,
 	index,
+	uniqueIndex,
 	primaryKey
 } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 import type { Nutrients } from '$lib/nutrients';
 
 // One component of a recipe. Macros are this ingredient's contribution to the
@@ -161,7 +163,14 @@ export const settings = pgTable('settings', {
 	// Free-text notes surfaced to the scheduled Claude review (supplements, current
 	// questions, context) so it sees them without a heavier feature. Included in the
 	// export_data payload; editable on /settings.
-	notes: text('notes')
+	notes: text('notes'),
+
+	// Editable instruction bodies for the scheduled report chats, one per cadence
+	// (null = the built-in default in reportChats.ts). Only the analysis instructions
+	// are editable — the base system prompt (tools, formatting, history rules) is code.
+	dailyReportPrompt: text('daily_report_prompt'),
+	weeklyReportPrompt: text('weekly_report_prompt'),
+	monthlyReportPrompt: text('monthly_report_prompt')
 });
 
 // Analysis reports written back by the scheduled Claude review (via the save_report
@@ -207,10 +216,34 @@ export const chats = pgTable(
 		title: text('title').notNull(),
 		createdAt: timestamp('created_at').notNull().defaultNow(),
 		updatedAt: timestamp('updated_at').notNull().defaultNow(),
-		messages: jsonb('messages').$type<ChatMessage[]>().notNull().default([])
+		messages: jsonb('messages').$type<ChatMessage[]>().notNull().default([]),
+		// Scheduled reports are chat rows too ('daily'|'weekly'|'monthly') so the user
+		// can reply to them like any conversation. dateLabel is the APP_TZ day the
+		// report was generated for; the partial unique index makes scheduled generation
+		// idempotent (a second generator — e.g. the old container during a rolling
+		// deploy — fails the insert and skips).
+		kind: text('kind').notNull().default('chat'), // 'chat' | 'daily' | 'weekly' | 'monthly'
+		unread: boolean('unread').notNull().default(false),
+		dateLabel: text('date_label') // 'YYYY-MM-DD' for report kinds, null for plain chats
 	},
-	(t) => [index('chats_updated_at_idx').on(t.updatedAt)]
+	(t) => [
+		index('chats_updated_at_idx').on(t.updatedAt),
+		uniqueIndex('chats_report_per_day_uq')
+			.on(t.kind, t.dateLabel)
+			.where(sql`${t.kind} <> 'chat'`)
+	]
 );
+
+// Last sync outcome per integration ('fitbit' | 'dexcom' | 'tandem' | 'healthkit').
+// Written by every sync/backfill/import call; read by the /settings health card.
+// The *Auth.updatedAt columns can't serve this: they track token writes, which are
+// rare (and rarer still now that access tokens are cached in-process).
+export const syncStatus = pgTable('sync_status', {
+	source: text('source').primaryKey(),
+	at: timestamp('at').notNull().defaultNow(),
+	ok: boolean('ok').notNull(),
+	detail: text('detail') // '3 days · 812 readings' or the error message
+});
 
 // ── HealthKit sync (pushed by the iOS wrapper app) ──────────────────────────
 

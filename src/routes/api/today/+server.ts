@@ -7,31 +7,45 @@ import { loggedToday, todayLabel } from '$lib/server/day';
 import { deficitDays } from '$lib/server/deficit';
 import { fillBmrGaps } from '$lib/server/projections';
 import { bolusableForLoggedEntry } from '$lib/netCarbs';
-import { getFiberMode } from '$lib/server/prefs';
+import { fiberModeFrom } from '$lib/server/prefs';
 
 export async function GET({ request }) {
 	requireApiToken(request);
+	const today = todayLabel();
 
-	const rawEntries = await db
-		.select({
-			id: dailyLog.id,
-			loggedAt: dailyLog.loggedAt,
-			servings: dailyLog.servings,
-			calories: dailyLog.calories,
-			proteinG: dailyLog.proteinG,
-			carbsG: dailyLog.carbsG,
-			fatG: dailyLog.fatG,
-			foodName: foods.name,
-			foodNutrients: foods.nutrients,
-			foodIngredients: foods.ingredients,
-			foodMakesServings: foods.makesServings
-		})
-		.from(dailyLog)
-		.innerJoin(foods, eq(dailyLog.foodId, foods.id))
-		.where(loggedToday())
-		.orderBy(asc(dailyLog.loggedAt));
+	// One settings read per request: fiber mode is derived from the row and the
+	// row is handed to deficitDays (which otherwise re-queries it). The entries
+	// query is independent of both — run everything together.
+	const settingsP = db
+		.select()
+		.from(settings)
+		.where(eq(settings.id, 1))
+		.then((rows) => rows[0] ?? null);
 
-	const fiberMode = await getFiberMode();
+	const [rawEntries, s, energyDays] = await Promise.all([
+		db
+			.select({
+				id: dailyLog.id,
+				loggedAt: dailyLog.loggedAt,
+				servings: dailyLog.servings,
+				calories: dailyLog.calories,
+				proteinG: dailyLog.proteinG,
+				carbsG: dailyLog.carbsG,
+				fatG: dailyLog.fatG,
+				foodName: foods.name,
+				foodNutrients: foods.nutrients,
+				foodIngredients: foods.ingredients,
+				foodMakesServings: foods.makesServings
+			})
+			.from(dailyLog)
+			.innerJoin(foods, eq(dailyLog.foodId, foods.id))
+			.where(loggedToday())
+			.orderBy(asc(dailyLog.loggedAt)),
+		settingsP,
+		settingsP.then((row) => deficitDays(today, today, { settingsRow: row }))
+	]);
+
+	const fiberMode = fiberModeFrom(s);
 	const entries = rawEntries.map(({ foodNutrients, foodIngredients, foodMakesServings, ...e }) => {
 		const b = bolusableForLoggedEntry(
 			e.carbsG,
@@ -42,9 +56,7 @@ export async function GET({ request }) {
 		return { ...e, bolusableCarbsG: b.bolusableCarbsG, bolusableLowConfidence: b.lowConfidence };
 	});
 
-	const [s] = await db.select().from(settings).where(eq(settings.id, 1));
-
-	const [day] = fillBmrGaps(await deficitDays(todayLabel(), todayLabel()));
+	const [day] = fillBmrGaps(energyDays);
 	const burnedKcal = day?.burnedKcal ?? null;
 
 	// Widget/app deficit: if still under the calorie goal, assume they'll eat up
@@ -55,7 +67,7 @@ export async function GET({ request }) {
 	const deficit = burnedKcal != null ? Math.round(burnedKcal - Math.max(calSum, calTarget)) : null;
 
 	return json({
-		date: todayLabel(),
+		date: today,
 		entries,
 		targets: s ?? null,
 		burnedKcal,

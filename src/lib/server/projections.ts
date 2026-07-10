@@ -166,8 +166,10 @@ export async function bodyInsights({
 	const leanMass = trendFor(series, (w) => w.leanMassKg, anchor, today);
 
 	// Deficit-implied weight rate over the same window: avg daily deficit ÷ 7700
-	// kcal/kg. Positive deficit ⇒ losing ⇒ negative weight change.
-	const from = addDays(today, -windowDays + 1);
+	// kcal/kg. Positive deficit ⇒ losing ⇒ negative weight change. Fetch one extra
+	// day back (−windowDays, not −windowDays+1): today is excluded below, so this
+	// keeps a full windowDays of completed days — same window energyInsights uses.
+	const from = addDays(today, -windowDays);
 	const ledger = await deficitDays(from, today);
 	// Exclude today's deficit — you're not done eating, so it's an inflated
 	// partial. Today's weigh-in still counts (it's in `series` above).
@@ -491,7 +493,7 @@ export async function energyInsights({
 	// "Am I losing as fast as my deficit predicts?" — branch on whether the logged
 	// intake is actually a deficit; surplus/maintenance gets different copy.
 	let ratio: number | null = null;
-	let verdict: EnergyInsights['pace']['verdict'] = 'unknown';
+	let verdict: EnergyInsights['pace']['verdict'];
 	if (!enoughIntake || measuredRatePerWeekKg == null || expectedRatePerWeekKg == null) {
 		verdict = 'unknown';
 	} else if (expectedRatePerWeekKg >= -1e-6) {

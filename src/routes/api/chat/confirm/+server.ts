@@ -1,6 +1,7 @@
 import { json, error } from '@sveltejs/kit';
 import { createAndLogFood, prepFood, parseScheduleAt, FoodInputError } from '$lib/server/foods';
 import { bolusableCarbsPerServing } from '$lib/netCarbs';
+import { macroSanityNote } from '$lib/nutrients';
 import { getFiberMode } from '$lib/server/prefs';
 
 // POST /api/chat/confirm  { kind: 'track'|'recipe'|'schedule', proposal }
@@ -79,7 +80,9 @@ export async function POST({ request }) {
 					carbsG: r1(food.carbsG),
 					fatG: r1(food.fatG)
 				},
-				bolusableCarbsG: r1(b.bolusableCarbsG)
+				bolusableCarbsG: r1(b.bolusableCarbsG),
+				// Atwater warning (never a rejection) — per-serving label math cross-check.
+				macroCheck: macroSanityNote(food, food.nutrients)
 			});
 		}
 
@@ -115,7 +118,10 @@ export async function POST({ request }) {
 				carbsG: r1(logEntry.carbsG),
 				fatG: r1(logEntry.fatG)
 			},
-			bolusableCarbsG: r1(b.bolusableCarbsG)
+			bolusableCarbsG: r1(b.bolusableCarbsG),
+			// Atwater warning (never a rejection) — per-serving label math cross-check
+			// (food == logged entry here: track/schedule commits exactly one serving).
+			macroCheck: macroSanityNote(food, food.nutrients)
 		});
 	} catch (e) {
 		if (e instanceof FoodInputError) throw error(400, e.message);

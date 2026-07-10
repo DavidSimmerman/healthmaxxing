@@ -7,16 +7,18 @@ RUN corepack enable
 WORKDIR /app
 
 # ── Build (full deps) ─────────────────────────────────────────────────────────
+# BuildKit cache mounts keep the pnpm store across builds (PNPM_HOME=/pnpm →
+# store defaults to /pnpm/store). Coolify builds with BuildKit.
 FROM base AS build
 COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm build
 
 # ── Production deps only ──────────────────────────────────────────────────────
 FROM base AS prod-deps
 COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --prod --frozen-lockfile
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --prod --frozen-lockfile
 
 # ── Runtime ───────────────────────────────────────────────────────────────────
 FROM base AS runtime
@@ -48,8 +50,17 @@ ENV TANDEM_SCRIPT=/app/scripts/tandem_sync.py
 # (127.0.0.1:8787), reached by the app at AGENT_URL=http://127.0.0.1:8787. Bundled here
 # (like the Tandem sidecar above) so there's no cross-service networking and it inherits the
 # app's zero-downtime deploy. Its deps live in agent/node_modules, isolated from the app's.
+# Manifests first so agent source edits don't re-run the install; npm cache persists via mount.
+COPY --from=build /app/agent/package.json /app/agent/package-lock.json ./agent/
+RUN --mount=type=cache,id=npm,target=/root/.npm cd agent && npm ci --omit=dev
 COPY --from=build /app/agent ./agent
-RUN cd agent && npm ci --omit=dev
+
+# Drop root for both processes. Nothing under /app is written at runtime (no uploads dir,
+# migrations are DB-only, tandem never caches to disk; /opt/tandem-venv is read+exec).
+# The Claude CLI does write session state (chat resume) under $HOME — the node image
+# ships /home/node owned by node, and HOME is pinned so the CLI never tries /root.
+ENV HOME=/home/node
+USER node
 
 # Run migrations, then start the sidecar (background) + the app (foreground). See scripts/start.sh.
 CMD ["sh", "scripts/start.sh"]

@@ -160,17 +160,25 @@
 		</div>
 
 		<!-- Insights -->
-		<h2 class="mb-2 px-1 text-xs font-semibold tracking-wider uppercase" style="color: var(--color-text-subtle);">
+		<h2
+			class="mb-2 px-1 text-xs font-semibold tracking-wider uppercase"
+			style="color: var(--color-text-subtle);"
+		>
 			How you're sleeping · {slice.length} night{slice.length === 1 ? '' : 's'}
 		</h2>
 		<div class="flex flex-col gap-2">
 			{#each insights as ins (ins.key)}
 				<div class="card flex items-start gap-3 p-4">
-					<span class="mt-1.5 h-2 w-2 shrink-0 rounded-full" style="background: {statusColor(ins.status)};"></span>
+					<span
+						class="mt-1.5 h-2 w-2 shrink-0 rounded-full"
+						style="background: {statusColor(ins.status)};"
+					></span>
 					<div class="min-w-0 flex-1">
 						<div class="flex items-baseline justify-between gap-2">
 							<span class="font-semibold text-white">{ins.label}</span>
-							<span class="text-lg font-bold" style="color: {statusColor(ins.status)};">{ins.value}</span>
+							<span class="text-lg font-bold" style="color: {statusColor(ins.status)};"
+								>{ins.value}</span
+							>
 						</div>
 						<div class="text-xs" style="color: var(--color-text-subtle);">{ins.detail}</div>
 						<div class="mt-1 text-sm" style="color: var(--color-text-muted);">{ins.note}</div>
@@ -181,33 +189,50 @@
 
 		<!-- Hypnogram for the selected night -->
 		{#if sel && selNight}
-			<h2 class="mt-6 mb-2 px-1 text-xs font-semibold tracking-wider uppercase" style="color: var(--color-text-subtle);">
-				{selectedDate === nights[0]?.date ? 'Last night' : fmtDate(selectedDate)} · {fmtDur(selNight.m.sleep_min)}
+			<h2
+				class="mt-6 mb-2 px-1 text-xs font-semibold tracking-wider uppercase"
+				style="color: var(--color-text-subtle);"
+			>
+				{selectedDate === nights[0]?.date ? 'Last night' : fmtDate(selectedDate)} · {fmtDur(
+					selNight.m.sleep_min
+				)}
 			</h2>
 			<section class="card p-4">
 				<div class="flex flex-col gap-1.5">
 					{#each STAGES as st (st.id)}
 						<div class="flex items-center gap-2">
-							<span class="w-10 shrink-0 text-[10px] tracking-wide uppercase" style="color: var(--color-text-subtle);">
+							<span
+								class="w-10 shrink-0 text-[10px] tracking-wide uppercase"
+								style="color: var(--color-text-subtle);"
+							>
 								{st.label}
 							</span>
 							<div class="relative h-4 flex-1 overflow-hidden rounded" style="background: #18181b;">
 								{#each sel.segments.filter((s) => s.stage === st.id) as seg, i (i)}
 									<div
 										class="absolute top-0 h-full rounded-sm"
-										style="left: {(seg.startMin / totalMin) * 100}%; width: {Math.max((seg.durationMin / totalMin) * 100, 0.4)}%; background: {st.color};"
+										style="left: {(seg.startMin / totalMin) * 100}%; width: {Math.max(
+											(seg.durationMin / totalMin) * 100,
+											0.4
+										)}%; background: {st.color};"
 									></div>
 								{/each}
 							</div>
 						</div>
 					{/each}
 				</div>
-				<div class="mt-2 flex justify-between pl-12 text-[10px]" style="color: var(--color-text-subtle);">
+				<div
+					class="mt-2 flex justify-between pl-12 text-[10px]"
+					style="color: var(--color-text-subtle);"
+				>
 					<span>{fmtClock(sel.startAt)}</span>
 					<span>{fmtClock(sel.endAt)}</span>
 				</div>
 				<!-- Stage legend with minutes for this night -->
-				<div class="mt-3 flex flex-wrap gap-x-4 gap-y-1 border-t pt-3" style="border-color: var(--color-border);">
+				<div
+					class="mt-3 flex flex-wrap gap-x-4 gap-y-1 border-t pt-3"
+					style="border-color: var(--color-border);"
+				>
 					{#each STAGES as st (st.id)}
 						{#if typeof selNight.m[st.key] === 'number'}
 							<div class="flex items-center gap-1.5 text-xs">
@@ -219,13 +244,17 @@
 					{/each}
 				</div>
 				<p class="mt-2 text-[10px]" style="color: var(--color-text-subtle);">
-					Restlessness isn't exposed by the Fitbit/Google API — the Awake track is the closest signal.
+					Restlessness isn't exposed by the Fitbit/Google API — the Awake track is the closest
+					signal.
 				</p>
 			</section>
 		{/if}
 
 		<!-- Per-night list (tap to load its hypnogram above) -->
-		<h2 class="mt-6 mb-2 px-1 text-xs font-semibold tracking-wider uppercase" style="color: var(--color-text-subtle);">
+		<h2
+			class="mt-6 mb-2 px-1 text-xs font-semibold tracking-wider uppercase"
+			style="color: var(--color-text-subtle);"
+		>
 			Nights
 		</h2>
 		<div class="flex flex-col gap-2">
@@ -235,7 +264,9 @@
 					type="button"
 					class="card p-3 text-left transition hover:bg-white/5"
 					class:ring-1={n.date === selectedDate}
-					style={n.date === selectedDate ? 'box-shadow: inset 0 0 0 1px var(--color-text-muted);' : ''}
+					style={n.date === selectedDate
+						? 'box-shadow: inset 0 0 0 1px var(--color-text-muted);'
+						: ''}
 					onclick={() => {
 						selectedDate = n.date;
 						userPicked = true;
@@ -246,7 +277,9 @@
 						<div class="flex items-baseline gap-2">
 							<span class="text-sm font-bold text-white">{fmtDur(n.m.sleep_min)}</span>
 							{#if typeof n.m.sleep_efficiency_pct === 'number'}
-								<span class="text-xs" style="color: var(--color-text-subtle);">{Math.round(n.m.sleep_efficiency_pct)}%</span>
+								<span class="text-xs" style="color: var(--color-text-subtle);"
+									>{Math.round(n.m.sleep_efficiency_pct)}%</span
+								>
 							{/if}
 						</div>
 					</div>
@@ -254,7 +287,9 @@
 						<div class="mt-2 flex h-1.5 overflow-hidden rounded-full" style="background: #18181b;">
 							{#each STAGES as st (st.id)}
 								{#if n.m[st.key]}
-									<div style="width: {((n.m[st.key] ?? 0) / t) * 100}%; background: {st.color};"></div>
+									<div
+										style="width: {((n.m[st.key] ?? 0) / t) * 100}%; background: {st.color};"
+									></div>
 								{/if}
 							{/each}
 						</div>

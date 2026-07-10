@@ -14,6 +14,11 @@ async function main() {
 	// max:1 — a single connection is all the migrator needs, and it lets us close cleanly.
 	const client = postgres(url, { max: 1 });
 	try {
+		// Serialize concurrent boots (a restart racing a rolling deploy): drizzle's
+		// migrator takes no lock of its own, so two runners can read the same
+		// "last applied" row and collide. Advisory lock is per-connection; max:1
+		// keeps it on this one, and closing the connection always releases it.
+		await client`select pg_advisory_lock(727001)`;
 		await migrate(drizzle(client), { migrationsFolder: './drizzle' });
 		console.log('migrations applied');
 	} finally {

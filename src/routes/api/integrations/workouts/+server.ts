@@ -19,6 +19,11 @@ type WorkoutIn = {
 	distanceKm?: number | null;
 };
 
+// Mirrors the chunk helper in src/lib/server/tandem.ts.
+function* chunk<T>(arr: T[], size: number): Generator<T[]> {
+	for (let i = 0; i < arr.length; i += size) yield arr.slice(i, i + size);
+}
+
 function num(v: unknown, min: number, max: number, label: string): number | null {
 	if (v === undefined || v === null) return null;
 	if (typeof v !== 'number' || !Number.isFinite(v) || v < min || v > max) {
@@ -65,18 +70,21 @@ export async function POST({ request }) {
 	if (!Array.isArray(rawWorkouts)) throw error(400, 'workouts must be an array');
 
 	const parsed = rawWorkouts.map(parseWorkout);
-	// First-ever sync posts the entire workout history in ONE un-chunked batch
-	// (the client doesn't chunk these like it does body comp), so the cap has to
-	// clear a realistic lifetime of workouts. ponytail: 5000 ≈ 13 yrs of daily
-	// workouts and stays under Postgres's ~9362-row bind-param ceiling (7 cols);
-	// if anyone ever exceeds it, chunk the insert below in slices of ~500.
+	// First-ever sync posts the entire workout history in ONE batch (the client
+	// doesn't chunk these like it does body comp), so the cap has to clear a
+	// realistic lifetime of workouts. ponytail: 5000 ≈ 13 yrs of daily workouts;
+	// the insert below is chunked, so this is a sanity cap, not a bind-param one.
 	if (parsed.length > 5000) throw error(400, 'batch too large');
 
-	if (parsed.length) {
-		await db
-			.insert(workouts)
-			.values(
-				parsed.map((w) => ({
+	// Dedupe by the conflict key first: a payload repeating an hkUuid would make
+	// Postgres reject the whole batched ON CONFLICT ("cannot affect row a second
+	// time"). Map keeps the last occurrence. Chunk to stay under the ~9362-param
+	// bind ceiling. (Pattern mirrors tandem.ts syncInsulin.)
+	const rows = [
+		...new Map(
+			parsed.map((w) => [
+				w.hkUuid,
+				{
 					hkUuid: w.hkUuid,
 					name: w.name,
 					startedAt: new Date(w.start),
@@ -85,8 +93,15 @@ export async function POST({ request }) {
 					avgHr: w.avgHr,
 					maxHr: w.maxHr,
 					distanceKm: w.distanceKm
-				}))
-			)
+				}
+			])
+		).values()
+	];
+
+	for (const part of chunk(rows, 500)) {
+		await db
+			.insert(workouts)
+			.values(part)
 			.onConflictDoUpdate({
 				target: workouts.hkUuid,
 				set: {

@@ -115,7 +115,8 @@ export function bolusableCarbsPerServing(
 				{
 					carbsG: ing.carbsG ?? 0,
 					fiberG: ing.nutrients?.fiberG,
-					sugarAlcoholG: ing.nutrients?.sugarAlcoholG
+					sugarAlcoholG: ing.nutrients?.sugarAlcoholG,
+					alluloseG: ing.nutrients?.alluloseG
 				},
 				opts
 			);
@@ -128,7 +129,8 @@ export function bolusableCarbsPerServing(
 		{
 			carbsG: food.carbsG ?? 0,
 			fiberG: food.nutrients?.fiberG,
-			sugarAlcoholG: food.nutrients?.sugarAlcoholG
+			sugarAlcoholG: food.nutrients?.sugarAlcoholG,
+			alluloseG: food.nutrients?.alluloseG
 		},
 		opts
 	);
@@ -163,11 +165,13 @@ export function bolusableForLoggedEntry(
 
 	const fiberG = food.nutrients?.fiberG;
 	const sugarAlcoholG = food.nutrients?.sugarAlcoholG;
+	const alluloseG = food.nutrients?.alluloseG;
 	const r = netCarbs(
 		{
 			carbsG: cap,
 			fiberG: fiberG == null ? fiberG : fiberG * s,
-			sugarAlcoholG: sugarAlcoholG == null ? sugarAlcoholG : sugarAlcoholG * s
+			sugarAlcoholG: sugarAlcoholG == null ? sugarAlcoholG : sugarAlcoholG * s,
+			alluloseG: alluloseG == null ? alluloseG : alluloseG * s
 		},
 		opts
 	);

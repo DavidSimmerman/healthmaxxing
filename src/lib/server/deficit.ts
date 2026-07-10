@@ -1,4 +1,4 @@
-import { sql, and, gte, lte, asc } from 'drizzle-orm';
+import { sql, and, gte, lte, asc, desc } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { dailyLog, activityDays, bodyComp, settings } from '$lib/server/db/schema';
 import { APP_TZ, todayLabel } from '$lib/server/day';
@@ -21,10 +21,15 @@ export type DayEnergy = {
 };
 
 // Per-day energy ledger for [fromDate, toDate] inclusive (YYYY-MM-DD, APP_TZ).
-export async function deficitDays(fromDate: string, toDate: string): Promise<DayEnergy[]> {
+// Callers that already hold the (single-row) settings can pass it to skip a query.
+export async function deficitDays(
+	fromDate: string,
+	toDate: string,
+	opts?: { settingsRow?: typeof settings.$inferSelect | null }
+): Promise<DayEnergy[]> {
 	const logDate = sql<string>`(${dailyLog.loggedAt} at time zone 'UTC' at time zone ${APP_TZ})::date`;
 
-	const [intakeRows, activityRows, compRows, [settingsRow]] = await Promise.all([
+	const [intakeRows, activityRows, compInRange, compBefore, settingsRows] = await Promise.all([
 		db
 			.select({
 				date: sql<string>`${logDate}::text`,
@@ -42,20 +47,34 @@ export async function deficitDays(fromDate: string, toDate: string): Promise<Day
 			.select()
 			.from(activityDays)
 			.where(and(gte(activityDays.date, fromDate), lte(activityDays.date, toDate))),
-		// All weigh-ins up to the end of the range, so every day can carry the
-		// latest measurement on/before it forward.
+		// Weigh-ins inside the range…
 		db
 			.select()
 			.from(bodyComp)
 			.where(
-				sql`(${bodyComp.measuredAt} at time zone 'UTC' at time zone ${APP_TZ})::date <= ${toDate}::date`
+				sql`(${bodyComp.measuredAt} at time zone 'UTC' at time zone ${APP_TZ})::date between ${fromDate}::date and ${toDate}::date`
 			)
 			.orderBy(asc(bodyComp.measuredAt)),
+		// …plus the single latest one before it, so every day still carries the
+		// latest measurement on/before it forward — without loading the entire
+		// weigh-in history on every call like this used to.
 		db
 			.select()
-			.from(settings)
-			.where(sql`${settings.id} = 1`)
+			.from(bodyComp)
+			.where(
+				sql`(${bodyComp.measuredAt} at time zone 'UTC' at time zone ${APP_TZ})::date < ${fromDate}::date`
+			)
+			.orderBy(desc(bodyComp.measuredAt))
+			.limit(1),
+		opts?.settingsRow !== undefined
+			? Promise.resolve(opts.settingsRow ? [opts.settingsRow] : [])
+			: db
+					.select()
+					.from(settings)
+					.where(sql`${settings.id} = 1`)
 	]);
+	const settingsRow = settingsRows[0];
+	const compRows = [...compBefore, ...compInRange];
 
 	const intakeByDate = new Map(intakeRows.map((r) => [r.date, r]));
 	const activityByDate = new Map(activityRows.map((r) => [r.date, r]));
@@ -74,11 +93,15 @@ export async function deficitDays(fromDate: string, toDate: string): Promise<Day
 	const calorieTarget = settingsRow?.calorieTarget ?? 2100;
 
 	const days: DayEnergy[] = [];
+	// compByDate is ascending; walk it once with a pointer instead of a
+	// clone+reverse+find per day (was O(days × weigh-ins)).
+	let compIdx = -1;
 	for (const date of dateRange(fromDate, toDate)) {
 		const intake = intakeByDate.get(date);
 		const activity = activityByDate.get(date);
 		// Latest weigh-in on/before this day.
-		const comp = [...compByDate].reverse().find((c) => c.date <= date) ?? null;
+		while (compIdx + 1 < compByDate.length && compByDate[compIdx + 1].date <= date) compIdx++;
+		const comp = compIdx >= 0 ? compByDate[compIdx] : null;
 
 		const intakeKcal = intake?.calories ?? 0;
 		const tef = intake ? tefKcal(intake.proteinG, intake.carbsG, intake.fatG) : 0;

@@ -2,6 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import { requireApiToken } from '$lib/server/auth';
 import { authEnabled, sessionValid, SESSION_COOKIE } from '$lib/server/session';
 import { googleHealthEnabled, syncHealth, peekHealth } from '$lib/server/fitbit';
+import { recordSync, syncDetail } from '$lib/server/syncStatus';
 
 // Daily pull (Fitbit data via the Google Health API), hit by a cron with the API token:
 //   0 9 * * * curl -fsS -X POST -H "Authorization: Bearer $API_TOKEN" \
@@ -38,9 +39,13 @@ export async function POST({ request, cookies }) {
 	}
 
 	try {
-		return json(debug ? { debug: await peekHealth(days) } : await syncHealth(days));
+		if (debug) return json({ debug: await peekHealth(days) });
+		const r = await syncHealth(days);
+		await recordSync('fitbit', true, syncDetail(r));
+		return json(r);
 	} catch (e) {
 		console.error('fitbit/google sync failed:', e);
+		await recordSync('fitbit', false, e instanceof Error ? e.message : 'Sync failed.');
 		throw error(502, e instanceof Error ? e.message : 'Sync failed.');
 	}
 }

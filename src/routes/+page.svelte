@@ -29,6 +29,7 @@
 	// Default a new schedule to the next round hour (HH:00, local) so the time field
 	// starts somewhere sensible for a "dinner later" plan.
 	function defaultTime(): string {
+		// eslint-disable-next-line svelte/prefer-svelte-reactivity -- local: built, mutated, formatted in one call
 		const d = new Date();
 		d.setHours(d.getHours() + 1, 0, 0, 0);
 		return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
@@ -36,36 +37,71 @@
 	// "HH:MM" (local, today) → ISO instant for the API.
 	function timeToISO(hhmm: string): string {
 		const [h, m] = hhmm.split(':').map(Number);
+		// eslint-disable-next-line svelte/prefer-svelte-reactivity -- local: built, mutated, serialized to ISO in one call
 		const d = new Date();
 		d.setHours(h, m, 0, 0);
 		return d.toISOString();
 	}
 
+	// One in-flight guard + one error line for every quick mutating action here.
+	// The guard: a double-tap would race two POSTs before location.reload() lands
+	// (double-log). The ok-check: a 400 (e.g. a past schedule time) used to clear
+	// state and reload as fake success. pendingKey stays set on success (the
+	// reload replaces the page) and clears on failure so a retry works.
+	let pendingKey = $state<string | null>(null);
+	let actionError = $state<string | null>(null);
+	async function act(key: string, url: string, init?: RequestInit): Promise<boolean> {
+		if (pendingKey) return false;
+		pendingKey = key;
+		actionError = null;
+		try {
+			const res = await fetch(url, init);
+			if (res.ok) return true;
+			actionError = (await res.json().catch(() => null))?.message ?? `Failed (${res.status})`;
+		} catch {
+			actionError = 'Network error — try again.';
+		}
+		pendingKey = null;
+		return false;
+	}
+	const postJson = (body: unknown): RequestInit => ({
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(body)
+	});
+
+	async function quickAdd(foodId: string) {
+		if (await act(`quick:${foodId}`, '/api/log', postJson({ foodId, servings: 1 })))
+			location.reload();
+	}
+
 	// Quick-add scheduling: tapping a tile's clock opens one shared time row.
+	// Kept open on failure so the user can fix the time (server names the reason).
 	let schedulingQuick = $state<{ foodId: string; name: string } | null>(null);
 	let quickTime = $state('');
 	async function scheduleQuick() {
 		if (!schedulingQuick) return;
-		await fetch('/api/planned', {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({
-				foodId: schedulingQuick.foodId,
-				servings: 1,
-				scheduledAt: timeToISO(quickTime)
-			})
+		// Guard before timeToISO — a cleared input would throw RangeError outside act().
+		if (!/^\d{2}:\d{2}$/.test(quickTime)) {
+			actionError = 'Pick a time first.';
+			return;
+		}
+		const body = postJson({
+			foodId: schedulingQuick.foodId,
+			servings: 1,
+			scheduledAt: timeToISO(quickTime)
 		});
-		schedulingQuick = null;
-		location.reload();
+		if (await act('schedule', '/api/planned', body)) {
+			schedulingQuick = null;
+			location.reload();
+		}
 	}
 
 	async function confirmPlanned(id: string) {
-		await fetch(`/api/planned/${id}`, { method: 'POST' });
-		location.reload();
+		if (await act(`confirm:${id}`, `/api/planned/${id}`, { method: 'POST' })) location.reload();
 	}
 	async function removePlanned(id: string) {
-		await fetch(`/api/planned/${id}`, { method: 'DELETE' });
-		location.reload();
+		if (await act(`remove:${id}`, `/api/planned/${id}`, { method: 'DELETE' })) location.reload();
 	}
 
 	// Whether the calorie ring and protein bar lead with what's left vs. consumed.
@@ -188,15 +224,9 @@
 			{#each data.quickAddItems as q (q.id)}
 				<div class="card-sm relative shrink-0 transition hover:bg-white/10">
 					<button
-						class="px-4 py-3 pr-9 text-left active:scale-95"
-						onclick={async () => {
-							await fetch('/api/log', {
-								method: 'POST',
-								headers: { 'Content-Type': 'application/json' },
-								body: JSON.stringify({ foodId: q.foodId, servings: 1 })
-							});
-							location.reload();
-						}}
+						class="px-4 py-3 pr-9 text-left active:scale-95 disabled:opacity-50"
+						disabled={pendingKey === `quick:${q.foodId}`}
+						onclick={() => quickAdd(q.foodId)}
 					>
 						<div class="text-sm font-semibold text-white">{q.name}</div>
 						<div class="text-xs" style="color: var(--color-text-subtle);">
@@ -211,24 +241,47 @@
 							schedulingQuick = { foodId: q.foodId, name: q.name };
 						}}
 					>
-						<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
+						<svg
+							width="14"
+							height="14"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							stroke-linejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg
+						>
 					</button>
 				</div>
 			{/each}
 		</div>
 		{#if schedulingQuick}
 			<div class="card-sm mt-2 flex items-center gap-2 p-3">
-				<span class="flex-1 truncate text-sm text-white">Schedule <b>{schedulingQuick.name}</b></span>
+				<span class="flex-1 truncate text-sm text-white"
+					>Schedule <b>{schedulingQuick.name}</b></span
+				>
 				<input
 					type="time"
 					bind:value={quickTime}
 					class="rounded-md bg-white/10 px-2 py-1 text-sm text-white"
 					aria-label="Scheduled time"
 				/>
-				<button class="rounded-md bg-white/10 px-3 py-1 text-sm font-semibold text-white hover:bg-white/20" onclick={scheduleQuick}>Schedule</button>
-				<button class="px-2 py-1 text-sm text-white/60 hover:text-white" onclick={() => (schedulingQuick = null)} aria-label="Cancel">✕</button>
+				<button
+					class="rounded-md bg-white/10 px-3 py-1 text-sm font-semibold text-white hover:bg-white/20 disabled:opacity-50"
+					disabled={pendingKey === 'schedule'}
+					onclick={scheduleQuick}>Schedule</button
+				>
+				<button
+					class="px-2 py-1 text-sm text-white/60 hover:text-white"
+					onclick={() => (schedulingQuick = null)}
+					aria-label="Cancel">✕</button
+				>
 			</div>
 		{/if}
+	{/if}
+
+	{#if actionError}
+		<p class="mt-2 text-sm text-red-400" role="alert">{actionError}</p>
 	{/if}
 
 	{#if data.plannedMeals.length > 0}
@@ -250,15 +303,17 @@
 						</div>
 					</div>
 					<button
-						class="rounded-lg px-3 py-1.5 text-sm font-semibold text-white transition hover:brightness-125"
+						class="rounded-lg px-3 py-1.5 text-sm font-semibold text-white transition hover:brightness-125 disabled:opacity-50"
 						style="background: rgba(74,222,128,0.18); color: #4ade80;"
+						disabled={pendingKey === `confirm:${p.id}`}
 						onclick={() => confirmPlanned(p.id)}
 					>
 						Confirm
 					</button>
 					<button
-						class="rounded-lg px-2.5 py-1.5 text-sm text-white/60 transition hover:text-white"
+						class="rounded-lg px-2.5 py-1.5 text-sm text-white/60 transition hover:text-white disabled:opacity-50"
 						aria-label="Remove planned {p.foodName}"
+						disabled={pendingKey === `remove:${p.id}`}
 						onclick={() => removePlanned(p.id)}
 					>
 						✕
@@ -267,7 +322,8 @@
 			{/each}
 		</div>
 		<p class="mt-2 text-center text-xs" style="color: var(--color-text-subtle);">
-			Planned meals already count toward your day — confirm when you eat (stamps the time) or remove.
+			Planned meals already count toward your day — confirm when you eat (stamps the time) or
+			remove.
 		</p>
 	{/if}
 

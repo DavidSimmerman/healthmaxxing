@@ -2,6 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { bodyComp, activityDays } from '$lib/server/db/schema';
 import { requireApiToken } from '$lib/server/auth';
+import { recordSync } from '$lib/server/syncStatus';
 import { sql } from 'drizzle-orm';
 
 // Ingest endpoint for the iOS wrapper app's HealthKit sync. Everything is an
@@ -91,47 +92,53 @@ export async function POST({ request }) {
 	const days = (rawDays ?? []).map(parseDay);
 	if (comp.length > 1000 || days.length > 1000) throw error(400, 'batch too large');
 
-	if (comp.length) {
-		await db
-			.insert(bodyComp)
-			.values(
-				comp.map((c) => ({
-					hkUuid: c.hkUuid,
-					measuredAt: new Date(c.measuredAt),
-					weightKg: c.weightKg,
-					bodyFatPct: c.bodyFatPct,
-					leanMassKg: c.leanMassKg,
-					source: c.source
-				}))
-			)
-			.onConflictDoUpdate({
-				target: bodyComp.hkUuid,
-				set: {
-					// An edited sample in Apple Health keeps its UUID — mirror the new values.
-					measuredAt: sql`excluded.measured_at`,
-					weightKg: sql`excluded.weight_kg`,
-					bodyFatPct: sql`excluded.body_fat_pct`,
-					leanMassKg: sql`excluded.lean_mass_kg`,
-					source: sql`excluded.source`
-				}
-			});
+	try {
+		if (comp.length) {
+			await db
+				.insert(bodyComp)
+				.values(
+					comp.map((c) => ({
+						hkUuid: c.hkUuid,
+						measuredAt: new Date(c.measuredAt),
+						weightKg: c.weightKg,
+						bodyFatPct: c.bodyFatPct,
+						leanMassKg: c.leanMassKg,
+						source: c.source
+					}))
+				)
+				.onConflictDoUpdate({
+					target: bodyComp.hkUuid,
+					set: {
+						// An edited sample in Apple Health keeps its UUID — mirror the new values.
+						measuredAt: sql`excluded.measured_at`,
+						weightKg: sql`excluded.weight_kg`,
+						bodyFatPct: sql`excluded.body_fat_pct`,
+						leanMassKg: sql`excluded.lean_mass_kg`,
+						source: sql`excluded.source`
+					}
+				});
+		}
+
+		if (days.length) {
+			await db
+				.insert(activityDays)
+				.values(days)
+				.onConflictDoUpdate({
+					target: activityDays.date,
+					set: {
+						activeKcal: sql`excluded.active_kcal`,
+						basalKcal: sql`excluded.basal_kcal`,
+						steps: sql`excluded.steps`,
+						exerciseMin: sql`excluded.exercise_min`,
+						updatedAt: new Date()
+					}
+				});
+		}
+	} catch (e) {
+		await recordSync('healthkit', false, e instanceof Error ? e.message : 'sync failed');
+		throw e;
 	}
 
-	if (days.length) {
-		await db
-			.insert(activityDays)
-			.values(days)
-			.onConflictDoUpdate({
-				target: activityDays.date,
-				set: {
-					activeKcal: sql`excluded.active_kcal`,
-					basalKcal: sql`excluded.basal_kcal`,
-					steps: sql`excluded.steps`,
-					exerciseMin: sql`excluded.exercise_min`,
-					updatedAt: new Date()
-				}
-			});
-	}
-
+	await recordSync('healthkit', true, `${comp.length} weigh-ins · ${days.length} days`);
 	return json({ bodyComp: comp.length, days: days.length });
 }
