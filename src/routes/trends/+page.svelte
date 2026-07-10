@@ -2,6 +2,7 @@
 	import { goto, invalidateAll } from '$app/navigation';
 	import { pullToRefresh } from '$lib/actions/pullToRefresh';
 	import { addDays, kgToLb, lbToKg, LB_PER_KG } from '$lib/energy';
+	import { halfSplitDelta } from '$lib/sleepInsights';
 	import WeightChart from '$lib/components/WeightChart.svelte';
 
 	let { data } = $props();
@@ -105,6 +106,48 @@
 		if (v) p.set('target', v);
 		goto(`/trends?${p}`, { noScroll: true, keepFocus: true, replaceState: true });
 	}
+
+	// Glucose control — older-half vs newer-half average over the window. halfSplitDelta
+	// wants NEWEST-first; data.glucose arrives oldest-first from healthReview → reverse.
+	let gmiSplit = $derived(
+		halfSplitDelta(
+			data.glucose
+				.map((g) => g.gmi)
+				.filter((v): v is number => v != null)
+				.reverse()
+		)
+	);
+	let tirSplit = $derived(
+		halfSplitDelta(
+			data.glucose
+				.map((g) => g.tir)
+				.filter((v): v is number => v != null)
+				.reverse()
+		)
+	);
+	// Verdict off the ROUNDED halves so the arrow always agrees with the shown numbers.
+	// Colors mirror the sleep-insight statuses (good / warn / neutral).
+	function glucoseRow(
+		split: { older: number; newer: number } | null,
+		digits: number,
+		lowerIsBetter: boolean
+	) {
+		if (!split) return null;
+		const f = 10 ** digits;
+		const older = Math.round(split.older * f) / f;
+		const newer = Math.round(split.newer * f) / f;
+		const status =
+			newer === older ? 'steady' : newer < older === lowerIsBetter ? 'improving' : 'worsening';
+		return {
+			older: older.toFixed(digits),
+			newer: newer.toFixed(digits),
+			arrow: newer === older ? '→' : newer < older ? '↓' : '↑',
+			status,
+			color: status === 'improving' ? '#34d399' : status === 'steady' ? '#a1a1aa' : '#fbbf24'
+		};
+	}
+	let gmiRow = $derived(glucoseRow(gmiSplit, 1, true)); // GMI: lower is better
+	let tirRow = $derived(glucoseRow(tirSplit, 0, false)); // TIR: higher is better
 
 	// "Am I on pace?" verdict copy.
 	let paceText = $derived.by(() => {
@@ -256,6 +299,40 @@
 				>
 			</div>
 		</section>
+
+		<!-- Glucose control (GMI / TIR, older half vs newer half of the window) -->
+		{#if data.glucose.length > 0}
+			<section class="card mt-3 p-5">
+				<h2
+					class="mb-3 text-xs font-semibold tracking-widest uppercase"
+					style="color: var(--color-text-subtle);"
+				>
+					Glucose control
+				</h2>
+				{#if gmiRow || tirRow}
+					{#if gmiRow}
+						<div class="trend-row">
+							<span>GMI</span><b
+								>{gmiRow.older}% → {gmiRow.newer}%
+								<span style="color: {gmiRow.color};">{gmiRow.arrow} {gmiRow.status}</span></b
+							>
+						</div>
+					{/if}
+					{#if tirRow}
+						<div class="trend-row">
+							<span>Time in range</span><b
+								>{tirRow.older}% → {tirRow.newer}%
+								<span style="color: {tirRow.color};">{tirRow.arrow} {tirRow.status}</span></b
+							>
+						</div>
+					{/if}
+				{:else}
+					<p class="text-xs" style="color: var(--color-text-subtle);">
+						Not enough glucose days in this window to compare halves yet.
+					</p>
+				{/if}
+			</section>
+		{/if}
 
 		<!-- Pace vs deficit (NEW) -->
 		<section class="card mt-3 p-5">

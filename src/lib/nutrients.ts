@@ -6,6 +6,7 @@ export type Nutrients = {
 	sugarG: number;
 	addedSugarG: number;
 	sugarAlcoholG: number;
+	alluloseG: number; // rare sugar, ~0 kcal, fully subtracted for bolusable carbs
 	// Fat breakdown
 	satFatG: number;
 	transFatG: number;
@@ -41,6 +42,7 @@ export const NUTRIENT_KEYS: readonly (keyof Nutrients)[] = [
 	'sugarG',
 	'addedSugarG',
 	'sugarAlcoholG',
+	'alluloseG',
 	'satFatG',
 	'transFatG',
 	'monoFatG',
@@ -174,6 +176,33 @@ export function nutrientCoverage(
 		out[key] = totalCalories > 0 && cc > 0 ? Math.round((cc / totalCalories) * 100) / 100 : 1;
 	}
 	return out;
+}
+
+// Atwater cross-check: stated calories vs calories implied by the macros. Returns a
+// short human note when they disagree by >30% (and >40 kcal), else null. A WARNING
+// only — never a rejection; a bad serving size is the usual culprit. Fiber (~2),
+// sugar alcohols (~2.4) and allulose (~0 kcal/g) get their real factors precisely so
+// keto/high-fiber labels don't false-positive.
+export function macroSanityNote(
+	macros: { calories: number; proteinG: number; carbsG: number; fatG: number },
+	nutrients?: Partial<Nutrients> | null
+): string | null {
+	const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);
+	const fiber = n(nutrients?.fiberG);
+	const sugarAlcohol = n(nutrients?.sugarAlcoholG);
+	const allulose = n(nutrients?.alluloseG);
+	const effCarbs = Math.max(0, n(macros.carbsG) - fiber - sugarAlcohol - allulose);
+	const expected =
+		4 * n(macros.proteinG) +
+		9 * n(macros.fatG) +
+		4 * effCarbs +
+		2 * fiber +
+		2.4 * sugarAlcohol +
+		7 * n(nutrients?.alcoholG);
+	const stated = n(macros.calories);
+	const max = Math.max(stated, expected);
+	if (max <= 40 || Math.abs(expected - stated) / max <= 0.3) return null;
+	return `Label math check: ${Math.round(stated)} kcal stated vs ~${Math.round(expected)} kcal from macros — double-check serving size or macros.`;
 }
 
 // Validate + strip an arbitrary object down to known nutrient keys with finite-number values.

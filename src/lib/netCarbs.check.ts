@@ -146,6 +146,14 @@ close(fiberAdjustment(5, 'full'), 5);
 	close(r.bolusableCarbsG, 4);
 }
 
+// Allulose on nutrients survives the per-serving wrapper (fully subtracted).
+{
+	const food = { carbsG: 20, nutrients: { fiberG: 0, alluloseG: 8 } };
+	const r = bolusableCarbsPerServing(food, { fiberMode: 'full' });
+	close(r.bolusableCarbsG, 12);
+	assert.equal(r.lowConfidence, false);
+}
+
 // Logged-entry helper (simple food): scales per-serving fiber by servings, derives
 // from snapshot total. 2nd arg is the food object (nutrients live on food.nutrients).
 {
@@ -164,6 +172,15 @@ close(fiberAdjustment(5, 'full'), 5);
 	// Never exceeds the snapshot total (fiber can't push it up).
 	const r = bolusableForLoggedEntry(10, { nutrients: { fiberG: 0 } }, 1, { fiberMode: 'full' });
 	close(r.bolusableCarbsG, 10);
+	assert.equal(r.lowConfidence, false);
+}
+{
+	// Allulose scales with servings in the logged-entry helper: 3 servings, snapshot
+	// total 60, 8g allulose/serving → 60 − 24 = 36.
+	const r = bolusableForLoggedEntry(60, { nutrients: { fiberG: 0, alluloseG: 8 } }, 3, {
+		fiberMode: 'full'
+	});
+	close(r.bolusableCarbsG, 36);
 	assert.equal(r.lowConfidence, false);
 }
 

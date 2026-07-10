@@ -2,6 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import { describeFood } from '$lib/server/agent';
 import { createAndLogFood, FoodInputError } from '$lib/server/foods';
 import { bolusableCarbsPerServing } from '$lib/netCarbs';
+import { macroSanityNote } from '$lib/nutrients';
 import { getFiberMode } from '$lib/server/prefs';
 
 // POST /api/describe  { image?: dataURL|base64, mediaType?, text? }
@@ -42,6 +43,8 @@ export async function POST({ request }) {
 				fatG: food.fatG,
 				bolusableCarbsG: b.bolusableCarbsG,
 				bolusableLowConfidence: b.lowConfidence,
+				// Atwater warning (never a rejection) — per-serving label math cross-check.
+				macroCheck: macroSanityNote(food, food.nutrients),
 				source: described.source
 			}
 		});

@@ -4,6 +4,7 @@ import { authEnabled, sessionValid, SESSION_COOKIE } from '$lib/server/session';
 import { dexcomEnabled, syncGlucose } from '$lib/server/dexcom';
 import { tandemEnabled, syncInsulin } from '$lib/server/tandem';
 import { googleHealthEnabled, syncHealth } from '$lib/server/fitbit';
+import { recordSync, syncDetail } from '$lib/server/syncStatus';
 
 // One-shot backfill across every connected source. Each source's sync already
 // takes a day window; this just fans out to all of them so you don't curl three
@@ -32,15 +33,23 @@ export async function POST({ request, cookies }) {
 	}
 
 	const results: Record<string, unknown> = {};
-	const run = async (name: string, enabled: boolean, fn: (d: number) => Promise<unknown>) => {
+	const run = async (
+		name: 'dexcom' | 'tandem' | 'fitbit',
+		enabled: boolean,
+		fn: (d: number) => Promise<Record<string, unknown>>
+	) => {
 		if (!enabled) {
-			results[name] = { skipped: 'not configured' };
+			results[name] = { skipped: 'not configured' }; // never attempted → no status row
 			return;
 		}
 		try {
-			results[name] = await fn(days);
+			const r = await fn(days);
+			results[name] = r;
+			await recordSync(name, true, syncDetail(r));
 		} catch (e) {
-			results[name] = { error: e instanceof Error ? e.message : 'sync failed' };
+			const msg = e instanceof Error ? e.message : 'sync failed';
+			results[name] = { error: msg };
+			await recordSync(name, false, msg);
 		}
 	};
 
