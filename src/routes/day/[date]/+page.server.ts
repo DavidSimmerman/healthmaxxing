@@ -11,7 +11,7 @@ import {
 	insulinEvents,
 	pumpGlucose
 } from '$lib/server/db/schema';
-import { deficitDays } from '$lib/server/deficit';
+import { correctedDeficitDays } from '$lib/server/energyBreakdown';
 import { fillBmrGaps } from '$lib/server/projections';
 import { APP_TZ, todayLabel } from '$lib/server/day';
 import { addDays } from '$lib/energy';
@@ -45,7 +45,7 @@ export async function load({ params }) {
 	const [[day], entries, [weighIn], workoutRows, metrics, dexcomGlucose, insulin, pumpGlucoseRows] =
 		await Promise.all([
 			// Energy ledger for the single day, with interpolated BMR filled in.
-			(async () => fillBmrGaps(await deficitDays(date, date)))(),
+			(async () => fillBmrGaps(await correctedDeficitDays(date, date)))(),
 			// Everything eaten that day, oldest first.
 			db
 				.select({

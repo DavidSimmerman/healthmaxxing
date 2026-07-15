@@ -1,8 +1,6 @@
-import { eq } from 'drizzle-orm';
-import { db } from '$lib/server/db';
-import { settings } from '$lib/server/db/schema';
 import { deficitDays } from '$lib/server/deficit';
 import { fillBmrGaps } from '$lib/server/projections';
+import { resolveCorrection } from '$lib/server/energyBreakdown';
 import { todayLabel } from '$lib/server/day';
 
 const RANGES = { d: 1, w: 7, m: 30, '3m': 91 } as const;
@@ -16,17 +14,18 @@ export async function load({ url }) {
 	const from = new Date(`${to}T12:00:00Z`);
 	from.setUTCDate(from.getUTCDate() - (lengthDays - 1));
 
-	const [days, [s]] = await Promise.all([
-		deficitDays(from.toISOString().slice(0, 10), to).then(fillBmrGaps),
-		db.select().from(settings).where(eq(settings.id, 1))
-	]);
+	// Resolve the correction once; apply it to the range and reuse its live target.
+	const ctx = await resolveCorrection();
+	const days = fillBmrGaps(
+		await deficitDays(from.toISOString().slice(0, 10), to, { correction: ctx.correction })
+	);
 	return {
 		days,
 		range: RANGES[range] ? range : 'w',
 		today: to,
-		// Today's deficit assumes you eat up to budget (matches the widget), so an
-		// incomplete day doesn't show an inflated number.
-		calorieTarget: s?.calorieTarget ?? 2100,
+		// Dynamic daily target (calibrated maintenance ± the mode's leanness-scaled
+		// delta, live). Falls back to a flat 2100 only before there's enough data.
+		calorieTarget: ctx.targetKcal ?? 2100,
 		includeToday: url.searchParams.get('today') === '1'
 	};
 }
