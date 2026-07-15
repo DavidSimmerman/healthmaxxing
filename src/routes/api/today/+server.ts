@@ -77,7 +77,9 @@ export async function GET({ request }) {
 	return json({
 		date: today,
 		entries,
-		targets: s ?? null,
+		// Surface the dynamic calorie target as calorieTarget so the widget's ring
+		// matches the app (not the fixed settings value).
+		targets: s ? { ...s, calorieTarget: calTarget } : null,
 		burnedKcal,
 		deficit
 	});
