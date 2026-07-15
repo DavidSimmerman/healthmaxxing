@@ -16,7 +16,8 @@ import {
 	activeCorrectionFactor,
 	wakingFractionRemaining,
 	activityBuckets,
-	liveTarget
+	liveTarget,
+	isTrustedWorkoutSource
 } from './energy.ts';
 
 // linearRegression recovers a known line y = 2x + 1
@@ -134,5 +135,12 @@ assert.equal(
 	}),
 	2300
 );
+
+// Trusted workout source: dedicated third-party trackers yes, Apple's own no,
+// null (pre-capture) yes (no regression).
+assert.equal(isTrustedWorkoutSource(null), true);
+assert.equal(isTrustedWorkoutSource('com.kingsmith.walkingpad'), true);
+assert.equal(isTrustedWorkoutSource('com.apple.health'), false);
+assert.equal(isTrustedWorkoutSource('com.apple.workout.build'), false);
 
 console.log('energy.selfcheck: all assertions passed ✓');

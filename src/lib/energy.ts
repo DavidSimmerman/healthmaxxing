@@ -209,3 +209,13 @@ export function liveTarget(opts: {
 	const projectedActive = opts.actualActiveKcal + opts.levelActiveKcal * opts.fractionRemaining;
 	return opts.maintenanceKcal + (projectedActive - opts.avgActiveKcal) + opts.modeDeltaKcal;
 }
+
+// Which workout calories to trust at full value (not haircut): dedicated
+// third-party trackers like the walking pad. Apple's OWN workout estimates (Watch)
+// are treated like passive active energy and get the haircut, same as the rest of
+// Apple's numbers. Null source (data synced before source capture) stays trusted
+// to avoid a regression. ponytail: vendor-prefix heuristic — pin the pad's exact
+// bundle id here once it shows up in real data.
+export function isTrustedWorkoutSource(source: string | null): boolean {
+	return source == null || !source.toLowerCase().includes('apple');
+}

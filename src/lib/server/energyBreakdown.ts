@@ -12,13 +12,20 @@ import {
 	wakingFractionRemaining,
 	liveTarget,
 	modeDeficit,
+	isTrustedWorkoutSource,
 	type GoalMode
 } from '$lib/energy';
 
 const WINDOW_DAYS = 30;
 const MODES: GoalMode[] = ['cut', 'recomp', 'lean_bulk'];
 
-export type WorkoutLite = { name: string; kcal: number | null; time: string; startedAt: string };
+export type WorkoutLite = {
+	name: string;
+	kcal: number | null;
+	time: string;
+	startedAt: string;
+	trusted: boolean;
+};
 
 const mean = (xs: number[]): number | null =>
 	xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
@@ -84,6 +91,7 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 				date: sql<string>`${woDate}::text`,
 				name: workouts.name,
 				kcal: workouts.kcal,
+				source: workouts.source,
 				time: sql<string>`to_char((${workouts.startedAt} at time zone 'UTC' at time zone ${APP_TZ}), 'FMHH12:MI AM')`,
 				startedAt: sql<string>`${workouts.startedAt}::text`
 			})
@@ -98,9 +106,10 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 	// synced (HealthSync.swift). Null kcal counts as 0 trusted.
 	const woByDate = new Map<string, { kcal: number; list: WorkoutLite[] }>();
 	for (const w of woRows) {
+		const trusted = isTrustedWorkoutSource(w.source);
 		const e = woByDate.get(w.date) ?? { kcal: 0, list: [] };
-		e.kcal += w.kcal ?? 0;
-		e.list.push({ name: w.name, kcal: w.kcal, time: w.time, startedAt: w.startedAt });
+		e.kcal += trusted ? (w.kcal ?? 0) : 0; // only trusted kcal count toward the carve-out
+		e.list.push({ name: w.name, kcal: w.kcal, time: w.time, startedAt: w.startedAt, trusted });
 		woByDate.set(w.date, e);
 	}
 	const trustedByDate = new Map([...woByDate].map(([d, v]) => [d, v.kcal]));
@@ -216,11 +225,12 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 async function trustedWorkoutsByDate(from: string, to: string): Promise<Map<string, number>> {
 	const woDate = sql<string>`(${workouts.startedAt} at time zone 'UTC' at time zone ${APP_TZ})::date`;
 	const rows = await db
-		.select({ date: sql<string>`${woDate}::text`, kcal: workouts.kcal })
+		.select({ date: sql<string>`${woDate}::text`, kcal: workouts.kcal, source: workouts.source })
 		.from(workouts)
 		.where(sql`${woDate} between ${from}::date and ${to}::date`);
 	const m = new Map<string, number>();
-	for (const r of rows) m.set(r.date, (m.get(r.date) ?? 0) + (r.kcal ?? 0));
+	for (const r of rows)
+		if (isTrustedWorkoutSource(r.source)) m.set(r.date, (m.get(r.date) ?? 0) + (r.kcal ?? 0));
 	return m;
 }
 

@@ -303,6 +303,7 @@ export const workouts = pgTable(
 		avgHr: real('avg_hr'),
 		maxHr: real('max_hr'),
 		distanceKm: real('distance_km'), // walking/running distance, if recorded (drives the running-miles goal)
+		source: text('source'), // HK source bundle id — dedicated trackers (walking pad) are trusted; Apple's own estimates get the haircut
 		createdAt: timestamp('created_at').notNull().defaultNow()
 	},
 	(t) => [index('workouts_started_at_idx').on(t.startedAt)]
