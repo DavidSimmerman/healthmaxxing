@@ -43,6 +43,7 @@ export type EnergyContext = {
 	weightKg: number | null;
 	modeDeltaKcal: number | null;
 	targetKcal: number | null; // = correction.todayTargetKcal
+	fixedCalorieTarget: number; // the user's configured settings.calorieTarget (fallback)
 	// Active averages (corrected) + today's live inputs
 	avgRawActive: number | null;
 	avgCorrectedActive: number | null;
@@ -198,6 +199,7 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 		buckets,
 		activityLevel,
 		fractionRemaining,
+		fixedCalorieTarget: s?.calorieTarget ?? 2100,
 		windowLedger,
 		woByDate
 	};
@@ -208,15 +210,34 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 // (e.g. goals scoring) should resolveCorrection() ONCE and thread `correction`.
 // ponytail: recomputes the correction per call — fine for a solo app; hoist if a
 // hot path calls it many times.
+// Trusted (dedicated workout) kcal per local day over [from, to] — so a requested
+// historical range gets its OWN workout carve-out, not just the 30-day calibration
+// window's (older days would otherwise haircut real workout burn as passive).
+async function trustedWorkoutsByDate(from: string, to: string): Promise<Map<string, number>> {
+	const woDate = sql<string>`(${workouts.startedAt} at time zone 'UTC' at time zone ${APP_TZ})::date`;
+	const rows = await db
+		.select({ date: sql<string>`${woDate}::text`, kcal: workouts.kcal })
+		.from(workouts)
+		.where(sql`${woDate} between ${from}::date and ${to}::date`);
+	const m = new Map<string, number>();
+	for (const r of rows) m.set(r.date, (m.get(r.date) ?? 0) + (r.kcal ?? 0));
+	return m;
+}
+
 export async function correctedDeficitDays(
 	fromDate: string,
 	toDate: string,
 	opts?: { settingsRow?: SettingsRow | null }
 ): Promise<DayEnergy[]> {
-	const ctx = await resolveCorrection(opts?.settingsRow);
+	// Factor + dynamic target come from the calibration window, but trusted-workout
+	// kcal must cover the ACTUAL requested range (which may predate that window).
+	const [ctx, trustedByDate] = await Promise.all([
+		resolveCorrection(opts?.settingsRow),
+		trustedWorkoutsByDate(fromDate, toDate)
+	]);
 	return deficitDays(fromDate, toDate, {
 		settingsRow: opts?.settingsRow,
-		correction: ctx.correction
+		correction: { ...ctx.correction, trustedByDate }
 	});
 }
 
