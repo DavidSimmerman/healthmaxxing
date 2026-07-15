@@ -162,10 +162,13 @@ export async function load() {
 		// Dynamic daily calorie target (live) for the calorie ring — replaces the fixed
 		// settings.calorieTarget. Falls back to the fixed value until there's data.
 		calorieTarget: ctx.targetKcal ?? settingsRow?.calorieTarget ?? 2100,
-		// Active-calorie ring (replaces the raw deficit): fill = deficit→goal, centre =
-		// active kcal still to burn today to hit the deficit.
+		// Active-calorie ring for CUT mode (fill = deficit→goal, centre = active kcal
+		// still to burn); recomp/lean-bulk have no deficit to chase, so they fall back
+		// to the plain deficit ring in the svelte.
+		mode: ctx.mode,
 		deficitGoal,
 		activeToGo,
+		deficitTarget: settingsRow?.deficitTargetKcal ?? 500,
 		goalScore
 	};
 }

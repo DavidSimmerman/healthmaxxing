@@ -468,7 +468,7 @@ export async function energyInsights({
 	const ledger = fillBmrGaps(await deficitDays(from, today)).filter((d) => d.date !== today);
 	const isVac = await loadIsVacation();
 	const logged = ledger.filter((d) => d.intakeKcal > 0 && !isVac(d.date));
-	const withBurn = ledger.filter((d) => d.burnedKcal != null);
+	const withBurn = ledger.filter((d) => d.burnedKcal != null && !isVac(d.date));
 	const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
 
 	const avgIntakeKcal = mean(logged.map((d) => d.intakeKcal));
@@ -479,7 +479,10 @@ export async function energyInsights({
 	// whole window, so they're only trustworthy with enough logged-day coverage —
 	// otherwise one logged day would be treated as if it happened every day.
 	const spanDays = body.series.length ? daysBetween(body.series[0].date, today) + 1 : windowDays;
-	const effWindow = Math.min(windowDays, Math.max(1, spanDays));
+	// Coverage denominator = LOGGABLE (non-vacation) days in the effective window, so a
+	// long trip can't fail the gate despite full logging on the days that count.
+	const effStart = addDays(today, -Math.min(windowDays, spanDays));
+	const effWindow = Math.max(1, ledger.filter((d) => d.date >= effStart && !isVac(d.date)).length);
 	const enoughIntake = logged.length >= 7 && logged.length / effWindow >= 0.5;
 
 	const startWeight = body.weight?.current ?? null; // trend value today (smoothed)
