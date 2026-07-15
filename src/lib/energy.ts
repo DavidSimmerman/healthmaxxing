@@ -122,3 +122,53 @@ export function etaDaysToGoal(current: number, goal: number, ratePerDay: number)
 export function bodyFatPctFromLean(weightKg: number, leanMassKg: number): number {
 	return weightKg > 0 ? ((weightKg - leanMassKg) / weightKg) * 100 : 0;
 }
+
+const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
+
+// ── Dynamic deficit goal ─────────────────────────────────────────────────────
+export type GoalMode = 'cut' | 'recomp' | 'lean_bulk';
+
+// Target rate of body-weight change per week as a % of bodyweight, scaled by how
+// lean you are: cut harder with fat to spare, ease as you approach single digits
+// to protect muscle. Signed — negative = losing. Anchored so ~18% bf → −0.66%/wk
+// (≈1 lb/wk), ramping to −1.0% at 25% and easing to a −0.3% floor by ~13%.
+export function targetRatePctPerWeek(mode: GoalMode, bodyFatPct: number): number {
+	if (mode === 'recomp') return 0;
+	if (mode === 'lean_bulk') return 0.25; // ponytail: flat gentle surplus; taper vs a bf ceiling only if it matters
+	return -clamp(0.66 + (bodyFatPct - 18) * 0.07, 0.3, 1.0); // cut
+}
+
+// Signed daily energy delta vs maintenance (kcal). Negative = deficit (eat less
+// than you burn), positive = surplus. target = maintenance + modeDeficit(...).
+export function modeDeficit(mode: GoalMode, bodyFatPct: number, weightKg: number): number {
+	const kgPerWeek = (targetRatePctPerWeek(mode, bodyFatPct) / 100) * weightKg;
+	return (kgPerWeek * KCAL_PER_KG) / 7;
+}
+
+// ── Active-energy correction ─────────────────────────────────────────────────
+// HealthKit over-estimates PASSIVE active energy; dedicated workout tracking (the
+// walking pad) is trusted. So trusted kcal ride at 1.0 and only the passive
+// remainder gets the haircut. `dailyActiveKcal` already includes the workout kcal.
+export function correctActive(
+	dailyActiveKcal: number,
+	trustedKcal: number,
+	factor: number
+): number {
+	const passive = Math.max(0, dailyActiveKcal - trustedKcal);
+	return trustedKcal + factor * passive;
+}
+
+// Back the passive haircut out of calibration: `realActiveAvg` is the true active
+// burn implied by the weight trend (calibratedMaintenance − BMR − TEF); solve for
+// the factor that scales the window's average PASSIVE active to reality with
+// trusted held fixed. Clamped; returns 1 (no correction) when there's too little
+// passive signal to learn from (e.g. every active calorie came from a workout).
+export function activeCorrectionFactor(
+	realActiveAvg: number,
+	rawActiveAvg: number,
+	trustedAvg: number
+): number {
+	const passiveAvg = rawActiveAvg - trustedAvg;
+	if (!(passiveAvg > 50)) return 1;
+	return clamp((realActiveAvg - trustedAvg) / passiveAvg, 0.4, 1.2);
+}

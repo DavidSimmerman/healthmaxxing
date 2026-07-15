@@ -169,6 +169,13 @@
       "when": 1783642219386,
       "tag": "0023_safe_puck",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1784140795347,
+      "tag": "0024_illegal_thunderbolt_ross",
+      "breakpoints": true
     }
   ]
 }
