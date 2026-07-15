@@ -3,6 +3,7 @@ import { db } from '$lib/server/db';
 import { bodyComp, settings } from '$lib/server/db/schema';
 import { APP_TZ, todayLabel } from '$lib/server/day';
 import { deficitDays, type DayEnergy } from '$lib/server/deficit';
+import { loadIsVacation } from '$lib/server/vacations';
 import {
 	linearRegression,
 	interpolateGaps,
@@ -149,7 +150,10 @@ export async function bodyInsights({
 	windowDays = Math.min(Math.max(1, Math.floor(Number(windowDays)) || 90), 1825);
 
 	const today = todayLabel();
-	const all = await weighInsThrough(today);
+	// Vacation days are dropped from the learning inputs: trip weigh-ins are
+	// water-noisy and trip food is guesswork, so both skew the trend + calibration.
+	const isVac = await loadIsVacation();
+	const all = (await weighInsThrough(today)).filter((w) => !isVac(w.date));
 
 	// Window to the trailing `windowDays` of weigh-ins; if that leaves <2 points,
 	// fall back to the full history so a sparse logger still gets a trend.
@@ -174,7 +178,7 @@ export async function bodyInsights({
 	// Exclude today's deficit — you're not done eating, so it's an inflated
 	// partial. Today's weigh-in still counts (it's in `series` above).
 	const counted = ledger.filter(
-		(d) => d.deficitKcal != null && d.intakeKcal > 0 && d.date !== today
+		(d) => d.deficitKcal != null && d.intakeKcal > 0 && d.date !== today && !isVac(d.date)
 	);
 	const deficitImplied = counted.length
 		? (() => {
@@ -462,7 +466,8 @@ export async function energyInsights({
 	// Drop today: its partial intake/deficit would skew intake, TDEE and pace.
 	// The weigh-in trend (body.series) keeps today's weigh-in.
 	const ledger = fillBmrGaps(await deficitDays(from, today)).filter((d) => d.date !== today);
-	const logged = ledger.filter((d) => d.intakeKcal > 0);
+	const isVac = await loadIsVacation();
+	const logged = ledger.filter((d) => d.intakeKcal > 0 && !isVac(d.date));
 	const withBurn = ledger.filter((d) => d.burnedKcal != null);
 	const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
 
