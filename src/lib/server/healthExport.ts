@@ -3,7 +3,7 @@ import { db } from '$lib/server/db';
 import { sleepStages, settings } from '$lib/server/db/schema';
 import { nutritionReport, logEntries } from '$lib/server/nutrition';
 import { healthReview, type DayReview } from '$lib/server/healthMetrics';
-import { deficitDays } from '$lib/server/deficit';
+import { correctedDeficitDays } from '$lib/server/energyBreakdown';
 import { fillBmrGaps, bodyInsights } from '$lib/server/projections';
 import { todayLabel } from '$lib/server/day';
 
@@ -98,7 +98,7 @@ export const EXPORT_CATEGORIES: Record<string, (from: string, to: string) => Pro
 					asOf: to,
 					note: 'Body composition is a live "as of today" trend and is not back-dated; it is omitted for historical export windows. Request a current-period export, or use get_body_trends.'
 				},
-	energy: async (from, to) => fillBmrGaps(await deficitDays(from, to))
+	energy: async (from, to) => fillBmrGaps(await correctedDeficitDays(from, to))
 };
 
 export type ExportCategory = keyof typeof EXPORT_CATEGORIES;

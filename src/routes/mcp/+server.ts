@@ -22,7 +22,7 @@ import {
 	type LogEntryPatch,
 	type PrepFoodInput
 } from '$lib/server/foods';
-import { deficitDays } from '$lib/server/deficit';
+import { correctedDeficitDays } from '$lib/server/energyBreakdown';
 import { fillBmrGaps, bodyInsights } from '$lib/server/projections';
 import { todayLabel, APP_TZ } from '$lib/server/day';
 import { addDays } from '$lib/energy';
@@ -1117,7 +1117,7 @@ async function callGetEnergyLedger(id: Id, args: Record<string, unknown>) {
 		if (days > 370) days = 370;
 		const from = typeof args.from === 'string' ? args.from : addDays(to, -(days - 1));
 
-		const ledger = fillBmrGaps(await deficitDays(from, to));
+		const ledger = fillBmrGaps(await correctedDeficitDays(from, to));
 		const counted = ledger.filter((d) => d.deficitKcal != null && d.intakeKcal > 0);
 		const n = counted.length;
 		const avg = (sum: number) => (n ? Math.round(sum / n) : null);

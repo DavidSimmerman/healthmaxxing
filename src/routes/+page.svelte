@@ -23,7 +23,7 @@
 	// Planned (scheduled-but-unconfirmed) meals fold into the totals so the calorie
 	// ring / protein bar "remaining" reads as what's left for snacks after dinner.
 	let totals = $derived(sumMacros([...data.todayEntries, ...data.plannedMeals]));
-	let goalPct = $derived(pct(totals.calories, data.settings.calorieTarget));
+	let goalPct = $derived(pct(totals.calories, data.calorieTarget));
 	let editingEntry = $state<(typeof data.todayEntries)[number] | null>(null);
 
 	// Default a new schedule to the next round hour (HH:00, local) so the time field
@@ -183,7 +183,7 @@
 			/>
 			<MacroRing
 				value={totals.calories}
-				target={data.settings.calorieTarget}
+				target={data.calorieTarget}
 				size={146}
 				{showRemaining}
 				ontoggle={toggleMode}

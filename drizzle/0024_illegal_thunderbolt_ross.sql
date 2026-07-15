@@ -1,0 +1,1 @@
+ALTER TABLE "settings" ADD COLUMN "goal_mode" text DEFAULT 'cut' NOT NULL;

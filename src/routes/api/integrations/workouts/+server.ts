@@ -17,6 +17,7 @@ type WorkoutIn = {
 	avgHr?: number | null;
 	maxHr?: number | null;
 	distanceKm?: number | null;
+	source?: string | null; // HK source bundle id (Apple Watch vs dedicated tracker)
 };
 
 // Mirrors the chunk helper in src/lib/server/tandem.ts.
@@ -53,7 +54,8 @@ function parseWorkout(raw: unknown): WorkoutIn {
 		kcal: num(r.kcal, 0, 20_000, 'kcal'),
 		avgHr: num(r.avgHr, 20, 250, 'avgHr'),
 		maxHr: num(r.maxHr, 20, 260, 'maxHr'),
-		distanceKm: num(r.distanceKm, 0, 1000, 'distanceKm')
+		distanceKm: num(r.distanceKm, 0, 1000, 'distanceKm'),
+		source: typeof r.source === 'string' ? r.source : null
 	};
 }
 
@@ -92,7 +94,8 @@ export async function POST({ request }) {
 					kcal: w.kcal,
 					avgHr: w.avgHr,
 					maxHr: w.maxHr,
-					distanceKm: w.distanceKm
+					distanceKm: w.distanceKm,
+					source: w.source
 				}
 			])
 		).values()
@@ -112,7 +115,8 @@ export async function POST({ request }) {
 					kcal: sql`excluded.kcal`,
 					avgHr: sql`excluded.avg_hr`,
 					maxHr: sql`excluded.max_hr`,
-					distanceKm: sql`excluded.distance_km`
+					distanceKm: sql`excluded.distance_km`,
+					source: sql`excluded.source`
 				}
 			});
 	}

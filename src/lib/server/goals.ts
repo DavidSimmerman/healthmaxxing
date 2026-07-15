@@ -7,7 +7,8 @@ import {
 	pumpGlucose,
 	workouts
 } from '$lib/server/db/schema';
-import { deficitDays } from '$lib/server/deficit';
+import { deficitDays, type DayCorrection } from '$lib/server/deficit';
+import { resolveCorrection } from '$lib/server/energyBreakdown';
 import { APP_TZ, todayLabel } from '$lib/server/day';
 import { addDays } from '$lib/energy';
 import { weekToDate } from '$lib/period';
@@ -33,9 +34,13 @@ const KM_TO_MI = 0.621371;
 // Every metric the scoring engine needs, one row per local (APP_TZ) day in
 // [from, to]. Missing data stays null so the engine can exclude it (a day with no
 // food logged isn't a "0g protein" day — it's unknown).
-export async function dayMetricsForRange(from: string, to: string): Promise<DayMetrics[]> {
+export async function dayMetricsForRange(
+	from: string,
+	to: string,
+	correction?: DayCorrection
+): Promise<DayMetrics[]> {
 	const [energy, steps, metricRows, dexcomGlucose, pumpGlucoseRows] = await Promise.all([
-		deficitDays(from, to),
+		deficitDays(from, to, { correction }),
 		db
 			.select({ date: activityDays.date, steps: activityDays.steps })
 			.from(activityDays)
@@ -203,10 +208,11 @@ async function periodSummary(
 	periodDays: number,
 	specsFor: (date: string) => SpecMap,
 	// Caller-prefetched day metrics for [from, to], to avoid a duplicate range query.
-	prefetched?: DayMetrics[] | Promise<DayMetrics[]>
+	prefetched?: DayMetrics[] | Promise<DayMetrics[]>,
+	correction?: DayCorrection
 ): Promise<PeriodSummary> {
 	const today = todayLabel();
-	const completed = (await (prefetched ?? dayMetricsForRange(from, to))).filter(
+	const completed = (await (prefetched ?? dayMetricsForRange(from, to, correction))).filter(
 		(d) => d.date < today
 	);
 	const extraTo = to < today ? to : today;
@@ -250,14 +256,19 @@ async function periodSummary(
 export async function buildGoalsView(anchor: string): Promise<GoalsView> {
 	// Per-day targets: normal, or relaxed for days inside a trip window.
 	const specsFor = await loadSpecsFor();
+	// One correction (active haircut + dynamic target) for every ledger read below,
+	// so scoring uses the same corrected deficits the rest of the app now shows.
+	const correction = (await resolveCorrection()).correction;
 
 	// Bank/debt entering `anchor`: the running surplus/shortfall over this week's
 	// days BEFORE it. Sunday (week start) → no prior days → no carry-over.
 	const balWeekStart = weekToDate(anchor).from;
 	const priorDays =
-		anchor > balWeekStart ? await dayMetricsForRange(balWeekStart, addDays(anchor, -1)) : [];
+		anchor > balWeekStart
+			? await dayMetricsForRange(balWeekStart, addDays(anchor, -1), correction)
+			: [];
 	const day = scoreDay(
-		(await dayMetricsForRange(anchor, anchor))[0],
+		(await dayMetricsForRange(anchor, anchor, correction))[0],
 		weekBalances(priorDays, specsFor),
 		specsFor(anchor)
 	);
@@ -267,7 +278,7 @@ export async function buildGoalsView(anchor: string): Promise<GoalsView> {
 	// 20-iteration cap (~3 years) is just an infinite-loop backstop.
 	let streak = 0;
 	for (let end = anchor, i = 0; i < 20; i++) {
-		const chunk = (await dayMetricsForRange(addDays(end, -59), end)).map((d) =>
+		const chunk = (await dayMetricsForRange(addDays(end, -59), end, correction)).map((d) =>
 			scoreDay(d, {}, specsFor(d.date))
 		);
 		const s = currentStreak(chunk);
@@ -284,10 +295,17 @@ export async function buildGoalsView(anchor: string): Promise<GoalsView> {
 	// Fetch the week's day metrics ONCE (dayMetricsForRange is an async fn → a real
 	// promise, safe to await both here and inside periodSummary) and hand them to
 	// the week rollup; they're also returned for the /goals loader to reuse.
-	const weekMetricsP = dayMetricsForRange(weekStart, weekEnd);
+	const weekMetricsP = dayMetricsForRange(weekStart, weekEnd, correction);
 	const [week, month, weekDayMetrics] = await Promise.all([
-		periodSummary(weekStart, weekEnd, 7, specsFor, weekMetricsP),
-		periodSummary(`${ym}-01`, `${ym}-${String(lastDom).padStart(2, '0')}`, lastDom, specsFor),
+		periodSummary(weekStart, weekEnd, 7, specsFor, weekMetricsP, correction),
+		periodSummary(
+			`${ym}-01`,
+			`${ym}-${String(lastDom).padStart(2, '0')}`,
+			lastDom,
+			specsFor,
+			undefined,
+			correction
+		),
 		weekMetricsP
 	]);
 

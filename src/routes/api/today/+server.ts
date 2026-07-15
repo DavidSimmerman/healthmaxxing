@@ -5,6 +5,7 @@ import { asc, eq } from 'drizzle-orm';
 import { requireApiToken } from '$lib/server/auth';
 import { loggedToday, todayLabel } from '$lib/server/day';
 import { deficitDays } from '$lib/server/deficit';
+import { resolveCorrection } from '$lib/server/energyBreakdown';
 import { fillBmrGaps } from '$lib/server/projections';
 import { bolusableForLoggedEntry } from '$lib/netCarbs';
 import { fiberModeFrom } from '$lib/server/prefs';
@@ -22,7 +23,9 @@ export async function GET({ request }) {
 		.where(eq(settings.id, 1))
 		.then((rows) => rows[0] ?? null);
 
-	const [rawEntries, s, energyDays] = await Promise.all([
+	const ctxP = settingsP.then((row) => resolveCorrection(row));
+
+	const [rawEntries, s, ctx, energyDays] = await Promise.all([
 		db
 			.select({
 				id: dailyLog.id,
@@ -42,7 +45,12 @@ export async function GET({ request }) {
 			.where(loggedToday())
 			.orderBy(asc(dailyLog.loggedAt)),
 		settingsP,
-		settingsP.then((row) => deficitDays(today, today, { settingsRow: row }))
+		ctxP,
+		ctxP.then((c) =>
+			settingsP.then((row) =>
+				deficitDays(today, today, { settingsRow: row, correction: c.correction })
+			)
+		)
 	]);
 
 	const fiberMode = fiberModeFrom(s);
@@ -63,13 +71,15 @@ export async function GET({ request }) {
 	// to it (so the number doesn't look rosy mid-morning); if over, use actual
 	// intake. Computed here so the widget and the app's drift check agree.
 	const calSum = entries.reduce((sum, e) => sum + e.calories, 0);
-	const calTarget = s?.calorieTarget ?? 2100;
+	const calTarget = ctx.targetKcal ?? s?.calorieTarget ?? 2100;
 	const deficit = burnedKcal != null ? Math.round(burnedKcal - Math.max(calSum, calTarget)) : null;
 
 	return json({
 		date: today,
 		entries,
-		targets: s ?? null,
+		// Surface the dynamic calorie target as calorieTarget so the widget's ring
+		// matches the app (not the fixed settings value).
+		targets: s ? { ...s, calorieTarget: calTarget } : null,
 		burnedKcal,
 		deficit
 	});

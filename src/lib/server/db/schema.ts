@@ -153,6 +153,16 @@ export const settings = pgTable('settings', {
 	goalWeightKg: real('goal_weight_kg'),
 	goalBodyFatPct: real('goal_body_fat_pct'), // 0–100
 
+	// Dynamic calorie goal: the daily target is calibrated maintenance ± a
+	// leanness-scaled delta instead of a fixed number. 'cut' = deficit, 'recomp' =
+	// hold at maintenance, 'lean_bulk' = small surplus.
+	goalMode: text('goal_mode').notNull().default('cut'), // 'cut' | 'recomp' | 'lean_bulk'
+
+	// Live-target activity override for a single day: 0–4 (Rest…Very active). Applies
+	// only when activityLevelDate === today; null / stale date = auto (your average).
+	activityLevel: integer('activity_level'),
+	activityLevelDate: text('activity_level_date'), // 'YYYY-MM-DD'
+
 	// Bolusable (net glycemic) carb derivation. CLINICAL CALIBRATION — review with a
 	// care team and validate against CGM traces; this is not medical fact. 'full' =
 	// subtract all fiber (David's standing rule); 'half_over_5' = subtract half of
@@ -293,6 +303,7 @@ export const workouts = pgTable(
 		avgHr: real('avg_hr'),
 		maxHr: real('max_hr'),
 		distanceKm: real('distance_km'), // walking/running distance, if recorded (drives the running-miles goal)
+		source: text('source'), // HK source bundle id — dedicated trackers (walking pad) are trusted; Apple's own estimates get the haircut
 		createdAt: timestamp('created_at').notNull().defaultNow()
 	},
 	(t) => [index('workouts_started_at_idx').on(t.startedAt)]

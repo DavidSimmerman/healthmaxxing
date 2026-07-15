@@ -169,6 +169,27 @@
       "when": 1783642219386,
       "tag": "0023_safe_puck",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1784140795347,
+      "tag": "0024_illegal_thunderbolt_ross",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1784144529036,
+      "tag": "0025_loving_katie_power",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1784149047243,
+      "tag": "0026_flat_dagger",
+      "breakpoints": true
     }
   ]
 }

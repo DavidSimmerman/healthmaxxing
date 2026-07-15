@@ -5,6 +5,7 @@ import { loggedToday, todayLabel } from '$lib/server/day';
 import { bolusableForLoggedEntry } from '$lib/netCarbs';
 import { fiberModeFrom } from '$lib/server/prefs';
 import { deficitDays } from '$lib/server/deficit';
+import { resolveCorrection } from '$lib/server/energyBreakdown';
 import { dayMetricsForRange } from '$lib/server/goals';
 import { scoreDay, weekBalances } from '$lib/score';
 import { loadSpecsFor } from '$lib/server/vacations';
@@ -23,61 +24,78 @@ export async function load() {
 		.where(eq(settings.id, 1))
 		.then((rows) => rows[0] ?? null);
 
+	// One correction/target context per load, reused for the corrected deficit, the
+	// dynamic calorie target, and the bank-adjusted goal score.
+	const ctxP = settingsP.then((s) => resolveCorrection(s));
+
 	// Today's deficit (assumes you eat up to your calorie budget — see deficitDays)
 	// and today's goal score, for the two side rings on the home page. Both may be
 	// null when the inputs aren't there yet; the rings render a dash, not a zero.
 	// All of today's daily_log rows (eaten AND scheduled) in ONE query — split by
 	// `pending` below instead of filtering twice in SQL. Everything here is
 	// independent, so it all runs in parallel.
-	const [settingsRow, rawToday, quickAddItems, [todayEnergy], dayMetrics, priorDays, specsFor] =
-		await Promise.all([
-			settingsP,
-			db
-				.select({
-					id: dailyLog.id,
-					pending: dailyLog.pending,
-					servings: dailyLog.servings,
-					amount: dailyLog.amount,
-					unit: dailyLog.unit,
-					loggedAt: dailyLog.loggedAt,
-					calories: dailyLog.calories,
-					proteinG: dailyLog.proteinG,
-					carbsG: dailyLog.carbsG,
-					fatG: dailyLog.fatG,
-					foodId: foods.id,
-					foodName: foods.name,
-					foodServingSize: foods.servingSize,
-					foodServingGrams: foods.servingGrams,
-					foodCalories: foods.calories,
-					foodProteinG: foods.proteinG,
-					foodCarbsG: foods.carbsG,
-					foodFatG: foods.fatG,
-					foodNutrients: foods.nutrients,
-					foodIngredients: foods.ingredients,
-					foodMakesServings: foods.makesServings
-				})
-				.from(dailyLog)
-				.innerJoin(foods, eq(dailyLog.foodId, foods.id))
-				.where(loggedToday())
-				.orderBy(asc(dailyLog.loggedAt)),
-			db
-				.select({
-					id: quickAdds.id,
-					foodId: foods.id,
-					name: foods.name,
-					calories: foods.calories,
-					proteinG: foods.proteinG
-				})
-				.from(quickAdds)
-				.innerJoin(foods, eq(quickAdds.foodId, foods.id))
-				.orderBy(asc(quickAdds.sortOrder)),
-			settingsP.then((s) => deficitDays(today, today, { settingsRow: s })),
-			dayMetricsForRange(today, today),
-			// Earlier days of this week, for today's bank/debt — so the home ring matches
-			// the goals page's day-detail score (both bank-adjusted) instead of trailing it.
-			today > weekStart ? dayMetricsForRange(weekStart, addDays(today, -1)) : Promise.resolve([]),
-			loadSpecsFor()
-		]);
+	const [
+		settingsRow,
+		ctx,
+		rawToday,
+		quickAddItems,
+		[todayEnergy],
+		dayMetrics,
+		priorDays,
+		specsFor
+	] = await Promise.all([
+		settingsP,
+		ctxP,
+		db
+			.select({
+				id: dailyLog.id,
+				pending: dailyLog.pending,
+				servings: dailyLog.servings,
+				amount: dailyLog.amount,
+				unit: dailyLog.unit,
+				loggedAt: dailyLog.loggedAt,
+				calories: dailyLog.calories,
+				proteinG: dailyLog.proteinG,
+				carbsG: dailyLog.carbsG,
+				fatG: dailyLog.fatG,
+				foodId: foods.id,
+				foodName: foods.name,
+				foodServingSize: foods.servingSize,
+				foodServingGrams: foods.servingGrams,
+				foodCalories: foods.calories,
+				foodProteinG: foods.proteinG,
+				foodCarbsG: foods.carbsG,
+				foodFatG: foods.fatG,
+				foodNutrients: foods.nutrients,
+				foodIngredients: foods.ingredients,
+				foodMakesServings: foods.makesServings
+			})
+			.from(dailyLog)
+			.innerJoin(foods, eq(dailyLog.foodId, foods.id))
+			.where(loggedToday())
+			.orderBy(asc(dailyLog.loggedAt)),
+		db
+			.select({
+				id: quickAdds.id,
+				foodId: foods.id,
+				name: foods.name,
+				calories: foods.calories,
+				proteinG: foods.proteinG
+			})
+			.from(quickAdds)
+			.innerJoin(foods, eq(quickAdds.foodId, foods.id))
+			.orderBy(asc(quickAdds.sortOrder)),
+		ctxP.then((c) =>
+			settingsP.then((s) => deficitDays(today, today, { settingsRow: s, correction: c.correction }))
+		),
+		ctxP.then((c) => dayMetricsForRange(today, today, c.correction)),
+		// Earlier days of this week, for today's bank/debt — so the home ring matches
+		// the goals page's day-detail score (both bank-adjusted) instead of trailing it.
+		today > weekStart
+			? ctxP.then((c) => dayMetricsForRange(weekStart, addDays(today, -1), c.correction))
+			: Promise.resolve([]),
+		loadSpecsFor()
+	]);
 
 	const fiberMode = fiberModeFrom(settingsRow);
 
@@ -131,6 +149,9 @@ export async function load() {
 		plannedMeals: plannedToday,
 		quickAddItems,
 		deficit: todayEnergy?.deficitKcal ?? null,
+		// Dynamic daily calorie target (live) for the calorie ring — replaces the fixed
+		// settings.calorieTarget. Falls back to the fixed value until there's data.
+		calorieTarget: ctx.targetKcal ?? settingsRow?.calorieTarget ?? 2100,
 		// ponytail: default 500 kcal so the ring isn't dead before a target is set;
 		// the Settings field overrides it.
 		deficitTarget: settingsRow?.deficitTargetKcal ?? 500,

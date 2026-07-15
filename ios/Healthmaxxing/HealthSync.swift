@@ -354,6 +354,9 @@ final class HealthSync {
                 "name": Self.activityName(workout.workoutActivityType),
                 "start": iso.string(from: workout.startDate),
                 "end": iso.string(from: workout.endDate),
+                // Source bundle id: dedicated trackers (walking pad) are trusted at
+                // full value server-side; Apple's own estimates get the haircut.
+                "source": workout.sourceRevision.source.bundleIdentifier,
             ]
             if let energy = workout.statistics(for: activeEnergy)?.sumQuantity()
                 ?? workout.totalEnergyBurned
