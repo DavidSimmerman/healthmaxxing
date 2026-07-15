@@ -158,6 +158,11 @@ export const settings = pgTable('settings', {
 	// hold at maintenance, 'lean_bulk' = small surplus.
 	goalMode: text('goal_mode').notNull().default('cut'), // 'cut' | 'recomp' | 'lean_bulk'
 
+	// Live-target activity override for a single day: 0–4 (Rest…Very active). Applies
+	// only when activityLevelDate === today; null / stale date = auto (your average).
+	activityLevel: integer('activity_level'),
+	activityLevelDate: text('activity_level_date'), // 'YYYY-MM-DD'
+
 	// Bolusable (net glycemic) carb derivation. CLINICAL CALIBRATION — review with a
 	// care team and validate against CGM traces; this is not medical fact. 'full' =
 	// subtract all fiber (David's standing rule); 'half_over_5' = subtract half of

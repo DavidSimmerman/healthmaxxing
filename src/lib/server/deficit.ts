@@ -2,7 +2,7 @@ import { sql, and, gte, lte, asc, desc } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { dailyLog, activityDays, bodyComp, settings } from '$lib/server/db/schema';
 import { APP_TZ, todayLabel } from '$lib/server/day';
-import { katchMcArdleBmr, mifflinBmr, tefKcal, ageOn } from '$lib/energy';
+import { katchMcArdleBmr, mifflinBmr, tefKcal, ageOn, correctActive } from '$lib/energy';
 
 // One day of the energy ledger. `burnedKcal`/`deficitKcal` are null when we
 // can't estimate expenditure (no body comp ever synced AND no Apple basal) —
@@ -20,12 +20,22 @@ export type DayEnergy = {
 	weightKg: number | null; // latest weigh-in on/before this day
 };
 
+// A resolved active-energy correction + dynamic today-target, applied only when
+// passed. Computed once by resolveCorrection() (energyBreakdown.ts) and threaded
+// in, so the calibration path keeps calling deficitDays RAW (no correction) and
+// can't recurse into its own output.
+export type DayCorrection = {
+	factor: number; // haircut on Apple's PASSIVE active (1 = none)
+	trustedByDate: Map<string, number>; // date → dedicated (workout/pad) kcal, ridden at 1.0
+	todayTargetKcal: number | null; // dynamic calorie target for today's effective intake
+};
+
 // Per-day energy ledger for [fromDate, toDate] inclusive (YYYY-MM-DD, APP_TZ).
 // Callers that already hold the (single-row) settings can pass it to skip a query.
 export async function deficitDays(
 	fromDate: string,
 	toDate: string,
-	opts?: { settingsRow?: typeof settings.$inferSelect | null }
+	opts?: { settingsRow?: typeof settings.$inferSelect | null; correction?: DayCorrection }
 ): Promise<DayEnergy[]> {
 	const logDate = sql<string>`(${dailyLog.loggedAt} at time zone 'UTC' at time zone ${APP_TZ})::date`;
 
@@ -91,6 +101,7 @@ export async function deficitDays(
 	// always use actual intake.
 	const today = todayLabel();
 	const calorieTarget = settingsRow?.calorieTarget ?? 2100;
+	const correction = opts?.correction;
 
 	const days: DayEnergy[] = [];
 	// compByDate is ascending; walk it once with a pointer instead of a
@@ -132,9 +143,17 @@ export async function deficitDays(
 			bmrSource = 'apple-basal';
 		}
 
-		const burned = bmr != null ? bmr + (activity?.activeKcal ?? 0) + tef : null;
+		// Corrected active when a correction is supplied: dedicated workout kcal ride
+		// at 1.0, only Apple's passive estimate gets the haircut. Raw path unchanged.
+		const rawActive = activity?.activeKcal ?? null;
+		const active =
+			correction && rawActive != null
+				? correctActive(rawActive, correction.trustedByDate.get(date) ?? 0, correction.factor)
+				: rawActive;
+		const burned = bmr != null ? bmr + (active ?? 0) + tef : null;
 		// Predicted intake for the deficit: today, eat at least to target; else actual.
-		const effIntake = date === today ? Math.max(intakeKcal, calorieTarget) : intakeKcal;
+		const targetToday = correction?.todayTargetKcal ?? calorieTarget;
+		const effIntake = date === today ? Math.max(intakeKcal, targetToday) : intakeKcal;
 
 		days.push({
 			date,
@@ -142,7 +161,7 @@ export async function deficitDays(
 			proteinG: intake?.proteinG ?? 0,
 			bmrKcal: bmr != null ? Math.round(bmr) : null,
 			bmrSource,
-			activeKcal: activity?.activeKcal ?? null,
+			activeKcal: active,
 			tefKcal: Math.round(tef),
 			burnedKcal: burned != null ? Math.round(burned) : null,
 			deficitKcal: burned != null ? Math.round(burned - effIntake) : null,

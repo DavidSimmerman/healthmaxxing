@@ -1,72 +1,88 @@
-import { sql } from 'drizzle-orm';
+import { sql, eq } from 'drizzle-orm';
 import { db } from '$lib/server/db';
-import { workouts } from '$lib/server/db/schema';
+import { workouts, settings } from '$lib/server/db/schema';
 import { APP_TZ, todayLabel } from '$lib/server/day';
-import { deficitDays, type DayEnergy } from '$lib/server/deficit';
+import { deficitDays, type DayEnergy, type DayCorrection } from '$lib/server/deficit';
 import { fillBmrGaps, energyInsights } from '$lib/server/projections';
 import {
 	addDays,
 	correctActive,
 	activeCorrectionFactor,
+	activityBuckets,
+	wakingFractionRemaining,
+	liveTarget,
 	modeDeficit,
 	type GoalMode
 } from '$lib/energy';
 
 const WINDOW_DAYS = 30;
+const MODES: GoalMode[] = ['cut', 'recomp', 'lean_bulk'];
 
 export type WorkoutLite = { name: string; kcal: number | null; time: string; startedAt: string };
 
-export type DayBreakdown = DayEnergy & {
-	trustedKcal: number; // dedicated workout kcal that day (already inside activeKcal)
-	correctedActiveKcal: number | null;
-	correctedBurnedKcal: number | null;
-	correctedDeficitKcal: number | null;
-	workouts: WorkoutLite[];
-};
+const mean = (xs: number[]): number | null =>
+	xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
 
-export type EnergyBreakdown = {
+type SettingsRow = typeof settings.$inferSelect;
+
+// Everything the corrected view + dynamic target need, computed ONCE per request
+// from the RAW 30-day ledger + calibration. Threaded into deficitDays via
+// `correction` so consumers get corrected numbers without recomputing this, and
+// so the calibration path (projections) can keep calling deficitDays raw.
+export type EnergyContext = {
 	today: string;
-	windowDays: number;
 	mode: GoalMode;
-	// Correction
-	factor: number; // passive-active haircut (1 = no correction)
-	avgRawActive: number | null;
-	avgCorrectedActive: number | null;
-	avgTrustedKcal: number | null;
-	// Maintenance + target
+	correction: DayCorrection; // { factor, trustedByDate, todayTargetKcal }
+	// Calibration / maintenance
+	factor: number;
 	maintenanceKcal: number | null;
 	maintenanceSource: 'calibrated' | 'estimated' | null;
 	calibratedTdee: number | null;
 	estimatedTdee: number | null;
 	bodyFatPct: number | null;
 	weightKg: number | null;
-	modeDeltaKcal: number | null; // signed: negative = deficit
-	targetKcal: number | null;
-	days: DayBreakdown[]; // ascending
+	modeDeltaKcal: number | null;
+	targetKcal: number | null; // = correction.todayTargetKcal
+	// Active averages (corrected) + today's live inputs
+	avgRawActive: number | null;
+	avgCorrectedActive: number | null;
+	avgTrustedKcal: number | null;
+	buckets: number[]; // 5 activity-level representatives (corrected active)
+	activityLevel: number | null; // today's override 0–4, or null (auto)
+	fractionRemaining: number;
+	// Reusable so callers don't re-query
+	windowLedger: DayEnergy[]; // RAW, fillBmrGaps'd, [today-30 … today]
+	woByDate: Map<string, { kcal: number; list: WorkoutLite[] }>;
 };
 
-const mean = (xs: number[]): number | null =>
-	xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
+function nowHourInAppTz(): number {
+	return Number(
+		new Intl.DateTimeFormat('en-US', { timeZone: APP_TZ, hour: '2-digit', hour12: false }).format(
+			new Date()
+		)
+	);
+}
 
-// Per-day energy with the active-energy correction applied, plus the window's
-// calibrated maintenance, correction factor, and the mode's dynamic target.
-// Built as a composable layer over the RAW ledger — deficitDays stays untouched
-// so the calibration (which never uses active energy) can't feed back on itself.
-export async function energyBreakdown(mode: GoalMode): Promise<EnergyBreakdown> {
+export async function resolveCorrection(settingsRow?: SettingsRow | null): Promise<EnergyContext> {
 	const today = todayLabel();
 	const from = addDays(today, -WINDOW_DAYS);
-
 	const woDate = sql<string>`(${workouts.startedAt} at time zone 'UTC' at time zone ${APP_TZ})::date`;
-	const [insights, ledger, woRows] = await Promise.all([
+
+	const [s, insights, windowLedger, woRows] = await Promise.all([
+		settingsRow !== undefined
+			? Promise.resolve(settingsRow)
+			: db
+					.select()
+					.from(settings)
+					.where(eq(settings.id, 1))
+					.then((r) => r[0] ?? null),
 		energyInsights({ windowDays: WINDOW_DAYS }),
-		deficitDays(from, today).then(fillBmrGaps),
+		deficitDays(from, today).then(fillBmrGaps), // RAW — factor is derived from this
 		db
 			.select({
 				date: sql<string>`${woDate}::text`,
 				name: workouts.name,
 				kcal: workouts.kcal,
-				// Clock time formatted server-side in APP_TZ — started_at is stored
-				// naive-UTC, so a client `new Date()` would render the wrong zone.
 				time: sql<string>`to_char((${workouts.startedAt} at time zone 'UTC' at time zone ${APP_TZ}), 'FMHH12:MI AM')`,
 				startedAt: sql<string>`${workouts.startedAt}::text`
 			})
@@ -74,9 +90,11 @@ export async function energyBreakdown(mode: GoalMode): Promise<EnergyBreakdown> 
 			.where(sql`${woDate} between ${from}::date and ${today}::date`)
 	]);
 
+	const mode = (MODES.includes(s?.goalMode as GoalMode) ? s!.goalMode : 'cut') as GoalMode;
+
 	// Group workouts by local day. ponytail: trust ALL workout kcal as dedicated
-	// measurements for now; narrow to the pad's source once we sync the workout
-	// source bundle id (HealthSync.swift). Null kcal counts as 0 trusted.
+	// measurements; narrow to the pad's source once the workout source bundle id is
+	// synced (HealthSync.swift). Null kcal counts as 0 trusted.
 	const woByDate = new Map<string, { kcal: number; list: WorkoutLite[] }>();
 	for (const w of woRows) {
 		const e = woByDate.get(w.date) ?? { kcal: 0, list: [] };
@@ -84,47 +102,34 @@ export async function energyBreakdown(mode: GoalMode): Promise<EnergyBreakdown> 
 		e.list.push({ name: w.name, kcal: w.kcal, time: w.time, startedAt: w.startedAt });
 		woByDate.set(w.date, e);
 	}
+	const trustedByDate = new Map([...woByDate].map(([d, v]) => [d, v.kcal]));
 
 	// Correction factor from COMPLETED, logged days (today's partial excluded).
-	const completed = ledger.filter(
+	const completed = windowLedger.filter(
 		(d) => d.date < today && d.intakeKcal > 0 && d.burnedKcal != null
 	);
 	const avgBmr = mean(completed.map((d) => d.bmrKcal ?? 0));
 	const avgTef = mean(completed.map((d) => d.tefKcal));
-	const avgActive = mean(completed.map((d) => d.activeKcal ?? 0));
-	const avgTrusted = mean(completed.map((d) => woByDate.get(d.date)?.kcal ?? 0));
+	const avgRawActive = mean(completed.map((d) => d.activeKcal ?? 0));
+	const avgTrusted = mean(completed.map((d) => trustedByDate.get(d.date) ?? 0));
 	const realActiveAvg =
 		insights.calibratedTdee != null && avgBmr != null && avgTef != null
 			? insights.calibratedTdee - avgBmr - avgTef
 			: null;
 	const factor =
-		realActiveAvg != null && avgActive != null && avgTrusted != null
-			? activeCorrectionFactor(realActiveAvg, avgActive, avgTrusted)
+		realActiveAvg != null && avgRawActive != null && avgTrusted != null
+			? activeCorrectionFactor(realActiveAvg, avgRawActive, avgTrusted)
 			: 1;
 
-	const days: DayBreakdown[] = ledger.map((d) => {
-		const wo = woByDate.get(d.date);
-		const trustedKcal = wo?.kcal ?? 0;
-		// Missing active row → 0, matching deficitDays' raw burn, so a day the raw
-		// ledger can already estimate doesn't lose its corrected deficit here.
-		const ca = correctActive(d.activeKcal ?? 0, trustedKcal, factor);
-		const cb = d.bmrKcal != null ? d.bmrKcal + ca + d.tefKcal : null;
-		return {
-			...d,
-			trustedKcal: Math.round(trustedKcal),
-			correctedActiveKcal: d.activeKcal != null ? Math.round(ca) : null,
-			correctedBurnedKcal: cb != null ? Math.round(cb) : null,
-			correctedDeficitKcal: cb != null ? Math.round(cb - d.intakeKcal) : null,
-			workouts: wo?.list ?? []
-		};
-	});
-
-	const avgCorrectedActive = mean(
-		completed
-			.map((d) => days.find((x) => x.date === d.date)?.correctedActiveKcal)
-			.filter((v): v is number => v != null)
+	// Per-day corrected active over completed days → avg + activity buckets.
+	const correctedActives = completed.map((d) =>
+		correctActive(d.activeKcal ?? 0, trustedByDate.get(d.date) ?? 0, factor)
 	);
+	const avgCorrectedActive = mean(correctedActives);
+	const buckets = activityBuckets(correctedActives);
 
+	// Maintenance + per-mode target delta (recomp needs no body data, lean_bulk only
+	// weight, cut both; fall back to the latest weigh-in when the trend is null).
 	const maintenanceKcal = insights.calibratedTdee ?? insights.estimatedTdee ?? null;
 	const maintenanceSource =
 		insights.calibratedTdee != null
@@ -132,9 +137,6 @@ export async function energyBreakdown(mode: GoalMode): Promise<EnergyBreakdown> 
 			: insights.estimatedTdee != null
 				? 'estimated'
 				: null;
-	// Prefer the smoothed trend, but fall back to the latest raw weigh-in so a
-	// single measurement still yields a target. Gate inputs per mode: recomp needs
-	// no body data, lean_bulk needs weight, cut needs weight + body-fat.
 	const latest = insights.body.series.at(-1);
 	const bodyFatPct = insights.body.bodyFat?.current ?? latest?.bodyFatPct ?? null;
 	const weightKg = insights.body.weight?.current ?? latest?.weightKg ?? null;
@@ -144,19 +146,44 @@ export async function energyBreakdown(mode: GoalMode): Promise<EnergyBreakdown> 
 			: weightKg != null && (mode === 'lean_bulk' || bodyFatPct != null)
 				? Math.round(modeDeficit(mode, bodyFatPct ?? 0, weightKg))
 				: null;
-	const targetKcal =
-		maintenanceKcal != null && modeDeltaKcal != null
-			? Math.round(maintenanceKcal + modeDeltaKcal)
+
+	// Live intraday target for today.
+	const todayEntry = windowLedger.find((d) => d.date === today);
+	const actualActiveKcalToday = correctActive(
+		todayEntry?.activeKcal ?? 0,
+		trustedByDate.get(today) ?? 0,
+		factor
+	);
+	const activityLevel =
+		s?.activityLevelDate === today && s?.activityLevel != null
+			? Math.min(4, Math.max(0, s.activityLevel))
 			: null;
+	const levelActiveKcal =
+		activityLevel != null && buckets.length ? buckets[activityLevel] : avgCorrectedActive;
+	const fractionRemaining = wakingFractionRemaining(nowHourInAppTz());
+
+	let targetKcal: number | null = null;
+	if (maintenanceKcal != null && modeDeltaKcal != null) {
+		targetKcal =
+			avgCorrectedActive != null && levelActiveKcal != null
+				? Math.round(
+						liveTarget({
+							maintenanceKcal,
+							modeDeltaKcal,
+							avgActiveKcal: avgCorrectedActive,
+							actualActiveKcal: actualActiveKcalToday,
+							levelActiveKcal,
+							fractionRemaining
+						})
+					)
+				: Math.round(maintenanceKcal + modeDeltaKcal); // stable fallback (no active history)
+	}
 
 	return {
 		today,
-		windowDays: WINDOW_DAYS,
 		mode,
+		correction: { factor, trustedByDate, todayTargetKcal: targetKcal },
 		factor,
-		avgRawActive: avgActive != null ? Math.round(avgActive) : null,
-		avgCorrectedActive,
-		avgTrustedKcal: avgTrusted != null ? Math.round(avgTrusted) : null,
 		maintenanceKcal,
 		maintenanceSource,
 		calibratedTdee: insights.calibratedTdee,
@@ -165,6 +192,68 @@ export async function energyBreakdown(mode: GoalMode): Promise<EnergyBreakdown> 
 		weightKg,
 		modeDeltaKcal,
 		targetKcal,
-		days
+		avgRawActive: avgRawActive != null ? Math.round(avgRawActive) : null,
+		avgCorrectedActive: avgCorrectedActive != null ? Math.round(avgCorrectedActive) : null,
+		avgTrustedKcal: avgTrusted != null ? Math.round(avgTrusted) : null,
+		buckets,
+		activityLevel,
+		fractionRemaining,
+		windowLedger,
+		woByDate
 	};
+}
+
+// deficitDays with the active-energy correction + dynamic target applied. The
+// one-line swap for consumers that want corrected numbers. Multi-call callers
+// (e.g. goals scoring) should resolveCorrection() ONCE and thread `correction`.
+// ponytail: recomputes the correction per call — fine for a solo app; hoist if a
+// hot path calls it many times.
+export async function correctedDeficitDays(
+	fromDate: string,
+	toDate: string,
+	opts?: { settingsRow?: SettingsRow | null }
+): Promise<DayEnergy[]> {
+	const ctx = await resolveCorrection(opts?.settingsRow);
+	return deficitDays(fromDate, toDate, {
+		settingsRow: opts?.settingsRow,
+		correction: ctx.correction
+	});
+}
+
+// ── /energy breakdown page ───────────────────────────────────────────────────
+export type DayBreakdown = DayEnergy & {
+	trustedKcal: number;
+	correctedActiveKcal: number | null;
+	correctedBurnedKcal: number | null;
+	correctedDeficitKcal: number | null;
+	workouts: WorkoutLite[];
+};
+
+export type EnergyBreakdown = Omit<EnergyContext, 'correction' | 'windowLedger' | 'woByDate'> & {
+	windowDays: number;
+	days: DayBreakdown[]; // ascending, raw fields + corrected fields for display
+};
+
+export async function energyBreakdown(): Promise<EnergyBreakdown> {
+	const ctx = await resolveCorrection();
+	// The window ledger in ctx is RAW — apply the correction per day for the
+	// raw→corrected display (the page shows both).
+	const days: DayBreakdown[] = ctx.windowLedger.map((d) => {
+		const trustedKcal = ctx.woByDate.get(d.date)?.kcal ?? 0;
+		const ca = correctActive(d.activeKcal ?? 0, trustedKcal, ctx.factor);
+		const cb = d.bmrKcal != null ? d.bmrKcal + ca + d.tefKcal : null;
+		return {
+			...d,
+			trustedKcal: Math.round(trustedKcal),
+			correctedActiveKcal: d.activeKcal != null ? Math.round(ca) : null,
+			correctedBurnedKcal: cb != null ? Math.round(cb) : null,
+			correctedDeficitKcal: cb != null ? Math.round(cb - d.intakeKcal) : null,
+			workouts: ctx.woByDate.get(d.date)?.list ?? []
+		};
+	});
+
+	// Strip the internal-only fields; expose the rest for display.
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
+	const { correction, windowLedger, woByDate, ...view } = ctx;
+	return { ...view, windowDays: WINDOW_DAYS, days };
 }

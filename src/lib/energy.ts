@@ -172,3 +172,40 @@ export function activeCorrectionFactor(
 	if (!(passiveAvg > 50)) return 1;
 	return clamp((realActiveAvg - trustedAvg) / passiveAvg, 0.4, 1.2);
 }
+
+// ── Live intraday target ─────────────────────────────────────────────────────
+// Fraction of the waking day still ahead at local `hour`. Active energy is
+// assumed to accrue evenly across waking hours [wake, sleep). ponytail: even
+// accrual is a rough model — swap for an intraday curve only if it feels off.
+export function wakingFractionRemaining(hour: number, wake = 7, sleep = 23): number {
+	if (hour <= wake) return 1;
+	if (hour >= sleep) return 0;
+	return (sleep - hour) / (sleep - wake);
+}
+
+// Trailing daily active-energy values → 5 ascending tier representatives
+// (Rest … Very active), taken at the 10/30/50/70/90th percentiles. Empty → zeros.
+export function activityBuckets(dailyActive: number[]): number[] {
+	const xs = dailyActive.filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
+	if (!xs.length) return [0, 0, 0, 0, 0];
+	const q = (p: number) => xs[Math.min(xs.length - 1, Math.floor(p * xs.length))];
+	return [0.1, 0.3, 0.5, 0.7, 0.9].map((p) => Math.round(q(p)));
+}
+
+// Live intraday calorie target: calibrated maintenance, plus how today's PROJECTED
+// active differs from your average, minus the mode's deficit. Projected active =
+// what you've already burned today + the chosen level's typical active × the
+// waking fraction still ahead → converges to real burn by bedtime, so a low-move
+// day pulls the number down before dinner. Default `levelActiveKcal = avgActiveKcal`
+// makes a typical day land exactly at maintenance − deficit.
+export function liveTarget(opts: {
+	maintenanceKcal: number;
+	modeDeltaKcal: number; // signed (negative = deficit)
+	avgActiveKcal: number; // trailing avg corrected active (already inside maintenance)
+	actualActiveKcal: number; // corrected active accrued so far today
+	levelActiveKcal: number; // chosen level's typical corrected active (full day)
+	fractionRemaining: number; // 0–1 from wakingFractionRemaining()
+}): number {
+	const projectedActive = opts.actualActiveKcal + opts.levelActiveKcal * opts.fractionRemaining;
+	return opts.maintenanceKcal + (projectedActive - opts.avgActiveKcal) + opts.modeDeltaKcal;
+}
