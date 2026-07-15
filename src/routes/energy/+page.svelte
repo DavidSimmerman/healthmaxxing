@@ -10,6 +10,8 @@
 		{ key: 'lean_bulk', label: 'Lean bulk' }
 	];
 
+	const levels = ['Rest', 'Light', 'Moderate', 'Active', 'Very'];
+
 	let deltaLabel = $derived(
 		b.mode === 'recomp'
 			? 'at maintenance'
@@ -102,6 +104,47 @@
 			{#if deltaLabel}· <span style="color: var(--color-accent-from);">{deltaLabel}</span>{/if}
 			{#if b.bodyFatPct != null && b.mode === 'cut'}· scaled to {b.bodyFatPct.toFixed(1)}% body fat{/if}
 		</p>
+
+		<!-- Today's activity level → drives the live projection -->
+		<form method="POST" action="?/setLevel" use:enhance class="mt-4">
+			<p
+				class="mb-1.5 text-[10px] font-semibold tracking-widest uppercase"
+				style="color: var(--color-text-subtle);"
+			>
+				Today's activity
+			</p>
+			<div class="card-sm flex items-center gap-0.5 p-1">
+				<button
+					name="level"
+					value=""
+					class="flex-1 rounded-lg px-1 py-1.5 text-[11px] font-semibold transition"
+					class:accent-gradient={b.activityLevel == null}
+					style={b.activityLevel == null ? 'color: #000;' : 'color: var(--color-text-subtle);'}
+				>
+					Auto
+				</button>
+				{#each levels as label, i (label)}
+					<button
+						name="level"
+						value={i}
+						class="flex-1 rounded-lg px-1 py-1.5 text-[11px] font-semibold transition"
+						class:accent-gradient={b.activityLevel === i}
+						style={b.activityLevel === i ? 'color: #000;' : 'color: var(--color-text-subtle);'}
+					>
+						{label}
+					</button>
+				{/each}
+			</div>
+			<p class="mt-1.5 text-xs" style="color: var(--color-text-subtle);">
+				{#if b.activityLevel == null}
+					Tracking your average day, moving live as you burn. Tap a level if you know today's
+					lighter or harder.
+				{:else}
+					Planning a {levels[b.activityLevel].toLowerCase()} day (~{num(b.buckets[b.activityLevel])} active
+					kcal) — the target converges to your real burn by tonight.
+				{/if}
+			</p>
+		</form>
 	</section>
 
 	<!-- Maintenance + active-energy correction -->
