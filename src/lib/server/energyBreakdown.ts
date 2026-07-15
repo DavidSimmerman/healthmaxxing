@@ -105,12 +105,14 @@ export async function energyBreakdown(mode: GoalMode): Promise<EnergyBreakdown> 
 	const days: DayBreakdown[] = ledger.map((d) => {
 		const wo = woByDate.get(d.date);
 		const trustedKcal = wo?.kcal ?? 0;
-		const ca = d.activeKcal != null ? correctActive(d.activeKcal, trustedKcal, factor) : null;
-		const cb = d.bmrKcal != null && ca != null ? d.bmrKcal + ca + d.tefKcal : null;
+		// Missing active row → 0, matching deficitDays' raw burn, so a day the raw
+		// ledger can already estimate doesn't lose its corrected deficit here.
+		const ca = correctActive(d.activeKcal ?? 0, trustedKcal, factor);
+		const cb = d.bmrKcal != null ? d.bmrKcal + ca + d.tefKcal : null;
 		return {
 			...d,
 			trustedKcal: Math.round(trustedKcal),
-			correctedActiveKcal: ca != null ? Math.round(ca) : null,
+			correctedActiveKcal: d.activeKcal != null ? Math.round(ca) : null,
 			correctedBurnedKcal: cb != null ? Math.round(cb) : null,
 			correctedDeficitKcal: cb != null ? Math.round(cb - d.intakeKcal) : null,
 			workouts: wo?.list ?? []
@@ -130,12 +132,18 @@ export async function energyBreakdown(mode: GoalMode): Promise<EnergyBreakdown> 
 			: insights.estimatedTdee != null
 				? 'estimated'
 				: null;
-	const bodyFatPct = insights.body.bodyFat?.current ?? null;
-	const weightKg = insights.body.weight?.current ?? null;
+	// Prefer the smoothed trend, but fall back to the latest raw weigh-in so a
+	// single measurement still yields a target. Gate inputs per mode: recomp needs
+	// no body data, lean_bulk needs weight, cut needs weight + body-fat.
+	const latest = insights.body.series.at(-1);
+	const bodyFatPct = insights.body.bodyFat?.current ?? latest?.bodyFatPct ?? null;
+	const weightKg = insights.body.weight?.current ?? latest?.weightKg ?? null;
 	const modeDeltaKcal =
-		bodyFatPct != null && weightKg != null
-			? Math.round(modeDeficit(mode, bodyFatPct, weightKg))
-			: null;
+		mode === 'recomp'
+			? 0
+			: weightKg != null && (mode === 'lean_bulk' || bodyFatPct != null)
+				? Math.round(modeDeficit(mode, bodyFatPct ?? 0, weightKg))
+				: null;
 	const targetKcal =
 		maintenanceKcal != null && modeDeltaKcal != null
 			? Math.round(maintenanceKcal + modeDeltaKcal)
