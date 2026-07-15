@@ -4,6 +4,7 @@ import { workouts, settings } from '$lib/server/db/schema';
 import { APP_TZ, todayLabel } from '$lib/server/day';
 import { deficitDays, type DayEnergy, type DayCorrection } from '$lib/server/deficit';
 import { fillBmrGaps, energyInsights } from '$lib/server/projections';
+import { loadIsVacation } from '$lib/server/vacations';
 import {
 	addDays,
 	correctActive,
@@ -115,8 +116,10 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 	const trustedByDate = new Map([...woByDate].map(([d, v]) => [d, v.kcal]));
 
 	// Correction factor from COMPLETED, logged days (today's partial excluded).
+	// Vacation days don't train it — trip food is guesswork.
+	const isVac = await loadIsVacation();
 	const completed = windowLedger.filter(
-		(d) => d.date < today && d.intakeKcal > 0 && d.burnedKcal != null
+		(d) => d.date < today && d.intakeKcal > 0 && d.burnedKcal != null && !isVac(d.date)
 	);
 	const avgBmr = mean(completed.map((d) => d.bmrKcal ?? 0));
 	const avgTef = mean(completed.map((d) => d.tefKcal));
