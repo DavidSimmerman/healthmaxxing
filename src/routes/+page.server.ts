@@ -138,6 +138,16 @@ export async function load() {
 		? scoreDay(dayMetrics[0], weekBalances(priorDays, specsFor), specsFor(today)).score
 		: null;
 
+	// Active-calorie goal: how many active kcal you still need today to hit your
+	// deficit — each active kcal adds 1 to the deficit, so it's just the gap to the
+	// goal. D = the mode's leanness-scaled deficit, else the configured fixed target.
+	const deficitGoal =
+		ctx.modeDeltaKcal != null ? -ctx.modeDeltaKcal : (settingsRow?.deficitTargetKcal ?? 500);
+	const activeToGo =
+		todayEnergy?.deficitKcal != null
+			? Math.max(0, Math.round(deficitGoal - todayEnergy.deficitKcal))
+			: null;
+
 	return {
 		settings: settingsRow ?? {
 			calorieTarget: 2100,
@@ -152,9 +162,10 @@ export async function load() {
 		// Dynamic daily calorie target (live) for the calorie ring — replaces the fixed
 		// settings.calorieTarget. Falls back to the fixed value until there's data.
 		calorieTarget: ctx.targetKcal ?? settingsRow?.calorieTarget ?? 2100,
-		// ponytail: default 500 kcal so the ring isn't dead before a target is set;
-		// the Settings field overrides it.
-		deficitTarget: settingsRow?.deficitTargetKcal ?? 500,
+		// Active-calorie ring (replaces the raw deficit): fill = deficit→goal, centre =
+		// active kcal still to burn today to hit the deficit.
+		deficitGoal,
+		activeToGo,
 		goalScore
 	};
 }

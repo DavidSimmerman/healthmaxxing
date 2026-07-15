@@ -190,11 +190,12 @@
 			/>
 			<StatRing
 				value={data.deficit}
-				target={data.deficitTarget}
-				label="Deficit"
-				unit="kcal"
-				href="/deficit?today=1"
-				ariaLabel="Today's deficit — open energy balance"
+				target={data.deficitGoal}
+				centerText={data.activeToGo != null ? data.activeToGo.toLocaleString() : undefined}
+				centerSub="to go"
+				label="Active"
+				href="/energy"
+				ariaLabel="Active calories left to hit today's deficit"
 				color="#38bdf8"
 				size={84}
 			/>
