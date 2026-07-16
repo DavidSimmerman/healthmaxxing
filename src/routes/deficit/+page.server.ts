@@ -23,9 +23,9 @@ export async function load({ url }) {
 		days,
 		range: RANGES[range] ? range : 'w',
 		today: to,
-		// Dynamic daily target (calibrated maintenance ± the mode's leanness-scaled
-		// delta, live). Falls back to a flat 2100 only before there's enough data.
-		calorieTarget: ctx.targetKcal ?? ctx.fixedCalorieTarget,
+		// Client recomputes today's deficit from this, so it's the STABLE assumed intake
+		// (matches the server; keeps active energy from cancelling out of the deficit).
+		calorieTarget: ctx.stableTargetKcal ?? ctx.fixedCalorieTarget,
 		includeToday: url.searchParams.get('today') === '1'
 	};
 }

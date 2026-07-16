@@ -71,15 +71,19 @@ export async function GET({ request }) {
 	// to it (so the number doesn't look rosy mid-morning); if over, use actual
 	// intake. Computed here so the widget and the app's drift check agree.
 	const calSum = entries.reduce((sum, e) => sum + e.calories, 0);
-	const calTarget = ctx.targetKcal ?? s?.calorieTarget ?? 2100;
-	const deficit = burnedKcal != null ? Math.round(burnedKcal - Math.max(calSum, calTarget)) : null;
+	// Deficit uses the STABLE assumed intake (so activity doesn't cancel out); the
+	// widget's displayed calorie goal uses the ratcheting eat-to target.
+	const stableTarget = ctx.stableTargetKcal ?? s?.calorieTarget ?? 2100;
+	const goalTarget = ctx.targetKcal ?? s?.calorieTarget ?? 2100;
+	const deficit =
+		burnedKcal != null ? Math.round(burnedKcal - Math.max(calSum, stableTarget)) : null;
 
 	return json({
 		date: today,
 		entries,
 		// Surface the dynamic calorie target as calorieTarget so the widget's ring
 		// matches the app (not the fixed settings value).
-		targets: s ? { ...s, calorieTarget: calTarget } : null,
+		targets: s ? { ...s, calorieTarget: goalTarget } : null,
 		burnedKcal,
 		deficit
 	});

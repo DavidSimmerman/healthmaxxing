@@ -48,7 +48,8 @@ export type EnergyContext = {
 	bodyFatPct: number | null;
 	weightKg: number | null;
 	modeDeltaKcal: number | null;
-	targetKcal: number | null; // = correction.todayTargetKcal
+	targetKcal: number | null; // RATCHET eat-to goal (display): rises with real burn, never drops
+	stableTargetKcal: number | null; // non-ratcheting assumed intake for deficit math (= correction.todayTargetKcal)
 	fixedCalorieTarget: number; // the user's configured settings.calorieTarget (fallback)
 	// Active averages (corrected) + today's live inputs
 	avgRawActive: number | null;
@@ -153,25 +154,31 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 		trustedByDate.get(today) ?? 0,
 		factor
 	);
-	let targetKcal: number | null = null;
-	if (maintenanceKcal != null && modeDeltaKcal != null) {
-		targetKcal =
-			avgCorrectedActive != null
-				? Math.round(
-						ratchetTarget({
-							maintenanceKcal,
-							modeDeltaKcal,
-							avgActiveKcal: avgCorrectedActive,
-							actualActiveKcal: actualActiveKcalToday
-						})
-					)
-				: Math.round(maintenanceKcal + modeDeltaKcal); // no active history yet
+	// The displayed eat-to goal RATCHETS (real burn only). The deficit's assumed
+	// intake must NOT ratchet: the ratchet rises 1:1 with active kcal, so using it as
+	// effIntake would cancel activity out of the deficit (burn +1, assumed intake +1)
+	// and freeze deficit/active-to-go after a workout. So the deficit uses a STABLE
+	// assumed intake (typical-day target = maintenance − deficit); only display ratchets.
+	const stableTargetKcal =
+		maintenanceKcal != null && modeDeltaKcal != null
+			? Math.round(maintenanceKcal + modeDeltaKcal)
+			: null;
+	let targetKcal: number | null = stableTargetKcal; // ratchet; falls back to stable with no active history
+	if (stableTargetKcal != null && avgCorrectedActive != null) {
+		targetKcal = Math.round(
+			ratchetTarget({
+				maintenanceKcal: maintenanceKcal!,
+				modeDeltaKcal: modeDeltaKcal!,
+				avgActiveKcal: avgCorrectedActive,
+				actualActiveKcal: actualActiveKcalToday
+			})
+		);
 	}
 
 	return {
 		today,
 		mode,
-		correction: { factor, trustedByDate, todayTargetKcal: targetKcal },
+		correction: { factor, trustedByDate, todayTargetKcal: stableTargetKcal },
 		factor,
 		maintenanceKcal,
 		maintenanceSource,
@@ -181,6 +188,7 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 		weightKg,
 		modeDeltaKcal,
 		targetKcal,
+		stableTargetKcal,
 		avgRawActive: avgRawActive != null ? Math.round(avgRawActive) : null,
 		avgCorrectedActive: avgCorrectedActive != null ? Math.round(avgCorrectedActive) : null,
 		avgTrustedKcal: avgTrusted != null ? Math.round(avgTrusted) : null,
