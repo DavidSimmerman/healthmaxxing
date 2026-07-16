@@ -149,29 +149,29 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 				? Math.round(modeDeficit(mode, bodyFatPct ?? 0, weightKg))
 				: null;
 
-	// Ratcheting target: real active burned so far only (no forward projection), so it
-	// starts conservative and only climbs — never drops out from under you mid-day.
+	// Today's corrected burn so far (BMR + corrected active + TEF) — what the eat-to target
+	// tracks once it passes the conservative estimate. Null until there's a BMR for today.
 	const todayEntry = windowLedger.find((d) => d.date === today);
-	const actualActiveKcalToday = correctActive(
-		todayEntry?.activeKcal ?? 0,
-		trustedByDate.get(today) ?? 0,
-		factor
-	);
-	// Cushioned baseline (fixed for the day). recomp/lean_bulk get no haircut (targetBaseline).
+	const correctedBurnToday =
+		todayEntry?.bmrKcal != null
+			? todayEntry.bmrKcal +
+				correctActive(todayEntry.activeKcal ?? 0, trustedByDate.get(today) ?? 0, factor) +
+				todayEntry.tefKcal
+			: null;
+	// Conservative-burn floor (fixed for the day). recomp/lean_bulk get no haircut (targetBaseline).
 	const baseKcal =
 		maintenanceKcal != null && modeDeltaKcal != null
 			? targetBaseline(maintenanceKcal, modeDeltaKcal)
 			: null;
 
 	// Recovery bank: ease the deficit for a day or two after a big-deficit day so loss
-	// doesn't run away. Cut-only. Measured against the CUSHIONED effective deficit
-	// (maintenance − baseline), so ordinary cushioned days don't build it; capped at the
-	// mode deficit (−modeDelta) so recovery stops at the cushion floor, never a surplus.
-	// From COMPLETED, logged, non-vacation days (same set the calibration trusts); the 0.5/day
-	// decay makes days past ~10 ago negligible → no stored state needed.
+	// doesn't run away. Cut-only. Measured against the deficit GOAL (−modeDelta) — the deficit
+	// you net on a normal day now that the target is burn-anchored — so ordinary days don't
+	// build it; capped at that same goal so recovery tops out at eating to maintenance, never a
+	// surplus. From COMPLETED, logged, non-vacation days (same set the calibration trusts); the
+	// 0.5/day decay makes days past ~10 ago negligible → no stored state needed.
 	let bankKcal = 0;
 	if (baseKcal != null && maintenanceKcal != null && modeDeltaKcal != null && modeDeltaKcal < 0) {
-		const effectiveGoalKcal = maintenanceKcal - baseKcal; // ≈ 0.1×maintenance + deficit
 		const bankDays = completed.map((d) => ({
 			deficitKcal:
 				d.bmrKcal != null
@@ -180,26 +180,24 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 						d.tefKcal -
 						d.intakeKcal
 					: null,
-			goalKcal: effectiveGoalKcal
+			goalKcal: -modeDeltaKcal
 		}));
 		bankKcal = Math.round(deficitBank(bankDays, -modeDeltaKcal));
 	}
 
-	// The displayed eat-to goal RATCHETS UP for extra exercise (real burn only). The
-	// deficit's assumed intake must NOT ratchet: the ratchet rises 1:1 with active kcal
-	// above typical, so using it as effIntake would cancel that activity out of the deficit
-	// (burn +1, assumed intake +1) and freeze deficit/active-to-go after a workout. So the
-	// deficit uses the STABLE baseline (cushioned floor + recovery bank), matching the
-	// ratchet's base; only the displayed goal ratchets above it.
+	// The displayed eat-to goal is burn-anchored: it climbs 1:1 as today's real burn passes
+	// the conservative estimate. The deficit's assumed intake must NOT track burn like that —
+	// it would cancel burn out of the deficit (burn +1, assumed intake +1) and freeze
+	// deficit/active-to-go. So the deficit uses the STABLE floor (conservative estimate −
+	// deficit + recovery bank), the target's morning value; only the displayed goal climbs.
 	const stableTargetKcal = baseKcal != null ? Math.round(baseKcal + bankKcal) : null;
-	let targetKcal: number | null = stableTargetKcal; // ratchet; falls back to stable with no active history
-	if (baseKcal != null && avgCorrectedActive != null) {
+	let targetKcal: number | null = stableTargetKcal; // burn-anchored; falls back to the floor with no burn yet
+	if (baseKcal != null && correctedBurnToday != null) {
 		targetKcal = Math.round(
 			ratchetTarget({
 				maintenanceKcal: maintenanceKcal!,
 				modeDeltaKcal: modeDeltaKcal!,
-				avgActiveKcal: avgCorrectedActive,
-				actualActiveKcal: actualActiveKcalToday,
+				actualBurnKcal: correctedBurnToday,
 				bankKcal
 			})
 		);

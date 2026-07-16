@@ -104,10 +104,10 @@
 		</p>
 
 		<p class="mt-3 text-xs" style="color: var(--color-text-subtle);">
-			{#if b.modeDeltaKcal != null && b.modeDeltaKcal < 0}Held at 90% of maintenance minus your
-				deficit — a steady daily number that leaves room for lower-activity days.{:else}A steady
-				daily number set from your recent maintenance.{/if} It only climbs above that when you out-burn
-			a typical day (extra exercise adds on); it never drops out from under you.
+			{#if b.modeDeltaKcal != null && b.modeDeltaKcal < 0}Starts at a conservative burn estimate
+				(90% of your maintenance) minus your deficit, then climbs toward (today's burn − deficit) as
+				you out-burn that estimate — so you eat back what you actually burn.{:else}Tracks today's
+				burn: eat back what you burn, adjusted for your goal.{/if} It never drops out from under you.
 		</p>
 		{#if b.bankKcal > 0}
 			<p class="mt-1 text-xs" style="color: var(--color-accent-from);">

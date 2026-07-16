@@ -90,35 +90,34 @@ assert.equal(activeCorrectionFactor(600, 320, 300), 1); // ~no passive signal �
 assert.equal(activeCorrectionFactor(200, 900, 0), 0.4); // clamped to floor
 
 // ── Daily eat-to target ──────────────────────────────────────────────────────
-// base = 0.9 × 2400 − 500 = 1660; only active ABOVE the 800 typical bumps it up.
-const rt = (actualActiveKcal: number) =>
+// Burn-anchored: conservative burn estimate = 0.9 × 2400 = 2160; floor = 2160 − 500 = 1660.
+// Once actual burn passes 2160, target = burn − 500.
+const rt = (actualBurnKcal: number) =>
 	ratchetTarget({
 		maintenanceKcal: 2400,
 		modeDeltaKcal: -500,
-		avgActiveKcal: 800,
-		actualActiveKcal
+		actualBurnKcal
 	});
-assert.equal(rt(800), 1660); // typical day (actual = avg) → 90% maintenance − deficit (the cushioned base)
-assert.equal(rt(400), 1660); // below-average day stays at the base — never drops below the cushion
-assert.equal(rt(0), 1660); // rest day → still the base
-assert.equal(rt(1200), 2060); // 400 over typical → base + 400 (extra exercise added on)
-assert(rt(1200) > rt(800)); // ratchets UP only for burn above the typical day
-assert(rt(1200) >= rt(400)); // monotonic non-decreasing in actual active
+assert.equal(rt(1800), 1660); // burn below the conservative estimate → held at the floor
+assert.equal(rt(2160), 1660); // right at the estimate → floor
+assert.equal(rt(2900), 2400); // out-burned the estimate → burn − deficit (climbs 1:1)
+assert.equal(rt(3000), 2500); // keeps tracking real burn
+assert(rt(2900) > rt(2160)); // rises once you out-burn the estimate
+assert(rt(3000) >= rt(2900)); // monotonic non-decreasing in actual burn
 
-// The 90% cushion is CUT-ONLY: recomp eats AT maintenance, lean bulk ABOVE it — the
-// haircut must NOT turn a maintenance/surplus goal into a deficit.
-assert.equal(targetBaseline(2400, -500), 1660); // cut → 0.9×2400 − 500
-assert.equal(targetBaseline(2400, 0), 2400); // recomp → maintenance, no haircut
-assert.equal(targetBaseline(2400, 150), 2550); // lean bulk → maintenance + surplus, no haircut
-// and the full target for a typical recomp day is exactly maintenance (no phantom deficit)
+// The 90% haircut is a CUT-only conservative burn estimate: recomp/lean_bulk assume FULL
+// maintenance, so a low-burn day can't floor them below maintenance into an accidental deficit.
+assert.equal(targetBaseline(2400, -500), 1660); // cut floor → 0.9×2400 − 500
+assert.equal(targetBaseline(2400, 0), 2400); // recomp floor → maintenance, no haircut
+assert.equal(targetBaseline(2400, 150), 2550); // lean bulk floor → maintenance + surplus
+// recomp on a low-burn day still targets maintenance (no phantom deficit); a high-burn day eats back
 assert.equal(
-	ratchetTarget({
-		maintenanceKcal: 2400,
-		modeDeltaKcal: 0,
-		avgActiveKcal: 800,
-		actualActiveKcal: 800
-	}),
+	ratchetTarget({ maintenanceKcal: 2400, modeDeltaKcal: 0, actualBurnKcal: 2000 }),
 	2400
+);
+assert.equal(
+	ratchetTarget({ maintenanceKcal: 2400, modeDeltaKcal: 0, actualBurnKcal: 2900 }),
+	2900
 );
 
 // ── Recovery bank ─────────────────────────────────────────────────────────────
@@ -152,16 +151,15 @@ assert.equal(
 	0
 );
 assert.equal(deficitBank([{ deficitKcal: null, goalKcal: G }], 500), 0); // no data → skipped
-// bank raises the eat-to baseline 1:1 (recovery = eat more), still on top of the ratchet
+// bank raises the eat-to target 1:1 (recovery = eat more), on top of the burn-anchored value
 assert.equal(
 	ratchetTarget({
 		maintenanceKcal: 2400,
 		modeDeltaKcal: -500,
-		avgActiveKcal: 800,
-		actualActiveKcal: 800,
+		actualBurnKcal: 2900,
 		bankKcal: 300
 	}),
-	1960 // 1660 base + 300 recovery
+	2700 // 2900 burn − 500 deficit + 300 recovery
 );
 
 // Trusted workout source: dedicated third-party trackers yes, Apple's own no,

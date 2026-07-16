@@ -217,22 +217,25 @@ export function deficitBank(
 }
 
 // ── Daily eat-to target ──────────────────────────────────────────────────────
-// Stable-with-upward-ratchet calorie target: the cushioned baseline shown from the
-// morning, which only rises when today's ACTUAL active burn exceeds your trailing typical
-// day (`avgActiveKcal`) — extra exercise adds its excess kcal so a big workout doesn't
-// over-shoot the deficit. `bankKcal` (recovery credit, see deficitBank) also raises the
-// baseline to ease off after an overshoot. It never drops below the baseline (a lazy day
-// just stays at the floor). Real burn only, no forward projection; monotonic
-// non-decreasing in actualActiveKcal (which only grows intra-day).
+// Burn-anchored eat-to target, with maintenance as a CONSERVATIVE starting guess of today's
+// burn. The morning floor is `TARGET_BUFFER_FRACTION × maintenance − deficit` — a slightly
+// low burn estimate, minus the deficit — so it's steady and plannable before you've moved.
+// As today's ACTUAL corrected burn (BMR + corrected active + TEF) climbs past that estimate,
+// the target rises 1:1 with it, converging on `today's burn − deficit`: you eat back what you
+// actually burn while still netting the deficit. Collapses to
+// `max(fraction × maintenance, burn) + modeDelta` (+ recovery bank). Monotonic — today's burn
+// only grows intra-day, so it never drops out from under you. On a cut the conservative
+// fraction applies; recomp/lean_bulk assume full maintenance (fraction 1) so the low estimate
+// can't floor them into an accidental deficit.
 export function ratchetTarget(opts: {
 	maintenanceKcal: number;
 	modeDeltaKcal: number; // signed (negative = deficit)
-	avgActiveKcal: number; // trailing typical corrected active — the "expected burn" bump threshold
-	actualActiveKcal: number; // corrected active accrued so far today
-	bankKcal?: number; // recovery-bank credit added to the baseline (raises eat-to); default 0
+	actualBurnKcal: number; // corrected total burn (BMR + corrected active + TEF) accrued so far today
+	bankKcal?: number; // recovery-bank credit added to the target (raises eat-to); default 0
 }): number {
-	const base = targetBaseline(opts.maintenanceKcal, opts.modeDeltaKcal) + (opts.bankKcal ?? 0);
-	return base + Math.max(0, opts.actualActiveKcal - opts.avgActiveKcal);
+	const fraction = opts.modeDeltaKcal < 0 ? TARGET_BUFFER_FRACTION : 1;
+	const assumedBurn = Math.max(fraction * opts.maintenanceKcal, opts.actualBurnKcal);
+	return assumedBurn + opts.modeDeltaKcal + (opts.bankKcal ?? 0);
 }
 
 // Which workout calories to trust at full value (not haircut): dedicated
