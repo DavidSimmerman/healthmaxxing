@@ -10,6 +10,8 @@ import {
 	correctActive,
 	activeCorrectionFactor,
 	ratchetTarget,
+	targetBaseline,
+	deficitBank,
 	modeDeficit,
 	isTrustedWorkoutSource,
 	type GoalMode
@@ -48,6 +50,7 @@ export type EnergyContext = {
 	bodyFatPct: number | null;
 	weightKg: number | null;
 	modeDeltaKcal: number | null;
+	bankKcal: number; // recovery-bank credit folded into the targets today (0 when none / non-cut)
 	targetKcal: number | null; // RATCHET eat-to goal (display): rises with real burn, never drops
 	stableTargetKcal: number | null; // non-ratcheting assumed intake for deficit math (= correction.todayTargetKcal)
 	fixedCalorieTarget: number; // the user's configured settings.calorieTarget (fallback)
@@ -154,23 +157,50 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 		trustedByDate.get(today) ?? 0,
 		factor
 	);
-	// The displayed eat-to goal RATCHETS (real burn only). The deficit's assumed
-	// intake must NOT ratchet: the ratchet rises 1:1 with active kcal, so using it as
-	// effIntake would cancel activity out of the deficit (burn +1, assumed intake +1)
-	// and freeze deficit/active-to-go after a workout. So the deficit uses a STABLE
-	// assumed intake (typical-day target = maintenance − deficit); only display ratchets.
-	const stableTargetKcal =
+	// Cushioned baseline (fixed for the day). recomp/lean_bulk get no haircut (targetBaseline).
+	const baseKcal =
 		maintenanceKcal != null && modeDeltaKcal != null
-			? Math.round(maintenanceKcal + modeDeltaKcal)
+			? targetBaseline(maintenanceKcal, modeDeltaKcal)
 			: null;
+
+	// Recovery bank: ease the deficit for a day or two after a big-deficit day so loss
+	// doesn't run away. Cut-only. Measured against the CUSHIONED effective deficit
+	// (maintenance − baseline), so ordinary cushioned days don't build it; capped at the
+	// mode deficit (−modeDelta) so recovery stops at the cushion floor, never a surplus.
+	// From COMPLETED, logged, non-vacation days (same set the calibration trusts); the 0.5/day
+	// decay makes days past ~10 ago negligible → no stored state needed.
+	let bankKcal = 0;
+	if (baseKcal != null && maintenanceKcal != null && modeDeltaKcal != null && modeDeltaKcal < 0) {
+		const effectiveGoalKcal = maintenanceKcal - baseKcal; // ≈ 0.1×maintenance + deficit
+		const bankDays = completed.map((d) => ({
+			deficitKcal:
+				d.bmrKcal != null
+					? d.bmrKcal +
+						correctActive(d.activeKcal ?? 0, trustedByDate.get(d.date) ?? 0, factor) +
+						d.tefKcal -
+						d.intakeKcal
+					: null,
+			goalKcal: effectiveGoalKcal
+		}));
+		bankKcal = Math.round(deficitBank(bankDays, -modeDeltaKcal));
+	}
+
+	// The displayed eat-to goal RATCHETS UP for extra exercise (real burn only). The
+	// deficit's assumed intake must NOT ratchet: the ratchet rises 1:1 with active kcal
+	// above typical, so using it as effIntake would cancel that activity out of the deficit
+	// (burn +1, assumed intake +1) and freeze deficit/active-to-go after a workout. So the
+	// deficit uses the STABLE baseline (cushioned floor + recovery bank), matching the
+	// ratchet's base; only the displayed goal ratchets above it.
+	const stableTargetKcal = baseKcal != null ? Math.round(baseKcal + bankKcal) : null;
 	let targetKcal: number | null = stableTargetKcal; // ratchet; falls back to stable with no active history
-	if (stableTargetKcal != null && avgCorrectedActive != null) {
+	if (baseKcal != null && avgCorrectedActive != null) {
 		targetKcal = Math.round(
 			ratchetTarget({
 				maintenanceKcal: maintenanceKcal!,
 				modeDeltaKcal: modeDeltaKcal!,
 				avgActiveKcal: avgCorrectedActive,
-				actualActiveKcal: actualActiveKcalToday
+				actualActiveKcal: actualActiveKcalToday,
+				bankKcal
 			})
 		);
 	}
@@ -187,6 +217,7 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 		bodyFatPct,
 		weightKg,
 		modeDeltaKcal,
+		bankKcal,
 		targetKcal,
 		stableTargetKcal,
 		avgRawActive: avgRawActive != null ? Math.round(avgRawActive) : null,

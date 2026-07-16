@@ -173,21 +173,66 @@ export function activeCorrectionFactor(
 	return clamp((realActiveAvg - trustedAvg) / passiveAvg, 0.4, 1.2);
 }
 
-// ── Live intraday target ─────────────────────────────────────────────────────
-// Ratcheting calorie target: calibrated maintenance, plus how much you've ACTUALLY
-// burned in active energy today vs your average, minus the mode's deficit. Real burn
-// only — NO forward projection — so it starts conservative (at 0 active ≈ maintenance
-// − avgActive − deficit) and only rises as you move; it never drops out from under
-// you mid-day. `avgActiveKcal` is subtracted because it's already inside calibrated
-// maintenance (double-count guard); at a typical day's active it lands at
-// maintenance − deficit. Monotonic in actualActiveKcal (which only grows intra-day).
+// Eat-to target sits at this fraction of calibrated maintenance (before the mode
+// deficit). The <1 haircut is a deliberate cushion: the daily number is stable and
+// only ratchets UP for extra exercise (never down for a lazy day), so a below-average
+// day would otherwise leave the target too high — the haircut keeps those days netting
+// a deficit and stops the target chasing an activity-inflated average upward over time.
+// ponytail: one knob; tune here if the cushion feels wrong.
+export const TARGET_BUFFER_FRACTION = 0.9;
+
+// The daily eat-to baseline (fixed for the whole day, from trailing data that EXCLUDES
+// today). On a CUT it's held at TARGET_BUFFER_FRACTION × maintenance + the deficit — i.e.
+// ~90% of maintenance minus the deficit. The <1 haircut is a cut-only cushion. Recomp
+// (delta 0, eat AT maintenance) and lean bulk (delta > 0, eat ABOVE it) get NO haircut —
+// applying it would wrongly turn a maintenance/surplus goal into a deficit. So the buffer
+// only kicks in when there's a deficit to cushion (negative delta).
+export function targetBaseline(maintenanceKcal: number, modeDeltaKcal: number): number {
+	const fraction = modeDeltaKcal < 0 ? TARGET_BUFFER_FRACTION : 1;
+	return fraction * maintenanceKcal + modeDeltaKcal;
+}
+
+// Rolling "recovery bank" (kcal ≥ 0) that eases the deficit for a day or two after you
+// overshoot it, so a single big-deficit day doesn't compound into losing weight too fast.
+// It's an exponential moving average of daily overshoot with a 0.5/day decay — a spike
+// fades over ~2-3 days, neither piled entirely onto the next day nor chased for a week:
+//   bank = clamp(0.5 × yesterdayBank + (yesterdayDeficit − yesterdayGoal), 0, maxKcal)
+// Floored at 0 (over-eating never creates "debt" — a low-deficit day just bleeds the bank
+// down). Capped at maxKcal so recovery stops at a chosen floor and never recommends a
+// surplus. `goalKcal` is the CUSHIONED effective deficit, so ordinary days (which already
+// run that deficit) don't build the bank — only genuine overshoots do. `days` run
+// oldest→newest; the decay makes anything past ~10 days ago negligible, so it can be
+// recomputed from the trailing ledger with no stored state. Days with no deficit data are
+// skipped (carry the bank, don't inject a phantom over/under).
+export function deficitBank(
+	days: { deficitKcal: number | null; goalKcal: number }[],
+	maxKcal: number
+): number {
+	let bank = 0;
+	for (const d of days) {
+		if (d.deficitKcal == null || !Number.isFinite(d.deficitKcal)) continue;
+		bank = clamp(0.5 * bank + (d.deficitKcal - d.goalKcal), 0, maxKcal);
+	}
+	return bank;
+}
+
+// ── Daily eat-to target ──────────────────────────────────────────────────────
+// Stable-with-upward-ratchet calorie target: the cushioned baseline shown from the
+// morning, which only rises when today's ACTUAL active burn exceeds your trailing typical
+// day (`avgActiveKcal`) — extra exercise adds its excess kcal so a big workout doesn't
+// over-shoot the deficit. `bankKcal` (recovery credit, see deficitBank) also raises the
+// baseline to ease off after an overshoot. It never drops below the baseline (a lazy day
+// just stays at the floor). Real burn only, no forward projection; monotonic
+// non-decreasing in actualActiveKcal (which only grows intra-day).
 export function ratchetTarget(opts: {
 	maintenanceKcal: number;
 	modeDeltaKcal: number; // signed (negative = deficit)
-	avgActiveKcal: number; // trailing avg corrected active (already inside maintenance)
+	avgActiveKcal: number; // trailing typical corrected active — the "expected burn" bump threshold
 	actualActiveKcal: number; // corrected active accrued so far today
+	bankKcal?: number; // recovery-bank credit added to the baseline (raises eat-to); default 0
 }): number {
-	return opts.maintenanceKcal + (opts.actualActiveKcal - opts.avgActiveKcal) + opts.modeDeltaKcal;
+	const base = targetBaseline(opts.maintenanceKcal, opts.modeDeltaKcal) + (opts.bankKcal ?? 0);
+	return base + Math.max(0, opts.actualActiveKcal - opts.avgActiveKcal);
 }
 
 // Which workout calories to trust at full value (not haircut): dedicated

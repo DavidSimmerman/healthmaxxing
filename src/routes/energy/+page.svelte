@@ -104,9 +104,17 @@
 		</p>
 
 		<p class="mt-3 text-xs" style="color: var(--color-text-subtle);">
-			Starts conservative and only climbs as you actually burn active calories; it never drops out
-			from under you mid-day.
+			{#if b.modeDeltaKcal != null && b.modeDeltaKcal < 0}Held at 90% of maintenance minus your
+				deficit — a steady daily number that leaves room for lower-activity days.{:else}A steady
+				daily number set from your recent maintenance.{/if} It only climbs above that when you out-burn
+			a typical day (extra exercise adds on); it never drops out from under you.
 		</p>
+		{#if b.bankKcal > 0}
+			<p class="mt-1 text-xs" style="color: var(--color-accent-from);">
+				+{num(b.bankKcal)} recovery — eased back after a recent big-deficit day so you don't lose too
+				fast. Fades over the next day or two.
+			</p>
+		{/if}
 	</section>
 
 	<!-- Maintenance + active-energy correction -->

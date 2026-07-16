@@ -15,6 +15,8 @@ import {
 	correctActive,
 	activeCorrectionFactor,
 	ratchetTarget,
+	targetBaseline,
+	deficitBank,
 	isTrustedWorkoutSource
 } from './energy.ts';
 
@@ -87,7 +89,8 @@ assert.equal(activeCorrectionFactor(600, 900, 300), 0.5);
 assert.equal(activeCorrectionFactor(600, 320, 300), 1); // ~no passive signal ⇒ no correction
 assert.equal(activeCorrectionFactor(200, 900, 0), 0.4); // clamped to floor
 
-// ── Ratcheting target ────────────────────────────────────────────────────────
+// ── Daily eat-to target ──────────────────────────────────────────────────────
+// base = 0.9 × 2400 − 500 = 1660; only active ABOVE the 800 typical bumps it up.
 const rt = (actualActiveKcal: number) =>
 	ratchetTarget({
 		maintenanceKcal: 2400,
@@ -95,10 +98,71 @@ const rt = (actualActiveKcal: number) =>
 		avgActiveKcal: 800,
 		actualActiveKcal
 	});
-assert.equal(rt(800), 1900); // typical day (actual = avg) → maintenance − deficit
-assert.equal(rt(0), 1100); // conservative start (nothing burned) → maintenance − avgActive − deficit
-assert(rt(1200) > rt(400)); // ratchets UP with real burn, never on a projection
-assert(rt(400) > rt(0)); // monotonic in actual active
+assert.equal(rt(800), 1660); // typical day (actual = avg) → 90% maintenance − deficit (the cushioned base)
+assert.equal(rt(400), 1660); // below-average day stays at the base — never drops below the cushion
+assert.equal(rt(0), 1660); // rest day → still the base
+assert.equal(rt(1200), 2060); // 400 over typical → base + 400 (extra exercise added on)
+assert(rt(1200) > rt(800)); // ratchets UP only for burn above the typical day
+assert(rt(1200) >= rt(400)); // monotonic non-decreasing in actual active
+
+// The 90% cushion is CUT-ONLY: recomp eats AT maintenance, lean bulk ABOVE it — the
+// haircut must NOT turn a maintenance/surplus goal into a deficit.
+assert.equal(targetBaseline(2400, -500), 1660); // cut → 0.9×2400 − 500
+assert.equal(targetBaseline(2400, 0), 2400); // recomp → maintenance, no haircut
+assert.equal(targetBaseline(2400, 150), 2550); // lean bulk → maintenance + surplus, no haircut
+// and the full target for a typical recomp day is exactly maintenance (no phantom deficit)
+assert.equal(
+	ratchetTarget({
+		maintenanceKcal: 2400,
+		modeDeltaKcal: 0,
+		avgActiveKcal: 800,
+		actualActiveKcal: 800
+	}),
+	2400
+);
+
+// ── Recovery bank ─────────────────────────────────────────────────────────────
+// goal 700, cap 500. Ordinary on-goal days build nothing; overshoots earn a decaying,
+// capped credit that a low-deficit day bleeds back to zero.
+const G = 700;
+assert.equal(deficitBank([{ deficitKcal: 700, goalKcal: G }], 500), 0); // exactly on goal → 0
+assert.equal(deficitBank([{ deficitKcal: 300, goalKcal: G }], 500), 0); // under goal → floored at 0 (no debt)
+assert.equal(deficitBank([{ deficitKcal: 900, goalKcal: G }], 500), 200); // +200 overshoot → 200 credit
+assert.equal(deficitBank([{ deficitKcal: 5000, goalKcal: G }], 500), 500); // huge day → capped at 500
+// decay: +400 yesterday, on-goal today → 0.5×400 + 0 = 200
+assert.equal(
+	deficitBank(
+		[
+			{ deficitKcal: 1100, goalKcal: G },
+			{ deficitKcal: 700, goalKcal: G }
+		],
+		500
+	),
+	200
+);
+// a low-deficit day clears a standing bank fast: 0.5×200 + (300−700) = −300 → floored 0
+assert.equal(
+	deficitBank(
+		[
+			{ deficitKcal: 900, goalKcal: G },
+			{ deficitKcal: 300, goalKcal: G }
+		],
+		500
+	),
+	0
+);
+assert.equal(deficitBank([{ deficitKcal: null, goalKcal: G }], 500), 0); // no data → skipped
+// bank raises the eat-to baseline 1:1 (recovery = eat more), still on top of the ratchet
+assert.equal(
+	ratchetTarget({
+		maintenanceKcal: 2400,
+		modeDeltaKcal: -500,
+		avgActiveKcal: 800,
+		actualActiveKcal: 800,
+		bankKcal: 300
+	}),
+	1960 // 1660 base + 300 recovery
+);
 
 // Trusted workout source: dedicated third-party trackers yes, Apple's own no,
 // null (pre-capture) yes (no regression).
