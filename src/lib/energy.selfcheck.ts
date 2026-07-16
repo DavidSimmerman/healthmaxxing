@@ -14,9 +14,7 @@ import {
 	modeDeficit,
 	correctActive,
 	activeCorrectionFactor,
-	wakingFractionRemaining,
-	activityBuckets,
-	liveTarget,
+	ratchetTarget,
 	isTrustedWorkoutSource
 } from './energy.ts';
 
@@ -89,52 +87,18 @@ assert.equal(activeCorrectionFactor(600, 900, 300), 0.5);
 assert.equal(activeCorrectionFactor(600, 320, 300), 1); // ~no passive signal ⇒ no correction
 assert.equal(activeCorrectionFactor(200, 900, 0), 0.4); // clamped to floor
 
-// ── Live intraday target ─────────────────────────────────────────────────────
-assert.equal(wakingFractionRemaining(7), 1); // at/before wake → whole day ahead
-assert.equal(wakingFractionRemaining(23), 0); // at/after sleep → none left
-assert.equal(wakingFractionRemaining(15), 0.5); // midpoint of 7..23
-{
-	const b = activityBuckets([100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]);
-	assert.equal(b.length, 5);
-	assert(b[0] <= b[2] && b[2] <= b[4], 'buckets ascending');
-}
-assert.deepEqual(activityBuckets([]), [0, 0, 0, 0, 0]);
-// On-pace typical day (level = avg) lands at maintenance − deficit at any time.
-assert.equal(
-	liveTarget({
+// ── Ratcheting target ────────────────────────────────────────────────────────
+const rt = (actualActiveKcal: number) =>
+	ratchetTarget({
 		maintenanceKcal: 2400,
 		modeDeltaKcal: -500,
 		avgActiveKcal: 800,
-		actualActiveKcal: 400,
-		levelActiveKcal: 800,
-		fractionRemaining: 0.5
-	}),
-	1900
-);
-// Rest morning (low level, nothing burned yet) → target drops.
-assert.equal(
-	liveTarget({
-		maintenanceKcal: 2400,
-		modeDeltaKcal: -500,
-		avgActiveKcal: 800,
-		actualActiveKcal: 0,
-		levelActiveKcal: 200,
-		fractionRemaining: 1
-	}),
-	1300
-);
-// End of day (fraction 0) converges to real burn − deficit, ignoring the level.
-assert.equal(
-	liveTarget({
-		maintenanceKcal: 2400,
-		modeDeltaKcal: -500,
-		avgActiveKcal: 800,
-		actualActiveKcal: 1200,
-		levelActiveKcal: 200,
-		fractionRemaining: 0
-	}),
-	2300
-);
+		actualActiveKcal
+	});
+assert.equal(rt(800), 1900); // typical day (actual = avg) → maintenance − deficit
+assert.equal(rt(0), 1100); // conservative start (nothing burned) → maintenance − avgActive − deficit
+assert(rt(1200) > rt(400)); // ratchets UP with real burn, never on a projection
+assert(rt(400) > rt(0)); // monotonic in actual active
 
 // Trusted workout source: dedicated third-party trackers yes, Apple's own no,
 // null (pre-capture) yes (no regression).

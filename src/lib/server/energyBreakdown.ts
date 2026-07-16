@@ -9,9 +9,7 @@ import {
 	addDays,
 	correctActive,
 	activeCorrectionFactor,
-	activityBuckets,
-	wakingFractionRemaining,
-	liveTarget,
+	ratchetTarget,
 	modeDeficit,
 	isTrustedWorkoutSource,
 	type GoalMode
@@ -50,27 +48,17 @@ export type EnergyContext = {
 	bodyFatPct: number | null;
 	weightKg: number | null;
 	modeDeltaKcal: number | null;
-	targetKcal: number | null; // = correction.todayTargetKcal
+	targetKcal: number | null; // RATCHET eat-to goal (display): rises with real burn, never drops
+	stableTargetKcal: number | null; // non-ratcheting assumed intake for deficit math (= correction.todayTargetKcal)
 	fixedCalorieTarget: number; // the user's configured settings.calorieTarget (fallback)
 	// Active averages (corrected) + today's live inputs
 	avgRawActive: number | null;
 	avgCorrectedActive: number | null;
 	avgTrustedKcal: number | null;
-	buckets: number[]; // 5 activity-level representatives (corrected active)
-	activityLevel: number | null; // today's override 0–4, or null (auto)
-	fractionRemaining: number;
 	// Reusable so callers don't re-query
 	windowLedger: DayEnergy[]; // RAW, fillBmrGaps'd, [today-30 … today]
 	woByDate: Map<string, { kcal: number; list: WorkoutLite[] }>;
 };
-
-function nowHourInAppTz(): number {
-	return Number(
-		new Intl.DateTimeFormat('en-US', { timeZone: APP_TZ, hour: '2-digit', hour12: false }).format(
-			new Date()
-		)
-	);
-}
 
 export async function resolveCorrection(settingsRow?: SettingsRow | null): Promise<EnergyContext> {
 	const today = todayLabel();
@@ -134,12 +122,10 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 			? activeCorrectionFactor(realActiveAvg, avgRawActive, avgTrusted)
 			: 1;
 
-	// Per-day corrected active over completed days → avg + activity buckets.
-	const correctedActives = completed.map((d) =>
-		correctActive(d.activeKcal ?? 0, trustedByDate.get(d.date) ?? 0, factor)
+	// Avg corrected active over completed days (already inside calibrated maintenance).
+	const avgCorrectedActive = mean(
+		completed.map((d) => correctActive(d.activeKcal ?? 0, trustedByDate.get(d.date) ?? 0, factor))
 	);
-	const avgCorrectedActive = mean(correctedActives);
-	const buckets = activityBuckets(correctedActives);
 
 	// Maintenance + per-mode target delta (recomp needs no body data, lean_bulk only
 	// weight, cut both; fall back to the latest weigh-in when the trend is null).
@@ -160,42 +146,39 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 				? Math.round(modeDeficit(mode, bodyFatPct ?? 0, weightKg))
 				: null;
 
-	// Live intraday target for today.
+	// Ratcheting target: real active burned so far only (no forward projection), so it
+	// starts conservative and only climbs — never drops out from under you mid-day.
 	const todayEntry = windowLedger.find((d) => d.date === today);
 	const actualActiveKcalToday = correctActive(
 		todayEntry?.activeKcal ?? 0,
 		trustedByDate.get(today) ?? 0,
 		factor
 	);
-	const activityLevel =
-		s?.activityLevelDate === today && s?.activityLevel != null
-			? Math.min(4, Math.max(0, s.activityLevel))
+	// The displayed eat-to goal RATCHETS (real burn only). The deficit's assumed
+	// intake must NOT ratchet: the ratchet rises 1:1 with active kcal, so using it as
+	// effIntake would cancel activity out of the deficit (burn +1, assumed intake +1)
+	// and freeze deficit/active-to-go after a workout. So the deficit uses a STABLE
+	// assumed intake (typical-day target = maintenance − deficit); only display ratchets.
+	const stableTargetKcal =
+		maintenanceKcal != null && modeDeltaKcal != null
+			? Math.round(maintenanceKcal + modeDeltaKcal)
 			: null;
-	const levelActiveKcal =
-		activityLevel != null && buckets.length ? buckets[activityLevel] : avgCorrectedActive;
-	const fractionRemaining = wakingFractionRemaining(nowHourInAppTz());
-
-	let targetKcal: number | null = null;
-	if (maintenanceKcal != null && modeDeltaKcal != null) {
-		targetKcal =
-			avgCorrectedActive != null && levelActiveKcal != null
-				? Math.round(
-						liveTarget({
-							maintenanceKcal,
-							modeDeltaKcal,
-							avgActiveKcal: avgCorrectedActive,
-							actualActiveKcal: actualActiveKcalToday,
-							levelActiveKcal,
-							fractionRemaining
-						})
-					)
-				: Math.round(maintenanceKcal + modeDeltaKcal); // stable fallback (no active history)
+	let targetKcal: number | null = stableTargetKcal; // ratchet; falls back to stable with no active history
+	if (stableTargetKcal != null && avgCorrectedActive != null) {
+		targetKcal = Math.round(
+			ratchetTarget({
+				maintenanceKcal: maintenanceKcal!,
+				modeDeltaKcal: modeDeltaKcal!,
+				avgActiveKcal: avgCorrectedActive,
+				actualActiveKcal: actualActiveKcalToday
+			})
+		);
 	}
 
 	return {
 		today,
 		mode,
-		correction: { factor, trustedByDate, todayTargetKcal: targetKcal },
+		correction: { factor, trustedByDate, todayTargetKcal: stableTargetKcal },
 		factor,
 		maintenanceKcal,
 		maintenanceSource,
@@ -205,12 +188,10 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 		weightKg,
 		modeDeltaKcal,
 		targetKcal,
+		stableTargetKcal,
 		avgRawActive: avgRawActive != null ? Math.round(avgRawActive) : null,
 		avgCorrectedActive: avgCorrectedActive != null ? Math.round(avgCorrectedActive) : null,
 		avgTrustedKcal: avgTrusted != null ? Math.round(avgTrusted) : null,
-		buckets,
-		activityLevel,
-		fractionRemaining,
 		fixedCalorieTarget: s?.calorieTarget ?? 2100,
 		windowLedger,
 		woByDate
