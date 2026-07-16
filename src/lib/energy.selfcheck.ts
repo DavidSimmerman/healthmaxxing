@@ -16,7 +16,7 @@ import {
 	activeCorrectionFactor,
 	ratchetTarget,
 	targetBaseline,
-	deficitBank,
+	deficitBalance,
 	isTrustedWorkoutSource
 } from './energy.ts';
 
@@ -120,17 +120,18 @@ assert.equal(
 	2900
 );
 
-// ── Recovery bank ─────────────────────────────────────────────────────────────
-// goal 700, cap 500. Ordinary on-goal days build nothing; overshoots earn a decaying,
-// capped credit that a low-deficit day bleeds back to zero.
+// ── Deficit balance (recovery + debt) ─────────────────────────────────────────
+// goal 700, cap ±500. Over-goal days earn RECOVERY (+), under-goal days owe DEBT (−); both
+// decay 0.5/day and are symmetric-capped.
 const G = 700;
-assert.equal(deficitBank([{ deficitKcal: 700, goalKcal: G }], 500), 0); // exactly on goal → 0
-assert.equal(deficitBank([{ deficitKcal: 300, goalKcal: G }], 500), 0); // under goal → floored at 0 (no debt)
-assert.equal(deficitBank([{ deficitKcal: 900, goalKcal: G }], 500), 200); // +200 overshoot → 200 credit
-assert.equal(deficitBank([{ deficitKcal: 5000, goalKcal: G }], 500), 500); // huge day → capped at 500
+assert.equal(deficitBalance([{ deficitKcal: 700, goalKcal: G }], 500), 0); // exactly on goal → 0
+assert.equal(deficitBalance([{ deficitKcal: 900, goalKcal: G }], 500), 200); // +200 over → 200 recovery
+assert.equal(deficitBalance([{ deficitKcal: 300, goalKcal: G }], 500), -400); // 400 under → 400 debt
+assert.equal(deficitBalance([{ deficitKcal: 5000, goalKcal: G }], 500), 500); // huge deficit → +cap
+assert.equal(deficitBalance([{ deficitKcal: -1000, goalKcal: G }], 500), -500); // big surplus → −cap (debt)
 // decay: +400 yesterday, on-goal today → 0.5×400 + 0 = 200
 assert.equal(
-	deficitBank(
+	deficitBalance(
 		[
 			{ deficitKcal: 1100, goalKcal: G },
 			{ deficitKcal: 700, goalKcal: G }
@@ -139,27 +140,46 @@ assert.equal(
 	),
 	200
 );
-// a low-deficit day clears a standing bank fast: 0.5×200 + (300−700) = −300 → floored 0
+// recovery flips to debt when you then eat over: 0.5×200 + (300−700) = −300
 assert.equal(
-	deficitBank(
+	deficitBalance(
 		[
 			{ deficitKcal: 900, goalKcal: G },
 			{ deficitKcal: 300, goalKcal: G }
 		],
 		500
 	),
-	0
+	-300
 );
-assert.equal(deficitBank([{ deficitKcal: null, goalKcal: G }], 500), 0); // no data → skipped
-// bank raises the eat-to target 1:1 (recovery = eat more), on top of the burn-anchored value
+assert.equal(deficitBalance([{ deficitKcal: null, goalKcal: G }], 500), 0); // no data → skipped
+// balance shifts the eat-to target 1:1: recovery raises it, debt lowers it
 assert.equal(
 	ratchetTarget({
 		maintenanceKcal: 2400,
 		modeDeltaKcal: -500,
 		actualBurnKcal: 2900,
-		bankKcal: 300
+		balanceKcal: 300
 	}),
-	2700 // 2900 burn − 500 deficit + 300 recovery
+	2700 // 2900 − 500 + 300 recovery
+);
+assert.equal(
+	ratchetTarget({
+		maintenanceKcal: 2400,
+		modeDeltaKcal: -500,
+		actualBurnKcal: 2900,
+		balanceKcal: -300
+	}),
+	2100 // 2900 − 500 − 300 debt
+);
+// safety floor: deep debt on a low-burn day can't recommend an unsafely low intake
+assert.equal(
+	ratchetTarget({
+		maintenanceKcal: 2400,
+		modeDeltaKcal: -500,
+		actualBurnKcal: 1800,
+		balanceKcal: -500
+	}),
+	1500 // 2160 − 500 − 500 = 1160 → floored to MIN_EAT_TO_KCAL
 );
 
 // Trusted workout source: dedicated third-party trackers yes, Apple's own no,

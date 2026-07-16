@@ -141,12 +141,12 @@ export async function load() {
 	// Active-calorie goal: how many active kcal you still need today to hit your
 	// deficit — each active kcal adds 1 to the deficit, so it's just the gap to the
 	// goal. D = the mode's leanness-scaled deficit, else the configured fixed target.
-	// On a recovery day the bank eases today's target UP, so drop the deficit goal by the
-	// same amount (never below 0) — else the ring would push you to burn back what the
-	// recovery just credited.
+	// The deficit balance shifts today's target: recovery eases it UP (drop the goal so the
+	// ring doesn't push you to burn the credit back), debt trims it DOWN (raise the goal to
+	// catch up). Same signed shift keeps target and ring in step. Never below 0.
 	const deficitGoal =
 		ctx.modeDeltaKcal != null
-			? Math.max(0, -ctx.modeDeltaKcal - ctx.bankKcal)
+			? Math.max(0, -ctx.modeDeltaKcal - ctx.balanceKcal)
 			: (settingsRow?.deficitTargetKcal ?? 500);
 	const activeToGo =
 		todayEnergy?.deficitKcal != null

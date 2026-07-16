@@ -11,7 +11,8 @@ import {
 	activeCorrectionFactor,
 	ratchetTarget,
 	targetBaseline,
-	deficitBank,
+	deficitBalance,
+	MIN_EAT_TO_KCAL,
 	modeDeficit,
 	isTrustedWorkoutSource,
 	type GoalMode
@@ -50,7 +51,7 @@ export type EnergyContext = {
 	bodyFatPct: number | null;
 	weightKg: number | null;
 	modeDeltaKcal: number | null;
-	bankKcal: number; // recovery-bank credit folded into the targets today (0 when none / non-cut)
+	balanceKcal: number; // signed deficit balance folded into today's targets (+ recovery / − debt; 0 when none / non-cut)
 	targetKcal: number | null; // RATCHET eat-to goal (display): rises with real burn, never drops
 	stableTargetKcal: number | null; // non-ratcheting assumed intake for deficit math (= correction.todayTargetKcal)
 	fixedCalorieTarget: number; // the user's configured settings.calorieTarget (fallback)
@@ -164,15 +165,16 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 			? targetBaseline(maintenanceKcal, modeDeltaKcal)
 			: null;
 
-	// Recovery bank: ease the deficit for a day or two after a big-deficit day so loss
-	// doesn't run away. Cut-only. Measured against the deficit GOAL (−modeDelta) — the deficit
-	// you net on a normal day now that the target is burn-anchored — so ordinary days don't
-	// build it; capped at that same goal so recovery tops out at eating to maintenance, never a
-	// surplus. From COMPLETED, logged, non-vacation days (same set the calibration trusts); the
-	// 0.5/day decay makes days past ~10 ago negligible → no stored state needed.
-	let bankKcal = 0;
+	// Deficit balance: recovery (ease off) after big-deficit days, DEBT (trim down) after days
+	// you fell short — so neither losing too fast nor stalling compounds. Cut-only. Measured
+	// against the deficit GOAL (−modeDelta) — the deficit you net on a normal day now that the
+	// target is burn-anchored; capped at ±that goal (recovery tops out at eating to maintenance,
+	// debt at a doubled deficit, and the target's own MIN floor guards the low end). From
+	// COMPLETED, logged, non-vacation days (same set the calibration trusts); the 0.5/day decay
+	// makes days past ~10 ago negligible → no stored state needed.
+	let balanceKcal = 0;
 	if (baseKcal != null && maintenanceKcal != null && modeDeltaKcal != null && modeDeltaKcal < 0) {
-		const bankDays = completed.map((d) => ({
+		const balanceDays = completed.map((d) => ({
 			deficitKcal:
 				d.bmrKcal != null
 					? d.bmrKcal +
@@ -182,15 +184,16 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 					: null,
 			goalKcal: -modeDeltaKcal
 		}));
-		bankKcal = Math.round(deficitBank(bankDays, -modeDeltaKcal));
+		balanceKcal = Math.round(deficitBalance(balanceDays, -modeDeltaKcal));
 	}
 
 	// The displayed eat-to goal is burn-anchored: it climbs 1:1 as today's real burn passes
 	// the conservative estimate. The deficit's assumed intake must NOT track burn like that —
 	// it would cancel burn out of the deficit (burn +1, assumed intake +1) and freeze
 	// deficit/active-to-go. So the deficit uses the STABLE floor (conservative estimate −
-	// deficit + recovery bank), the target's morning value; only the displayed goal climbs.
-	const stableTargetKcal = baseKcal != null ? Math.round(baseKcal + bankKcal) : null;
+	// deficit + deficit balance), the target's morning value; only the displayed goal climbs.
+	const stableTargetKcal =
+		baseKcal != null ? Math.round(Math.max(MIN_EAT_TO_KCAL, baseKcal + balanceKcal)) : null;
 	let targetKcal: number | null = stableTargetKcal; // burn-anchored; falls back to the floor with no burn yet
 	if (baseKcal != null && correctedBurnToday != null) {
 		targetKcal = Math.round(
@@ -198,7 +201,7 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 				maintenanceKcal: maintenanceKcal!,
 				modeDeltaKcal: modeDeltaKcal!,
 				actualBurnKcal: correctedBurnToday,
-				bankKcal
+				balanceKcal
 			})
 		);
 	}
@@ -215,7 +218,7 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 		bodyFatPct,
 		weightKg,
 		modeDeltaKcal,
-		bankKcal,
+		balanceKcal,
 		targetKcal,
 		stableTargetKcal,
 		avgRawActive: avgRawActive != null ? Math.round(avgRawActive) : null,

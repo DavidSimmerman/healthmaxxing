@@ -192,28 +192,26 @@ export function targetBaseline(maintenanceKcal: number, modeDeltaKcal: number): 
 	return fraction * maintenanceKcal + modeDeltaKcal;
 }
 
-// Rolling "recovery bank" (kcal ≥ 0) that eases the deficit for a day or two after you
-// overshoot it, so a single big-deficit day doesn't compound into losing weight too fast.
-// It's an exponential moving average of daily overshoot with a 0.5/day decay — a spike
-// fades over ~2-3 days, neither piled entirely onto the next day nor chased for a week:
-//   bank = clamp(0.5 × yesterdayBank + (yesterdayDeficit − yesterdayGoal), 0, maxKcal)
-// Floored at 0 (over-eating never creates "debt" — a low-deficit day just bleeds the bank
-// down). Capped at maxKcal so recovery stops at a chosen floor and never recommends a
-// surplus. `goalKcal` is the CUSHIONED effective deficit, so ordinary days (which already
-// run that deficit) don't build the bank — only genuine overshoots do. `days` run
-// oldest→newest; the decay makes anything past ~10 days ago negligible, so it can be
-// recomputed from the trailing ledger with no stored state. Days with no deficit data are
-// skipped (carry the bank, don't inject a phantom over/under).
-export function deficitBank(
+// Rolling signed "deficit balance" (kcal): recovery when you overshoot your deficit goal,
+// DEBT when you fall short of it — so neither losing too fast nor stalling compounds. It's an
+// exponential moving average of daily over/under-shoot with a 0.5/day decay, so a spike fades
+// over ~2-3 days (not piled onto the next day, not chased for a week):
+//   balance = clamp(0.5 × yesterdayBalance + (yesterdayDeficit − yesterdayGoal), −maxKcal, maxKcal)
+// Positive (recovery) → raise today's eat-to (you already lost enough, ease off). Negative
+// (debt) → lower it (you ate over, trim to catch back up). Symmetric cap at ±maxKcal so
+// recovery never recommends a surplus and debt can't spiral. `days` run oldest→newest; the
+// decay makes anything past ~10 days ago negligible, so it's recomputed from the trailing
+// ledger with no stored state. Days with no deficit data are skipped (carry the balance).
+export function deficitBalance(
 	days: { deficitKcal: number | null; goalKcal: number }[],
 	maxKcal: number
 ): number {
-	let bank = 0;
+	let balance = 0;
 	for (const d of days) {
 		if (d.deficitKcal == null || !Number.isFinite(d.deficitKcal)) continue;
-		bank = clamp(0.5 * bank + (d.deficitKcal - d.goalKcal), 0, maxKcal);
+		balance = clamp(0.5 * balance + (d.deficitKcal - d.goalKcal), -maxKcal, maxKcal);
 	}
-	return bank;
+	return balance;
 }
 
 // ── Daily eat-to target ──────────────────────────────────────────────────────
@@ -223,19 +221,24 @@ export function deficitBank(
 // As today's ACTUAL corrected burn (BMR + corrected active + TEF) climbs past that estimate,
 // the target rises 1:1 with it, converging on `today's burn − deficit`: you eat back what you
 // actually burn while still netting the deficit. Collapses to
-// `max(fraction × maintenance, burn) + modeDelta` (+ recovery bank). Monotonic — today's burn
-// only grows intra-day, so it never drops out from under you. On a cut the conservative
+// `max(fraction × maintenance, burn) + modeDelta` (+ deficit balance). Monotonic in burn — it
+// never drops out from under you. `balanceKcal` (signed, see deficitBalance) shifts it:
+// recovery raises it (ease off), debt lowers it (trim to catch up). On a cut the conservative
 // fraction applies; recomp/lean_bulk assume full maintenance (fraction 1) so the low estimate
-// can't floor them into an accidental deficit.
+// can't floor them into an accidental deficit. Final target is floored at MIN_EAT_TO_KCAL so
+// debt on a low-burn day can't recommend an unsafely low intake.
+// ponytail: fixed safety floor; nudge if it clamps real targets.
+export const MIN_EAT_TO_KCAL = 1500;
+
 export function ratchetTarget(opts: {
 	maintenanceKcal: number;
 	modeDeltaKcal: number; // signed (negative = deficit)
 	actualBurnKcal: number; // corrected total burn (BMR + corrected active + TEF) accrued so far today
-	bankKcal?: number; // recovery-bank credit added to the target (raises eat-to); default 0
+	balanceKcal?: number; // signed deficit balance: + recovery raises eat-to, − debt lowers it; default 0
 }): number {
 	const fraction = opts.modeDeltaKcal < 0 ? TARGET_BUFFER_FRACTION : 1;
 	const assumedBurn = Math.max(fraction * opts.maintenanceKcal, opts.actualBurnKcal);
-	return assumedBurn + opts.modeDeltaKcal + (opts.bankKcal ?? 0);
+	return Math.max(MIN_EAT_TO_KCAL, assumedBurn + opts.modeDeltaKcal + (opts.balanceKcal ?? 0));
 }
 
 // Which workout calories to trust at full value (not haircut): dedicated

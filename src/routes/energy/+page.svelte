@@ -109,10 +109,15 @@
 				you out-burn that estimate — so you eat back what you actually burn.{:else}Tracks today's
 				burn: eat back what you burn, adjusted for your goal.{/if} It never drops out from under you.
 		</p>
-		{#if b.bankKcal > 0}
+		{#if b.balanceKcal > 0}
 			<p class="mt-1 text-xs" style="color: var(--color-accent-from);">
-				+{num(b.bankKcal)} recovery — eased back after a recent big-deficit day so you don't lose too
+				+{num(b.balanceKcal)} recovery — eased up after recent big-deficit days so you don't lose too
 				fast. Fades over the next day or two.
+			</p>
+		{:else if b.balanceKcal < 0}
+			<p class="mt-1 text-xs" style="color: var(--color-fat);">
+				{num(b.balanceKcal)} debt — trimmed after recent days under your deficit goal, to catch back up.
+				Fades over the next day or two.
 			</p>
 		{/if}
 	</section>

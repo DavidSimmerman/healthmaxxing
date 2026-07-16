@@ -209,7 +209,9 @@ async function periodSummary(
 	specsFor: (date: string) => SpecMap,
 	// Caller-prefetched day metrics for [from, to], to avoid a duplicate range query.
 	prefetched?: DayMetrics[] | Promise<DayMetrics[]>,
-	correction?: DayCorrection
+	correction?: DayCorrection,
+	// The non-vacation rollup spec (deficit target overridden to the dynamic goal); SPEC default.
+	normalSpec: SpecMap = SPEC
 ): Promise<PeriodSummary> {
 	const today = todayLabel();
 	const completed = (await (prefetched ?? dayMetricsForRange(from, to, correction))).filter(
@@ -236,7 +238,7 @@ async function periodSummary(
 		if (specsFor(d) === VACATION_SPECS) vacDays++;
 		if (d === to) break;
 	}
-	const rollupSpecs = vacDays * 2 > totalDays ? VACATION_SPECS : SPEC;
+	const rollupSpecs = vacDays * 2 > totalDays ? VACATION_SPECS : normalSpec;
 
 	const ps = scorePeriod(completed, { ...extras, days: elapsedDays }, specsFor, rollupSpecs);
 	return {
@@ -254,11 +256,24 @@ async function periodSummary(
 
 // Everything the /goals page needs for the selected day, plus its week & month rollups.
 export async function buildGoalsView(anchor: string): Promise<GoalsView> {
-	// Per-day targets: normal, or relaxed for days inside a trip window.
-	const specsFor = await loadSpecsFor();
 	// One correction (active haircut + dynamic target) for every ledger read below,
 	// so scoring uses the same corrected deficits the rest of the app now shows.
-	const correction = (await resolveCorrection()).correction;
+	const ctx = await resolveCorrection();
+	const correction = ctx.correction;
+	// Score the calorie-deficit goal against the app's REAL daily deficit goal (the mode's
+	// leanness-scaled deficit, −modeDelta) instead of the old static 750. One overridden
+	// "normal" spec drives both the per-day specs and the week/month rollup below; vacation
+	// days keep their relaxed target.
+	const normalSpec: SpecMap =
+		ctx.modeDeltaKcal != null
+			? { ...SPEC, deficit: { ...SPEC.deficit, target: -ctx.modeDeltaKcal } }
+			: SPEC;
+	// Per-day targets: overridden-normal, or relaxed for days inside a trip window.
+	const baseSpecsFor = await loadSpecsFor();
+	const specsFor = (date: string): SpecMap => {
+		const s = baseSpecsFor(date);
+		return s === VACATION_SPECS ? s : normalSpec;
+	};
 
 	// Bank/debt entering `anchor`: the running surplus/shortfall over this week's
 	// days BEFORE it. Sunday (week start) → no prior days → no carry-over.
@@ -297,14 +312,15 @@ export async function buildGoalsView(anchor: string): Promise<GoalsView> {
 	// the week rollup; they're also returned for the /goals loader to reuse.
 	const weekMetricsP = dayMetricsForRange(weekStart, weekEnd, correction);
 	const [week, month, weekDayMetrics] = await Promise.all([
-		periodSummary(weekStart, weekEnd, 7, specsFor, weekMetricsP, correction),
+		periodSummary(weekStart, weekEnd, 7, specsFor, weekMetricsP, correction, normalSpec),
 		periodSummary(
 			`${ym}-01`,
 			`${ym}-${String(lastDom).padStart(2, '0')}`,
 			lastDom,
 			specsFor,
 			undefined,
-			correction
+			correction,
+			normalSpec
 		),
 		weekMetricsP
 	]);
