@@ -250,3 +250,48 @@ export function ratchetTarget(opts: {
 export function isTrustedWorkoutSource(source: string | null): boolean {
 	return source == null || !source.toLowerCase().includes('apple');
 }
+
+// ── Workout active energy (distance workouts: runs, walks, rides) ─────────────
+// Apple over-estimates PASSIVE active energy, so the daily total gets a weight-trend
+// haircut — but a GPS workout with a MEASURED distance is physically grounded and
+// shouldn't be cut like a couch estimate. So we compute the workout's OWN active kcal
+// from objective signals and let it ride at full value (trusted), out of the haircut pool.
+//
+// Anchor = net ACSM cost of transport: running costs ~1.0 kcal per kg per km, walking
+// ~0.5 — essentially pace-independent (pace only picks walk-vs-run), already net of
+// resting. When avg HR is present we refine with the Keytel (2005) HR equation — the most
+// accurate objective per-workout estimator in the literature — converted to net by
+// subtracting ~1 MET of resting, then CLAMPED to a sanity band around the distance anchor
+// so a bad HR sample can't produce a wild number (sensor input = trust boundary). Hills/
+// heat legitimately move HR, so the band is wide (0.5×–2×). Returns null when there's no
+// distance to anchor on (HR alone — e.g. strength training — over-reads; leave those to the
+// existing path). The weight-trend calibration stays the system referee for absolute scale.
+// ponytail: fixed 1-MET resting + coarse sanity band; scale self-corrects via calibration.
+// Add the VO2max-adjusted Keytel term only if per-workout accuracy proves insufficient.
+const KEYTEL = {
+	// kJ/min = c + hr·HR + w·weightKg + a·ageYears  (Keytel et al. 2005, submaximal)
+	male: { c: -55.0969, hr: 0.6309, w: 0.1988, a: 0.2017 },
+	female: { c: -20.4022, hr: 0.4472, w: -0.1263, a: 0.074 }
+} as const;
+const RUN_KMH = 8; // walk↔run threshold: below is walking cost, at/above is running
+const KJ_PER_KCAL = 4.184;
+
+export function workoutActiveKcal(
+	w: {
+		avgHr: number | null;
+		distanceKm: number | null;
+		durationMin: number | null;
+		weightKg: number | null;
+	},
+	profile: { ageYears: number | null; sex: string | null }
+): number | null {
+	const { distanceKm: dist, durationMin: dur, weightKg: wt, avgHr } = w;
+	if (dist == null || dur == null || wt == null || dist <= 0 || dur <= 0 || wt <= 0) return null;
+	const speedKmh = dist / (dur / 60);
+	const distEst = dist * wt * (speedKmh >= RUN_KMH ? 1.0 : 0.5); // net ACSM cost of transport
+	const k = profile.sex === 'male' ? KEYTEL.male : profile.sex === 'female' ? KEYTEL.female : null;
+	if (!k || avgHr == null || avgHr <= 0 || profile.ageYears == null) return distEst;
+	const gross = ((k.c + k.hr * avgHr + k.w * wt + k.a * profile.ageYears) / KJ_PER_KCAL) * dur;
+	const resting = (wt * dur) / 60; // ~1 MET (1 kcal·kg⁻¹·hr⁻¹) → net active
+	return clamp(gross - resting, 0.5 * distEst, 2 * distEst); // HR refines within distance sanity band
+}
