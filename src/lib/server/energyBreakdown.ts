@@ -16,7 +16,6 @@ import {
 	modeDeficit,
 	isTrustedWorkoutSource,
 	workoutActiveKcal,
-	ageOn,
 	type GoalMode
 } from '$lib/energy';
 
@@ -24,31 +23,22 @@ const WINDOW_DAYS = 30;
 const MODES: GoalMode[] = ['cut', 'recomp', 'lean_bulk'];
 
 type WorkoutRow = {
+	name: string;
 	kcal: number | null;
 	source: string | null;
-	avgHr: number | null;
 	distanceKm: number | null;
-	durationMin: number | null;
 };
-type Profile = { ageYears: number | null; sex: string | null };
 
 // Trusted (out-of-haircut) active kcal for one workout. Dedicated trackers (walking pad,
 // legacy null-source) are already accurate — they ride on their own kcal as-is, untouched.
-// Apple's OWN workout estimate is the one we replace: for a run/walk/ride with a measured
-// distance we swap in our objective number (distance + HR + weight); with no distance to
-// anchor on (e.g. strength) it stays in the haircut pool, as before. `weightKg` is the
-// latest weigh-in (weight drifts <a few % over the window — under the formula's own error,
-// and calibration absorbs the residual).
-function trustWorkout(
-	w: WorkoutRow,
-	weightKg: number | null,
-	profile: Profile
-): { trusted: boolean; kcal: number } {
+// Apple's OWN workout estimate is the one we replace: a run/walk with a measured distance
+// gets our net-cost-of-transport number (distance × weight); anything with no distance to
+// stand on (strength) or a non-transport type (cycling) stays on the existing path.
+// `weightKg` is the latest weigh-in (weight drifts <a few % over the window — under the
+// formula's own error, and calibration absorbs the residual).
+function trustWorkout(w: WorkoutRow, weightKg: number | null): { trusted: boolean; kcal: number } {
 	if (isTrustedWorkoutSource(w.source)) return { trusted: true, kcal: w.kcal ?? 0 };
-	const own = workoutActiveKcal(
-		{ avgHr: w.avgHr, distanceKm: w.distanceKm, durationMin: w.durationMin, weightKg },
-		profile
-	);
+	const own = workoutActiveKcal({ name: w.name, distanceKm: w.distanceKm, weightKg });
 	return own != null ? { trusted: true, kcal: own } : { trusted: false, kcal: w.kcal ?? 0 };
 }
 
@@ -81,7 +71,6 @@ export type EnergyContext = {
 	estimatedTdee: number | null;
 	bodyFatPct: number | null;
 	weightKg: number | null;
-	profile: Profile; // age + sex for the workout HR formula
 	modeDeltaKcal: number | null;
 	balanceKcal: number; // signed deficit balance folded into today's targets (+ recovery / − debt; 0 when none / non-cut)
 	targetKcal: number | null; // RATCHET eat-to goal (display): rises with real burn, never drops
@@ -117,11 +106,7 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 				name: workouts.name,
 				kcal: workouts.kcal,
 				source: workouts.source,
-				avgHr: workouts.avgHr,
 				distanceKm: workouts.distanceKm,
-				durationMin: sql<
-					number | null
-				>`extract(epoch from (${workouts.endedAt} - ${workouts.startedAt})) / 60`,
 				time: sql<string>`to_char((${workouts.startedAt} at time zone 'UTC' at time zone ${APP_TZ}), 'FMHH12:MI AM')`,
 				startedAt: sql<string>`${workouts.startedAt}::text`
 			})
@@ -131,23 +116,19 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 
 	const mode = (MODES.includes(s?.goalMode as GoalMode) ? s!.goalMode : 'cut') as GoalMode;
 
-	// Body inputs for the workout formula (latest weigh-in + profile), reused below for
-	// maintenance/mode. Weight drifts slowly, so one value across the window is plenty.
+	// Latest weigh-in (+ body-fat), reused for the workout formula and maintenance/mode.
+	// Weight drifts slowly, so one value across the window is plenty.
 	const latest = insights.body.series.at(-1);
 	const bodyFatPct = insights.body.bodyFat?.current ?? latest?.bodyFatPct ?? null;
 	const weightKg = insights.body.weight?.current ?? latest?.weightKg ?? null;
-	const profile: Profile = {
-		ageYears: s?.birthDate ? ageOn(today, s.birthDate) : null,
-		sex: s?.sex ?? null
-	};
 
-	// Group workouts by local day. Runs/walks/rides with a measured distance use OUR
-	// objective active-kcal (distance + HR + weight, out of the haircut pool); dedicated
-	// third-party trackers (pad) still ride on their own kcal; everything else follows the
-	// source rule. Null kcal counts as 0 trusted.
+	// Group workouts by local day. Runs/walks with a measured distance use OUR net-cost-of-
+	// transport active-kcal (distance × weight, out of the haircut pool); dedicated third-party
+	// trackers (pad) still ride on their own kcal; everything else follows the source rule.
+	// Null kcal counts as 0 trusted.
 	const woByDate = new Map<string, { kcal: number; list: WorkoutLite[] }>();
 	for (const w of woRows) {
-		const { trusted, kcal } = trustWorkout(w, weightKg, profile);
+		const { trusted, kcal } = trustWorkout(w, weightKg);
 		const e = woByDate.get(w.date) ?? { kcal: 0, list: [] };
 		e.kcal += trusted ? kcal : 0; // only trusted kcal count toward the carve-out
 		e.list.push({
@@ -268,7 +249,6 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 		estimatedTdee: insights.estimatedTdee,
 		bodyFatPct,
 		weightKg,
-		profile,
 		modeDeltaKcal,
 		balanceKcal,
 		targetKcal,
@@ -293,26 +273,22 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 async function trustedWorkoutsByDate(
 	from: string,
 	to: string,
-	weightKg: number | null,
-	profile: Profile
+	weightKg: number | null
 ): Promise<Map<string, number>> {
 	const woDate = sql<string>`(${workouts.startedAt} at time zone 'UTC' at time zone ${APP_TZ})::date`;
 	const rows = await db
 		.select({
 			date: sql<string>`${woDate}::text`,
+			name: workouts.name,
 			kcal: workouts.kcal,
 			source: workouts.source,
-			avgHr: workouts.avgHr,
-			distanceKm: workouts.distanceKm,
-			durationMin: sql<
-				number | null
-			>`extract(epoch from (${workouts.endedAt} - ${workouts.startedAt})) / 60`
+			distanceKm: workouts.distanceKm
 		})
 		.from(workouts)
 		.where(sql`${woDate} between ${from}::date and ${to}::date`);
 	const m = new Map<string, number>();
 	for (const r of rows) {
-		const { trusted, kcal } = trustWorkout(r, weightKg, profile);
+		const { trusted, kcal } = trustWorkout(r, weightKg);
 		if (trusted) m.set(r.date, (m.get(r.date) ?? 0) + kcal);
 	}
 	return m;
@@ -325,14 +301,9 @@ export async function correctedDeficitDays(
 ): Promise<DayEnergy[]> {
 	// Factor + dynamic target come from the calibration window, but trusted-workout
 	// kcal must cover the ACTUAL requested range (which may predate that window). The
-	// workout formula needs the body inputs the context already resolved.
+	// workout formula needs the latest weight the context already resolved.
 	const ctx = await resolveCorrection(opts?.settingsRow);
-	const trustedByDate = await trustedWorkoutsByDate(
-		fromDate,
-		toDate,
-		ctx.weightKg,
-		ctx.profile
-	);
+	const trustedByDate = await trustedWorkoutsByDate(fromDate, toDate, ctx.weightKg);
 	return deficitDays(fromDate, toDate, {
 		settingsRow: opts?.settingsRow,
 		correction: { ...ctx.correction, trustedByDate }

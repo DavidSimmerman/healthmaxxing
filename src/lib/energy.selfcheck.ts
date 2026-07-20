@@ -190,41 +190,17 @@ assert.equal(isTrustedWorkoutSource('com.kingsmith.walkingpad'), true);
 assert.equal(isTrustedWorkoutSource('com.apple.health'), false);
 assert.equal(isTrustedWorkoutSource('com.apple.workout.build'), false);
 
-// Workout active energy: distance anchors, HR refines within a sanity band.
+// Workout active energy: net cost of transport, distance × weight, split by activity type.
 {
-	const male = { ageYears: 40, sex: 'male' };
-	// No distance to anchor on → null (leave HR-only workouts, e.g. strength, to the old path).
-	assert.equal(
-		workoutActiveKcal({ avgHr: 150, distanceKm: null, durationMin: 45, weightKg: 70 }, male),
-		null
-	);
-	assert.equal(
-		workoutActiveKcal({ avgHr: 150, distanceKm: 10, durationMin: 0, weightKg: 70 }, male),
-		null
-	);
-	// Distance-only (no HR / no profile) = net ACSM: run ~1.0, walk ~0.5 kcal/kg/km.
-	const run = workoutActiveKcal(
-		{ avgHr: null, distanceKm: 10, durationMin: 50, weightKg: 70 },
-		{ ageYears: null, sex: null }
-	); // 12 km/h → run → 10·70·1.0
-	assert.equal(run, 700);
-	const walk = workoutActiveKcal(
-		{ avgHr: null, distanceKm: 5, durationMin: 60, weightKg: 70 },
-		{ ageYears: null, sex: null }
-	); // 5 km/h → walk → 5·70·0.5
-	assert.equal(walk, 175);
-	// HR present: Keytel (net) refines but stays in [0.5×,2×] the distance anchor. A steady
-	// 10 km / 50 min run at HR 155 lands near the 700 anchor (agreement, not clamped).
-	const hrRun = workoutActiveKcal({ avgHr: 155, distanceKm: 10, durationMin: 50, weightKg: 70 }, male)!;
-	assert(hrRun > 650 && hrRun < 780, `hrRun ${hrRun}`);
-	// Garbage HR (dropout ~30) would compute far below the anchor → clamped up to 0.5× = 350.
-	assert.equal(
-		workoutActiveKcal({ avgHr: 30, distanceKm: 10, durationMin: 50, weightKg: 70 }, male),
-		350
-	);
-	// Spiked HR can't exceed 2× the anchor.
-	const spike = workoutActiveKcal({ avgHr: 250, distanceKm: 10, durationMin: 50, weightKg: 70 }, male)!;
-	assert(spike <= 1400 + 1e-9, `spike ${spike}`);
+	// Run ~1.0 kcal/kg/km, walk ~0.5. Activity word decides, case-insensitive.
+	assert.equal(workoutActiveKcal({ name: 'Run', distanceKm: 10, weightKg: 70 }), 700);
+	assert.equal(workoutActiveKcal({ name: 'Outdoor Walk', distanceKm: 5, weightKg: 70 }), 175);
+	assert.equal(workoutActiveKcal({ name: 'Trail Running', distanceKm: 4, weightKg: 80 }), 320);
+	// No distance → null (e.g. strength training — leave it to the existing path).
+	assert.equal(workoutActiveKcal({ name: 'Run', distanceKm: null, weightKg: 70 }), null);
+	assert.equal(workoutActiveKcal({ name: 'Strength Training', distanceKm: null, weightKg: 70 }), null);
+	// Non-transport activity where distance is a poor energy proxy → null (fall back).
+	assert.equal(workoutActiveKcal({ name: 'Cycling', distanceKm: 20, weightKg: 70 }), null);
 }
 
 console.log('energy.selfcheck: all assertions passed ✓');

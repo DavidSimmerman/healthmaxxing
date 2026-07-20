@@ -149,9 +149,9 @@
 		</div>
 		<p class="mt-2 text-xs" style="color: var(--color-text-subtle);">
 			{#if b.avgTrustedKcal}Workout calories ({num(b.avgTrustedKcal)}/day avg) ride out of the
-				haircut — runs/walks/rides are recomputed from distance, heart rate & body weight, and the
-				walking pad rides as-is. Only Apple's passive estimate is corrected.{:else}Only Apple's
-				passive active-energy estimate is corrected; workout tracking rides at full value.{/if}
+				haircut — runs/walks are recomputed from distance & body weight (net cost of transport),
+				and the walking pad rides as-is. Only Apple's passive estimate is corrected.{:else}Only
+				Apple's passive active-energy estimate is corrected; workout tracking rides at full value.{/if}
 		</p>
 	</section>
 
