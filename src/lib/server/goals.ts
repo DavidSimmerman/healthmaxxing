@@ -178,6 +178,37 @@ export type PeriodSummary = {
 	weeklyGoals: GoalResult[]; // strength + running
 };
 
+// The scoring spec resolver — the ONE place the goal targets are decided, so every
+// surface that draws a score (home ring, /goals week strip, /goals day detail, the
+// week/month rollups) agrees. Vacation days keep their relaxed targets; every other
+// day scores its calorie deficit against the app's REAL dynamic deficit goal (the
+// mode's leanness-scaled deficit, −modeDelta) instead of the old static 750, with the
+// bonus stretch kept at the same 2× ratio it had against that 750.
+// Pass `EnergyContext.modeDeltaKcal`; null (no body data yet) falls back to SPEC.
+export async function loadScoringSpecs(
+	modeDeltaKcal: number | null
+): Promise<{ specsFor: (date: string) => SpecMap; normalSpec: SpecMap }> {
+	// Only a CUT has a deficit to chase. Recomp (delta 0) and lean bulk (delta > 0)
+	// reuse the vacation deficit geometry — eating at maintenance is full marks, a
+	// surplus scores down — because the cut shape (target > 0, floor 0) collapses to
+	// target === floor === 0 on recomp, which scores every real day a flat 0.
+	const deficit =
+		modeDeltaKcal == null
+			? SPEC.deficit
+			: modeDeltaKcal < 0
+				? { ...SPEC.deficit, target: -modeDeltaKcal, bonusTo: -modeDeltaKcal * 2 }
+				: VACATION_SPECS.deficit;
+	const normalSpec: SpecMap = { ...SPEC, deficit };
+	const base = await loadSpecsFor();
+	return {
+		specsFor: (date: string) => {
+			const s = base(date);
+			return s === VACATION_SPECS ? s : normalSpec;
+		},
+		normalSpec
+	};
+}
+
 export type GoalsView = {
 	date: string;
 	day: {
@@ -192,10 +223,11 @@ export type GoalsView = {
 	};
 	week: PeriodSummary;
 	month: PeriodSummary;
-	// The week's per-day metrics (Sun–Sat) the week rollup was scored from —
-	// returned so the /goals loader can build its week strip without re-querying
-	// the same range. The loader strips this before the client payload.
-	weekDayMetrics: DayMetrics[];
+	// This week's per-day scores (Sun–Sat, date → score), scored with the SAME specs
+	// and bank/debt as the day detail above so a strip ring always matches the big
+	// number when you select that day. Built here rather than in the /goals loader
+	// so it can't drift from the day detail again. The loader strips it from `view`.
+	weekScores: Map<string, number | null>;
 };
 
 // Score a calendar period [from, to]. Daily goals are averaged over COMPLETED days
@@ -260,20 +292,9 @@ export async function buildGoalsView(anchor: string): Promise<GoalsView> {
 	// so scoring uses the same corrected deficits the rest of the app now shows.
 	const ctx = await resolveCorrection();
 	const correction = ctx.correction;
-	// Score the calorie-deficit goal against the app's REAL daily deficit goal (the mode's
-	// leanness-scaled deficit, −modeDelta) instead of the old static 750. One overridden
-	// "normal" spec drives both the per-day specs and the week/month rollup below; vacation
-	// days keep their relaxed target.
-	const normalSpec: SpecMap =
-		ctx.modeDeltaKcal != null
-			? { ...SPEC, deficit: { ...SPEC.deficit, target: -ctx.modeDeltaKcal } }
-			: SPEC;
-	// Per-day targets: overridden-normal, or relaxed for days inside a trip window.
-	const baseSpecsFor = await loadSpecsFor();
-	const specsFor = (date: string): SpecMap => {
-		const s = baseSpecsFor(date);
-		return s === VACATION_SPECS ? s : normalSpec;
-	};
+	// Shared resolver: dynamic deficit target for normal days, relaxed targets inside a
+	// trip window. `normalSpec` also drives the week/month rollups below.
+	const { specsFor, normalSpec } = await loadScoringSpecs(ctx.modeDeltaKcal);
 
 	// Bank/debt entering `anchor`: the running surplus/shortfall over this week's
 	// days BEFORE it. Sunday (week start) → no prior days → no carry-over.
@@ -309,7 +330,7 @@ export async function buildGoalsView(anchor: string): Promise<GoalsView> {
 	const lastDom = new Date(Date.UTC(y, mo, 0)).getUTCDate(); // last day of anchor's month
 	// Fetch the week's day metrics ONCE (dayMetricsForRange is an async fn → a real
 	// promise, safe to await both here and inside periodSummary) and hand them to
-	// the week rollup; they're also returned for the /goals loader to reuse.
+	// the week rollup; they're also re-scored below for the /goals week strip.
 	const weekMetricsP = dayMetricsForRange(weekStart, weekEnd, correction);
 	const [week, month, weekDayMetrics] = await Promise.all([
 		periodSummary(weekStart, weekEnd, 7, specsFor, weekMetricsP, correction, normalSpec),
@@ -325,6 +346,17 @@ export async function buildGoalsView(anchor: string): Promise<GoalsView> {
 		weekMetricsP
 	]);
 
+	// Week strip: each elapsed day of this week scored with the bank/debt from the
+	// earlier days of the same week — the same inputs the day-detail card uses, so
+	// selecting a day always shows the number its ring already drew.
+	const elapsed = weekDayMetrics.filter((m) => m.date <= ctx.today);
+	const weekScores = new Map(
+		elapsed.map((m, i) => [
+			m.date,
+			scoreDay(m, weekBalances(elapsed.slice(0, i), specsFor), specsFor(m.date)).score
+		])
+	);
+
 	return {
 		date: anchor,
 		day: {
@@ -339,6 +371,6 @@ export async function buildGoalsView(anchor: string): Promise<GoalsView> {
 		},
 		week,
 		month,
-		weekDayMetrics
+		weekScores
 	};
 }

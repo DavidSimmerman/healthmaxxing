@@ -28,10 +28,11 @@ struct HealthmaxxingApp: App {
                 Task {
                     // Re-request first: a reinstall/rebuild resets HealthKit auth to
                     // "not determined", which makes every query (and thus the whole
-                    // sync) throw. requestAuthorization is idempotent — it only shows
-                    // the prompt when auth is actually undetermined, otherwise it's a
-                    // silent no-op — so doing it each foreground self-heals that case.
-                    try? await HealthSync.shared.requestAuthorization()
+                    // sync) throw, so checking each foreground self-heals that case.
+                    // …IfNeeded, though: requestAuthorization is NOT a silent no-op when
+                    // everything's already granted — it still flashes the permission
+                    // sheet up and back down. That was the blank drawer on every launch.
+                    try? await HealthSync.shared.requestAuthorizationIfNeeded()
                     // Sync, THEN reload the WebView — reloading before the metrics POST
                     // lands would just re-show the stale page. reload() keeps the
                     // current page, only re-fetching its data.

@@ -126,11 +126,11 @@ assert.equal(
 // decay 0.5/day and are symmetric-capped.
 const G = 700;
 assert.equal(deficitBalance([{ deficitKcal: 700, goalKcal: G }], 500), 0); // exactly on goal → 0
-assert.equal(deficitBalance([{ deficitKcal: 900, goalKcal: G }], 500), 200); // +200 over → 200 recovery
-assert.equal(deficitBalance([{ deficitKcal: 300, goalKcal: G }], 500), -400); // 400 under → 400 debt
+assert.equal(deficitBalance([{ deficitKcal: 900, goalKcal: G }], 500), 100); // +200 over → half now (100/50/25… = 200 total)
+assert.equal(deficitBalance([{ deficitKcal: 300, goalKcal: G }], 500), -200); // 400 under → 200 debt now, rest later
 assert.equal(deficitBalance([{ deficitKcal: 5000, goalKcal: G }], 500), 500); // huge deficit → +cap
 assert.equal(deficitBalance([{ deficitKcal: -1000, goalKcal: G }], 500), -500); // big surplus → −cap (debt)
-// decay: +400 yesterday, on-goal today → 0.5×400 + 0 = 200
+// decay: +400 yesterday, on-goal today → 0.5×(200 + 0) = 100
 assert.equal(
 	deficitBalance(
 		[
@@ -139,9 +139,9 @@ assert.equal(
 		],
 		500
 	),
-	200
+	100
 );
-// recovery flips to debt when you then eat over: 0.5×200 + (300−700) = −300
+// recovery flips to debt when you then eat over: 0.5×(100 + (300−700)) = −150
 assert.equal(
 	deficitBalance(
 		[
@@ -150,7 +150,37 @@ assert.equal(
 		],
 		500
 	),
-	-300
+	-150
+);
+// THE DEBT-REPAYMENT CASE: fall 400 short (→ −200 debt, so today's goal is 700+200=900),
+// then hit exactly 900. Debt is cleared and NO recovery is minted — the extra deficit was
+// owed, not earned. (The old formula paid +100 recovery here for doing the catch-up.)
+assert.equal(
+	deficitBalance(
+		[
+			{ deficitKcal: 300, goalKcal: G },
+			{ deficitKcal: 900, goalKcal: G }
+		],
+		500
+	),
+	0
+);
+// …and falling a little SHORT of that raised goal leaves you still (slightly) in debt,
+// never in recovery: 0.5×(−200 + (850−700)) = −25.
+assert.equal(
+	deficitBalance(
+		[
+			{ deficitKcal: 300, goalKcal: G },
+			{ deficitKcal: 850, goalKcal: G }
+		],
+		500
+	),
+	-25
+);
+// Steady overshoot converges to exactly that overshoot (b = 0.5(b+200) → 200), i.e. eat back
+// what you over-did — not double it.
+assert.ok(
+	Math.abs(deficitBalance(Array(20).fill({ deficitKcal: 900, goalKcal: G }), 500) - 200) < 1
 );
 assert.equal(deficitBalance([{ deficitKcal: null, goalKcal: G }], 500), 0); // no data → skipped
 // balance shifts the eat-to target 1:1: recovery raises it, debt lowers it
@@ -198,7 +228,10 @@ assert.equal(isTrustedWorkoutSource('com.apple.workout.build'), false);
 	assert.equal(workoutActiveKcal({ name: 'Trail Running', distanceKm: 4, weightKg: 80 }), 320);
 	// No distance → null (e.g. strength training — leave it to the existing path).
 	assert.equal(workoutActiveKcal({ name: 'Run', distanceKm: null, weightKg: 70 }), null);
-	assert.equal(workoutActiveKcal({ name: 'Strength Training', distanceKm: null, weightKg: 70 }), null);
+	assert.equal(
+		workoutActiveKcal({ name: 'Strength Training', distanceKm: null, weightKg: 70 }),
+		null
+	);
 	// Non-transport activity where distance is a poor energy proxy → null (fall back).
 	assert.equal(workoutActiveKcal({ name: 'Cycling', distanceKm: 20, weightKg: 70 }), null);
 }

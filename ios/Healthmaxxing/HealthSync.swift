@@ -75,6 +75,21 @@ final class HealthSync {
         startObservers()
     }
 
+    /// Same, but a no-op when HealthKit says there's nothing left to ask about.
+    /// Calling `requestAuthorization` unconditionally still presents (and then
+    /// instantly dismisses) the permission sheet — that's the blank drawer that
+    /// flew up from the bottom on every single foreground. `statusForAuthorization
+    /// Request` is the native "would this actually prompt?" check, so we only pay
+    /// for the sheet when a type is genuinely undetermined (fresh install, or a new
+    /// read type added to `readTypes`). Observers are re-armed either way, which is
+    /// the only part that needed to run every launch.
+    func requestAuthorizationIfNeeded() async throws {
+        guard HKHealthStore.isHealthDataAvailable() else { return }
+        let status = try await store.statusForAuthorizationRequest(toShare: [], read: readTypes)
+        guard status == .shouldRequest else { return }
+        try await requestAuthorization()
+    }
+
     /// Observer queries re-fire whenever HealthKit gets new samples of the
     /// type; background delivery lets that happen while the app is suspended.
     func startObservers() {

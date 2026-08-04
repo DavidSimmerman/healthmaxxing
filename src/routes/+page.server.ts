@@ -6,9 +6,8 @@ import { bolusableForLoggedEntry } from '$lib/netCarbs';
 import { fiberModeFrom } from '$lib/server/prefs';
 import { deficitDays } from '$lib/server/deficit';
 import { resolveCorrection } from '$lib/server/energyBreakdown';
-import { dayMetricsForRange } from '$lib/server/goals';
+import { dayMetricsForRange, loadScoringSpecs } from '$lib/server/goals';
 import { scoreDay, weekBalances } from '$lib/score';
-import { loadSpecsFor } from '$lib/server/vacations';
 import { weekToDate } from '$lib/period';
 import { addDays } from '$lib/energy';
 
@@ -94,7 +93,9 @@ export async function load() {
 		today > weekStart
 			? ctxP.then((c) => dayMetricsForRange(weekStart, addDays(today, -1), c.correction))
 			: Promise.resolve([]),
-		loadSpecsFor()
+		// Same resolver /goals scores with (dynamic deficit target, vacation relaxation)
+		// — the home ring used to score against the old static 750 and trail the goals page.
+		ctxP.then((c) => loadScoringSpecs(c.modeDeltaKcal).then((r) => r.specsFor))
 	]);
 
 	const fiberMode = fiberModeFrom(settingsRow);

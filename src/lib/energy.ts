@@ -193,15 +193,26 @@ export function targetBaseline(maintenanceKcal: number, modeDeltaKcal: number): 
 }
 
 // Rolling signed "deficit balance" (kcal): recovery when you overshoot your deficit goal,
-// DEBT when you fall short of it — so neither losing too fast nor stalling compounds. It's an
-// exponential moving average of daily over/under-shoot with a 0.5/day decay, so a spike fades
-// over ~2-3 days (not piled onto the next day, not chased for a week):
-//   balance = clamp(0.5 × yesterdayBalance + (yesterdayDeficit − yesterdayGoal), −maxKcal, maxKcal)
+// DEBT when you fall short of it — so neither losing too fast nor stalling compounds. It's a
+// RUNNING LEDGER of over/under-shoot vs the BASE goal, decayed 0.5/day so a spike fades over
+// ~2-3 days (not piled onto the next day, not chased for a week):
+//   balance = clamp(0.5 × (yesterdayBalance + (yesterdayDeficit − yesterdayBaseGoal)), ±maxKcal)
 // Positive (recovery) → raise today's eat-to (you already lost enough, ease off). Negative
 // (debt) → lower it (you ate over, trim to catch back up). Symmetric cap at ±maxKcal so
-// recovery never recommends a surplus and debt can't spiral. `days` run oldest→newest; the
-// decay makes anything past ~10 days ago negligible, so it's recomputed from the trailing
-// ledger with no stored state. Days with no deficit data are skipped (carry the balance).
+// recovery never recommends a surplus and debt can't spiral.
+//
+// The decay wraps the WHOLE ledger (not just the carried balance) on purpose: yesterday's
+// goal was itself base − balance, so a day you only cleared because the goal was raised by
+// debt nets out to ~0, instead of minting fresh recovery for doing the catch-up you owed.
+// Debt −200 → yesterday's goal was base+200 → hit it exactly → 0.5×(−200 + 200) = 0 (paid
+// off, nothing owed, nothing earned). Fall 50 short of that raised goal and you stay slightly
+// in debt (−25) rather than jumping to +100 recovery. A one-off +200 overshoot pays back
+// 100/50/25/… — 200 total, spread out — where undecayed accumulation paid back double.
+//
+// `days` run oldest→newest; the decay makes anything past ~10 days ago negligible, so it's
+// recomputed from the trailing ledger with no stored state. Days with no deficit data are
+// skipped (carry the balance). goalKcal is the BASE goal for that day (vacation/mode changes
+// still vary it) — do NOT pre-adjust it by the balance, that's what this recurrence does.
 export function deficitBalance(
 	days: { deficitKcal: number | null; goalKcal: number }[],
 	maxKcal: number
@@ -209,7 +220,7 @@ export function deficitBalance(
 	let balance = 0;
 	for (const d of days) {
 		if (d.deficitKcal == null || !Number.isFinite(d.deficitKcal)) continue;
-		balance = clamp(0.5 * balance + (d.deficitKcal - d.goalKcal), -maxKcal, maxKcal);
+		balance = clamp(0.5 * (balance + (d.deficitKcal - d.goalKcal)), -maxKcal, maxKcal);
 	}
 	return balance;
 }
@@ -278,7 +289,11 @@ export function workoutActiveKcal(w: {
 	const { name, distanceKm: dist, weightKg: wt } = w;
 	if (dist == null || wt == null || dist <= 0 || wt <= 0) return null;
 	const t = name.toLowerCase();
-	const costPerKgKm = t.includes('run') ? 1.0 : t.includes('walk') || t.includes('hik') ? 0.5 : null;
+	const costPerKgKm = t.includes('run')
+		? 1.0
+		: t.includes('walk') || t.includes('hik')
+			? 0.5
+			: null;
 	if (costPerKgKm == null) return null; // e.g. cycling — distance is a poor energy proxy
 	return dist * wt * costPerKgKm;
 }

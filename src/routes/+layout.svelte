@@ -2,6 +2,7 @@
 	import './layout.css';
 	import favicon from '$lib/assets/favicon.png';
 	import { onMount } from 'svelte';
+	import { invalidateAll } from '$app/navigation';
 	import BottomNav from '$lib/components/BottomNav.svelte';
 	import CaptureSheet from '$lib/components/CaptureSheet.svelte';
 	import ChatSheet from '$lib/components/ChatSheet.svelte';
@@ -14,6 +15,16 @@
 	// shows stale numbers. The reload re-fetches /api/today, which updates the
 	// deficit too. No-op in a normal browser (the message handler doesn't exist).
 	onMount(() => {
+		// Native → web soft refresh, called by the iOS wrapper after each foreground
+		// HealthKit sync so freshly-pushed metrics (today's water, HR, …) show up. It
+		// re-runs the load functions in place, so an open capture sheet / live barcode
+		// scan survives — the hard webView.reload() this replaced used to kill them
+		// mid-flow. Returns true so the native side knows the hook exists.
+		(window as unknown as { __hmRefresh?: () => boolean }).__hmRefresh = () => {
+			invalidateAll();
+			return true;
+		};
+
 		const widget = (
 			window as unknown as {
 				webkit?: { messageHandlers?: { widget?: { postMessage(m: string): void } } };

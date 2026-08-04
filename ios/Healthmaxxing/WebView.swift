@@ -35,13 +35,25 @@ struct WebView: UIViewRepresentable {
     // WKWebView prompt on top of it. Anything else is denied — this web view
     // only ever loads the dashboard.
     final class Coordinator: NSObject, WKUIDelegate, WKScriptMessageHandler {
-        // Reload the page whenever a foreground sync finishes. Weak ref so the
+        // Refresh the page whenever a foreground sync finishes. Weak ref so the
         // observer (lives for the app's lifetime, like the single WebView) can't
         // keep a dead web view alive.
+        //
+        // SOFT refresh, not reload(): `window.__hmRefresh` (set by the SvelteKit root
+        // layout) re-runs the page's data loads IN PLACE, so component state survives.
+        // A hard reload tore down whatever the user was mid-way through — the food
+        // adder, the barcode scanner, a barcode lookup still resolving — which is why
+        // the first food you logged after opening the app kept getting dropped. Falls
+        // back to reload() only when the hook isn't there (error page, or the first
+        // load hasn't finished), where there's no in-flight state to lose anyway.
         func observeSyncReload(_ webView: WKWebView) {
             NotificationCenter.default.addObserver(
                 forName: .healthSyncDidFinish, object: nil, queue: .main
-            ) { [weak webView] _ in webView?.reload() }
+            ) { [weak webView] _ in
+                webView?.evaluateJavaScript("!!window.__hmRefresh?.()") { done, _ in
+                    if done as? Bool != true { webView?.reload() }
+                }
+            }
         }
 
         // Web → native: a food was logged/edited/deleted. Refresh the widget.
