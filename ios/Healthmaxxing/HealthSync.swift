@@ -75,16 +75,23 @@ final class HealthSync {
         startObservers()
     }
 
-    /// Same, but a no-op when HealthKit says there's nothing left to ask about.
-    /// Calling `requestAuthorization` unconditionally still presents (and then
-    /// instantly dismisses) the permission sheet — that's the blank drawer that
-    /// flew up from the bottom on every single foreground. `statusForAuthorization
-    /// Request` is the native "would this actually prompt?" check, so we only pay
-    /// for the sheet when a type is genuinely undetermined (fresh install, or a new
-    /// read type added to `readTypes`). Observers are re-armed either way, which is
-    /// the only part that needed to run every launch.
+    /// Set the instant we first try, so the permission sheet can be attempted AT MOST
+    /// ONCE per app process. This is the load-bearing part, not the status check below.
+    ///
+    /// The blank drawer flying up on every foreground was a self-sustaining loop: the
+    /// sheet was presenting and auto-dismissing before it could be answered, so no read
+    /// type ever became *determined*, so `statusForAuthorizationRequest` kept answering
+    /// `.shouldRequest`, so the next foreground armed it again. Gating on the status
+    /// alone can't break that — only refusing to re-ask within a process can.
+    ///
+    /// If auth really is missing, the sync fails loudly (`lastSyncDescription`) and the
+    /// settings sheet's "Grant Health access" button re-asks on demand. That's the
+    /// self-heal path now; it doesn't need to run unprompted every time you switch apps.
+    private var authRequested = false
+
     func requestAuthorizationIfNeeded() async throws {
-        guard HKHealthStore.isHealthDataAvailable() else { return }
+        guard HKHealthStore.isHealthDataAvailable(), !authRequested else { return }
+        authRequested = true // before the awaits: two activations must not both fall through
         let status = try await store.statusForAuthorizationRequest(toShare: [], read: readTypes)
         guard status == .shouldRequest else { return }
         try await requestAuthorization()

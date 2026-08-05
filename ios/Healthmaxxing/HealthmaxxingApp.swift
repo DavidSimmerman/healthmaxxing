@@ -26,16 +26,17 @@ struct HealthmaxxingApp: App {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 Task {
-                    // Re-request first: a reinstall/rebuild resets HealthKit auth to
-                    // "not determined", which makes every query (and thus the whole
-                    // sync) throw, so checking each foreground self-heals that case.
-                    // …IfNeeded, though: requestAuthorization is NOT a silent no-op when
-                    // everything's already granted — it still flashes the permission
-                    // sheet up and back down. That was the blank drawer on every launch.
+                    // A reinstall/rebuild resets HealthKit auth to "not determined", which
+                    // makes every query (and thus the whole sync) throw. …IfNeeded self-heals
+                    // that, but AT MOST ONCE per process — asking on every activation is what
+                    // flashed a blank permission sheet up and down each time you switched
+                    // back into the app. See requestAuthorizationIfNeeded for why the status
+                    // check alone couldn't stop it.
                     try? await HealthSync.shared.requestAuthorizationIfNeeded()
-                    // Sync, THEN reload the WebView — reloading before the metrics POST
-                    // lands would just re-show the stale page. reload() keeps the
-                    // current page, only re-fetching its data.
+                    // Sync, THEN refresh the page — refreshing before the metrics POST lands
+                    // would just re-show pre-sync numbers. The refresh is a soft one (see
+                    // WebView.observeSyncReload): it re-runs the page's data loads in place
+                    // rather than tearing down whatever you had open.
                     await HealthSync.shared.syncNow()
                     NotificationCenter.default.post(name: .healthSyncDidFinish, object: nil)
                 }
