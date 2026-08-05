@@ -3,7 +3,7 @@ import { db } from '$lib/server/db';
 import { workouts, settings } from '$lib/server/db/schema';
 import { APP_TZ, todayLabel } from '$lib/server/day';
 import { deficitDays, type DayEnergy, type DayCorrection } from '$lib/server/deficit';
-import { fillBmrGaps, energyInsights } from '$lib/server/projections';
+import { fillBmrGaps, energyInsights, projAt } from '$lib/server/projections';
 import { loadIsVacation } from '$lib/server/vacations';
 import {
 	addDays,
@@ -206,6 +206,18 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 	// makes days past ~10 ago negligible → no stored state needed.
 	let balanceKcal = 0;
 	if (baseKcal != null && maintenanceKcal != null && modeDeltaKcal != null && modeDeltaKcal < 0) {
+		// Each past day is judged against the baseline IT had, not today's — the goal drifts
+		// down as you lean out, so a flat baseline re-scores old days against a target they
+		// were never set. Weight/body-fat come off the fitted TREND lines, not that day's
+		// weigh-in: raw readings carry ~±0.4% bf of scale noise, about the same magnitude as
+		// the real drift across the window, so the readings would add as much error as they
+		// remove. Evaluated at `today` this reduces exactly to modeDeltaKcal (Trend.current
+		// IS the line at today), so the live goal and the ledger stay consistent.
+		const goalAt = (date: string): number => {
+			const w = projAt(insights.body.weight, date);
+			const bf = projAt(insights.body.bodyFat, date);
+			return w != null && bf != null ? -modeDeficit(mode, bf, w) : -modeDeltaKcal;
+		};
 		const balanceDays = completed.map((d) => ({
 			deficitKcal:
 				d.bmrKcal != null
@@ -214,7 +226,7 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 						d.tefKcal -
 						d.intakeKcal
 					: null,
-			goalKcal: -modeDeltaKcal
+			goalKcal: goalAt(d.date)
 		}));
 		balanceKcal = Math.round(deficitBalance(balanceDays, -modeDeltaKcal));
 	}

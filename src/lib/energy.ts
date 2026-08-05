@@ -193,26 +193,33 @@ export function targetBaseline(maintenanceKcal: number, modeDeltaKcal: number): 
 }
 
 // Rolling signed "deficit balance" (kcal): recovery when you overshoot your deficit goal,
-// DEBT when you fall short of it — so neither losing too fast nor stalling compounds. It's a
-// RUNNING LEDGER of over/under-shoot vs the BASE goal, decayed 0.5/day so a spike fades over
-// ~2-3 days (not piled onto the next day, not chased for a week):
-//   balance = clamp(0.5 × (yesterdayBalance + (yesterdayDeficit − yesterdayBaseGoal)), ±maxKcal)
-// Positive (recovery) → raise today's eat-to (you already lost enough, ease off). Negative
-// (debt) → lower it (you ate over, trim to catch back up). Symmetric cap at ±maxKcal so
-// recovery never recommends a surplus and debt can't spiral.
+// DEBT when you fall short of it — so neither losing too fast nor stalling compounds. Positive
+// (recovery) → raise today's eat-to (you already lost enough, ease off). Negative (debt) →
+// lower it (trim to catch back up). Symmetric cap at ±maxKcal so recovery never recommends a
+// surplus and debt can't spiral.
 //
-// The decay wraps the WHOLE ledger (not just the carried balance) on purpose: yesterday's
-// goal was itself base − balance, so a day you only cleared because the goal was raised by
-// debt nets out to ~0, instead of minting fresh recovery for doing the catch-up you owed.
-// Debt −200 → yesterday's goal was base+200 → hit it exactly → 0.5×(−200 + 200) = 0 (paid
-// off, nothing owed, nothing earned). Fall 50 short of that raised goal and you stay slightly
-// in debt (−25) rather than jumping to +100 recovery. A one-off +200 overshoot pays back
-// 100/50/25/… — 200 total, spread out — where undecayed accumulation paid back double.
+// Each day is scored against the goal it was ACTUALLY SHOWN (base + carryover), never against
+// the bare base. That's the whole ballgame: score against base and a day you only cleared
+// because the goal was raised by debt mints fresh recovery for doing the catch-up you owed —
+// you could miss the number on screen and still get paid (the real bug this replaced: shown
+// 726, did 683, awarded +101).
 //
-// `days` run oldest→newest; the decay makes anything past ~10 days ago negligible, so it's
+// Carry-forward is ASYMMETRIC on purpose:
+//   • Fell short AND finished under the baseline deficit → that's real debt, owed IN FULL
+//     tomorrow. No softening: dip below baseline and the next day immediately makes it up.
+//   • Anything else (beat the goal, or missed only an already-inflated catch-up goal) → HALF.
+// Old carryover always halves either way, so aged debt keeps fading even while new debt
+// accrues — that's what stops a bad streak compounding into an unreachable 900-kcal ask.
+// The `remaining > 0` guard matters: on a day you're under baseline but still BEAT your goal
+// (because banked credit lowered it), you'd otherwise be flipped from credit into debt.
+//
+// `days` run oldest→newest; the halving makes anything past ~10 days ago negligible, so it's
 // recomputed from the trailing ledger with no stored state. Days with no deficit data are
-// skipped (carry the balance). goalKcal is the BASE goal for that day (vacation/mode changes
-// still vary it) — do NOT pre-adjust it by the balance, that's what this recurrence does.
+// skipped (carry the balance). goalKcal is the BASE goal for that day — do NOT pre-adjust it
+// by the balance, that's what this recurrence does.
+// ponytail: one baseline for the whole window (today's), so past days are judged against
+// today's number rather than the one they actually had. Drift over ~10 days is a few kcal;
+// thread a per-day baseline in only if the goal ever moves fast.
 export function deficitBalance(
 	days: { deficitKcal: number | null; goalKcal: number }[],
 	maxKcal: number
@@ -220,7 +227,17 @@ export function deficitBalance(
 	let balance = 0;
 	for (const d of days) {
 		if (d.deficitKcal == null || !Number.isFinite(d.deficitKcal)) continue;
-		balance = clamp(0.5 * (balance + (d.deficitKcal - d.goalKcal)), -maxKcal, maxKcal);
+		const carry = -balance; // + = extra you were asked to make up that day
+		const remaining = d.goalKcal + carry - d.deficitKcal; // + = still short, − = beat it
+		const owed = d.deficitKcal < d.goalKcal && remaining > 0;
+		// Only aged DEBT is forgiven. Banked credit is NOT halved here — it was already spent
+		// lowering today's goal, so refunding half of it would double-count: with 100 credit
+		// (goal 700→600), finishing at 599 would owe 51 instead of 1, a 51-kcal cliff off a
+		// 1-kcal miss. Forgiving only the debt half keeps `owed` continuous with the branch
+		// below (at remaining → 0 both sides go to 0).
+		const forgiven = carry > 0 ? carry / 2 : 0;
+		const next = owed ? remaining - forgiven : remaining / 2;
+		balance = clamp(0 - next, -maxKcal, maxKcal); // 0 − n, not −n: avoids a −0 balance
 	}
 	return balance;
 }

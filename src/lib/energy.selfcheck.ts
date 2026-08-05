@@ -122,67 +122,53 @@ assert.equal(
 );
 
 // ── Deficit balance (recovery + debt) ─────────────────────────────────────────
-// goal 700, cap ±500. Over-goal days earn RECOVERY (+), under-goal days owe DEBT (−); both
-// decay 0.5/day and are symmetric-capped.
+// Baseline goal 700, cap ±500. Every day is scored against the goal it was SHOWN
+// (700 + carryover). Dip under baseline while short → that debt carries IN FULL;
+// everything else halves. Balance sign: + = recovery, − = debt (carryover = −balance).
 const G = 700;
-assert.equal(deficitBalance([{ deficitKcal: 700, goalKcal: G }], 500), 0); // exactly on goal → 0
-assert.equal(deficitBalance([{ deficitKcal: 900, goalKcal: G }], 500), 100); // +200 over → half now (100/50/25… = 200 total)
-assert.equal(deficitBalance([{ deficitKcal: 300, goalKcal: G }], 500), -200); // 400 under → 200 debt now, rest later
-assert.equal(deficitBalance([{ deficitKcal: 5000, goalKcal: G }], 500), 500); // huge deficit → +cap
-assert.equal(deficitBalance([{ deficitKcal: -1000, goalKcal: G }], 500), -500); // big surplus → −cap (debt)
-// decay: +400 yesterday, on-goal today → 0.5×(200 + 0) = 100
-assert.equal(
+const bal = (ds: number[]) =>
 	deficitBalance(
-		[
-			{ deficitKcal: 1100, goalKcal: G },
-			{ deficitKcal: 700, goalKcal: G }
-		],
+		ds.map((d) => ({ deficitKcal: d, goalKcal: G })),
 		500
-	),
-	100
-);
-// recovery flips to debt when you then eat over: 0.5×(100 + (300−700)) = −150
-assert.equal(
-	deficitBalance(
-		[
-			{ deficitKcal: 900, goalKcal: G },
-			{ deficitKcal: 300, goalKcal: G }
-		],
-		500
-	),
-	-150
-);
-// THE DEBT-REPAYMENT CASE: fall 400 short (→ −200 debt, so today's goal is 700+200=900),
-// then hit exactly 900. Debt is cleared and NO recovery is minted — the extra deficit was
-// owed, not earned. (The old formula paid +100 recovery here for doing the catch-up.)
-assert.equal(
-	deficitBalance(
-		[
-			{ deficitKcal: 300, goalKcal: G },
-			{ deficitKcal: 900, goalKcal: G }
-		],
-		500
-	),
-	0
-);
-// …and falling a little SHORT of that raised goal leaves you still (slightly) in debt,
-// never in recovery: 0.5×(−200 + (850−700)) = −25.
-assert.equal(
-	deficitBalance(
-		[
-			{ deficitKcal: 300, goalKcal: G },
-			{ deficitKcal: 850, goalKcal: G }
-		],
-		500
-	),
-	-25
-);
-// Steady overshoot converges to exactly that overshoot (b = 0.5(b+200) → 200), i.e. eat back
-// what you over-did — not double it.
-assert.ok(
-	Math.abs(deficitBalance(Array(20).fill({ deficitKcal: 900, goalKcal: G }), 500) - 200) < 1
-);
-assert.equal(deficitBalance([{ deficitKcal: null, goalKcal: G }], 500), 0); // no data → skipped
+	);
+
+assert.equal(bal([700]), 0); // exactly on goal → nothing owed, nothing earned
+assert.equal(bal([900]), 100); // beat by 200 → credit halves (100/50/25… = 200 back in total)
+assert.equal(bal([300]), -400); // 400 under BASELINE → owed IN FULL tomorrow (goal 1100)
+assert.equal(bal([5000]), 500); // huge deficit → +cap
+assert.equal(bal([-1000]), -500); // big surplus → −cap (debt), clamped
+assert.equal(bal([null as unknown as number]), 0); // no data → skipped
+
+// Credit decays by half: beat by 400, then sit exactly on the (lowered) goal.
+assert.equal(bal([1100, 700]), 100); // goal 300 → beat by 400 → 200 credit; then 700 vs 500 → +100
+
+// THE BUG THIS REPLACED: fall short, then do the catch-up. You must never be paid for
+// missing the number on screen. 400 under → owe 400 → goal 1100.
+assert.equal(bal([300, 1100]), 0); // hit 1100 exactly → debt cleared, NO recovery minted
+assert.equal(bal([300, 1050]), -25); // 50 short of 1100 (but over baseline) → still in debt, halved
+assert.equal(bal([300, 1200]), 50); // beat 1100 by 100 → half of the genuine overshoot
+
+// Dip under baseline again and the NEW shortfall is owed in full, while the OLD carry halves —
+// this is what keeps a bad streak from compounding into an unreachable ask.
+assert.equal(bal([300, 500]), -400); // owe 400 → goal 1100, did 500: (700−500) + 400/2 = 400
+assert.equal(bal([300, 500, 500]), -400); // steady 200-under settles, doesn't spiral
+
+// THE GUARD: under baseline but you BEAT your goal (banked credit lowered it). Beating your
+// goal must never flip you into debt.
+assert.equal(bal([900, 650]), 25); // goal 600, did 650 → beat by 50 → stays CREDIT (+25)
+
+// NO CLIFF at the goal line: banked credit is spent in full, not halved, so missing a
+// credit-lowered goal by 1 owes 1 — not 51. (900 → 100 credit → next goal 600.)
+assert.equal(bal([900, 600]), 0); // dead on the shown goal → nothing owed
+assert.equal(bal([900, 599]), -1); // 1 short → owe 1
+assert.equal(bal([900, 550]), -50); // 50 short → owe 50, in full (under baseline = real debt)
+for (let v = 560; v <= 640; v += 5) {
+	// continuous either side of the boundary: no jump bigger than the step itself
+	assert.ok(Math.abs(bal([900, v]) - bal([900, v + 5])) <= 5.01, `cliff at ${v}`);
+}
+
+// Steady overshoot converges to exactly that overshoot — eat back what you over-did, not double.
+assert.ok(Math.abs(bal(Array(20).fill(900)) - 200) < 1);
 // balance shifts the eat-to target 1:1: recovery raises it, debt lowers it
 assert.equal(
 	ratchetTarget({

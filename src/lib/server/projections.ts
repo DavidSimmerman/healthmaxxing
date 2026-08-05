@@ -106,7 +106,11 @@ function trendFor(
 	};
 }
 
-function projAt(trend: Trend | null, date: string): number | null {
+// A fitted trend evaluated on `date` — interpolation inside the fit window. Exported because
+// the deficit balance judges each past day against the baseline IT had, which means reading
+// weight/body-fat off the LINE rather than off that day's weigh-in: the raw readings carry
+// roughly as much scale noise (~±0.4% bf) as the real drift across the window.
+export function projAt(trend: Trend | null, date: string): number | null {
 	if (!trend) return null;
 	return trend.intercept + trend.slopePerDay * daysBetween(trend.anchorDate, date);
 }
