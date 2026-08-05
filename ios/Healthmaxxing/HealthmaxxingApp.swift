@@ -26,13 +26,15 @@ struct HealthmaxxingApp: App {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 Task {
-                    // A reinstall/rebuild resets HealthKit auth to "not determined", which
-                    // makes every query (and thus the whole sync) throw. …IfNeeded self-heals
-                    // that, but AT MOST ONCE per process — asking on every activation is what
-                    // flashed a blank permission sheet up and down each time you switched
-                    // back into the app. See requestAuthorizationIfNeeded for why the status
-                    // check alone couldn't stop it.
-                    try? await HealthSync.shared.requestAuthorizationIfNeeded()
+                    // NOTHING here may present UI. Requesting HealthKit auth on activation is
+                    // what flashed a blank sheet up and down — every foreground at first, then
+                    // (once gated to one attempt per process) on every cold launch. Two rounds
+                    // of trying to make that request behave failed; it turns out it was never
+                    // earning its keep, so it's gone. Auth is requested only from the settings
+                    // sheet's "Grant Health access" button now, which is a real tap at a moment
+                    // UIKit is definitely ready to present. A fresh install opens that sheet on
+                    // its own (showSettings = !isConfigured), and if auth is ever lost later,
+                    // syncNow surfaces it in lastSyncDescription instead of silently retrying.
                     // Sync, THEN refresh the page — refreshing before the metrics POST lands
                     // would just re-show pre-sync numbers. The refresh is a soft one (see
                     // WebView.observeSyncReload): it re-runs the page's data loads in place
