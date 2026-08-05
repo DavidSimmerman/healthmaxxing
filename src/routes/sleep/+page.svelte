@@ -65,6 +65,16 @@
 		{ id: 'LIGHT', label: 'Light', key: 'sleep_light_min', color: '#60a5fa' },
 		{ id: 'DEEP', label: 'Deep', key: 'sleep_deep_min', color: '#7c3aed' }
 	];
+	// A night recorded without a stage breakdown (the Apple Watch sometimes reports
+	// only "asleep") draws as one solid block instead of four empty tracks.
+	const ASLEEP_BAND = { id: 'ASLEEP', label: 'Asleep', key: 'sleep_min', color: '#818cf8' };
+
+	// Which watch recorded a night. Fitbit nights are labelled too, so a missing
+	// badge is never ambiguous.
+	const srcLabel = (date: string) => {
+		const s = data.stagesByDate[date]?.source;
+		return s === 'apple' ? 'Apple Watch' : s ? 'Fitbit' : null;
+	};
 
 	const PERIODS = [
 		{ n: 7, label: 'Week' },
@@ -111,7 +121,20 @@
 	const totalMin = $derived(
 		sel ? Math.max(...sel.segments.map((s) => s.startMin + s.durationMin), 1) : 1
 	);
+	const bands = $derived(
+		sel?.segments.some((s) => s.stage === 'ASLEEP') ? [ASLEEP_BAND, ...STAGES] : STAGES
+	);
 </script>
+
+{#snippet sourceBadge(date: string)}
+	{@const label = srcLabel(date)}
+	{#if label}
+		<span
+			class="rounded-full bg-white/5 px-1.5 py-0.5 text-[10px] font-medium tracking-wide"
+			style="color: var(--color-text-subtle);">{label}</span
+		>
+	{/if}
+{/snippet}
 
 <svelte:head><title>Sleep</title></svelte:head>
 
@@ -190,16 +213,17 @@
 		<!-- Hypnogram for the selected night -->
 		{#if sel && selNight}
 			<h2
-				class="mt-6 mb-2 px-1 text-xs font-semibold tracking-wider uppercase"
+				class="mt-6 mb-2 flex items-center gap-2 px-1 text-xs font-semibold tracking-wider uppercase"
 				style="color: var(--color-text-subtle);"
 			>
 				{selectedDate === nights[0]?.date ? 'Last night' : fmtDate(selectedDate)} · {fmtDur(
 					selNight.m.sleep_min
 				)}
+				{@render sourceBadge(selectedDate)}
 			</h2>
 			<section class="card p-4">
 				<div class="flex flex-col gap-1.5">
-					{#each STAGES as st (st.id)}
+					{#each bands as st (st.id)}
 						<div class="flex items-center gap-2">
 							<span
 								class="w-10 shrink-0 text-[10px] tracking-wide uppercase"
@@ -233,7 +257,7 @@
 					class="mt-3 flex flex-wrap gap-x-4 gap-y-1 border-t pt-3"
 					style="border-color: var(--color-border);"
 				>
-					{#each STAGES as st (st.id)}
+					{#each bands as st (st.id)}
 						{#if typeof selNight.m[st.key] === 'number'}
 							<div class="flex items-center gap-1.5 text-xs">
 								<span class="h-2 w-2 rounded-full" style="background: {st.color};"></span>
@@ -273,7 +297,10 @@
 					}}
 				>
 					<div class="flex items-baseline justify-between">
-						<span class="text-sm font-semibold text-white">{fmtDate(n.date)}</span>
+						<span class="flex items-baseline gap-2 text-sm font-semibold text-white">
+							{fmtDate(n.date)}
+							{@render sourceBadge(n.date)}
+						</span>
 						<div class="flex items-baseline gap-2">
 							<span class="text-sm font-bold text-white">{fmtDur(n.m.sleep_min)}</span>
 							{#if typeof n.m.sleep_efficiency_pct === 'number'}
