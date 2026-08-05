@@ -16,11 +16,12 @@ const sleepSession = (
 	asleep: string,
 	inBed: string,
 	awake: string,
-	stages: [string, string][]
+	stages: [string, string][],
+	startIso = '2026-06-22T03:00:00Z'
 ) => ({
 	...FIT,
 	sleep: {
-		interval: { startTime: '2026-06-22T03:00:00Z', endTime: endIso },
+		interval: { startTime: startIso, endTime: endIso },
 		type: 'STAGES',
 		summary: {
 			minutesInSleepPeriod: inBed,
@@ -175,14 +176,14 @@ const cross = parseHealthData(
 );
 assert.deepEqual(cross, [{ date: '2026-06-21', metric: 'sleep_spo2_pct', value: 95 }]);
 
-// Multiple sleep sessions on one date fold to ONE row per (date, metric):
-// durations sum, efficiency averages.
+// Multiple sleep sessions on one date → ONE row per (date, metric), from the
+// LONGEST session only (a nap never inflates the night's totals).
 const two = parseHealthData(
 	{
 		sleep: {
 			dataPoints: [
-				sleepSession('2026-06-22T11:00:00Z', '360', '400', '40', []), // eff 90
-				sleepSession('2026-06-22T18:00:00Z', '35', '50', '15', []) // nap, eff 70
+				sleepSession('2026-06-22T11:00:00Z', '360', '400', '40', []), // 8h interval, eff 90
+				sleepSession('2026-06-22T18:00:00Z', '35', '50', '15', [], '2026-06-22T17:10:00Z') // 50m nap
 			]
 		}
 	},
@@ -191,8 +192,8 @@ const two = parseHealthData(
 const keys = two.map((r) => `${r.date} ${r.metric}`);
 assert.equal(new Set(keys).size, keys.length, 'no duplicate (date,metric) rows');
 const tm = Object.fromEntries(two.map((r) => [r.metric, r.value]));
-assert.equal(tm.sleep_min, 395); // 360 + 35 summed
-assert.equal(tm.sleep_efficiency_pct, 80); // (90 + 70) / 2 averaged
+assert.equal(tm.sleep_min, 360); // main sleep only — the nap is discarded
+assert.equal(tm.sleep_efficiency_pct, 90);
 
 // Empty / missing → no rows, no throw.
 assert.deepEqual(parseHealthData({}, TZ), []);
@@ -223,14 +224,6 @@ assert.deepEqual(parseHealthData({}, TZ), []);
 							{ startTime: '2026-06-22T04:30:00Z', endTime: '2026-06-22T05:30:00Z', type: 'DEEP' }
 						]
 					}
-				},
-				// an Apple session must be ignored (platform filter)
-				{
-					...APPLE,
-					sleep: {
-						interval: { startTime: '2026-06-22T04:00:00Z', endTime: '2026-06-22T12:00:00Z' },
-						stages: []
-					}
 				}
 			]
 		},
@@ -238,9 +231,128 @@ assert.deepEqual(parseHealthData({}, TZ), []);
 	);
 	assert.equal(sess.length, 1);
 	assert.equal(sess[0].date, '2026-06-22');
+	assert.equal(sess[0].source, 'fitbit');
 	assert.equal(sess[0].segments.length, 2); // the 7h main session, not the nap
 	assert.deepEqual(sess[0].segments[1], { stage: 'DEEP', startMin: 30, durationMin: 60 });
 }
 assert.deepEqual(parseSleepSessions({}, TZ), []);
+
+// ── Apple Watch as the backup sleep source ────────────────────────────────
+// One night, one device: the longest session wins, ties go to Fitbit. Never a
+// merge of the two, so nothing can be double-counted.
+const night = (
+	platform: typeof FIT | typeof APPLE,
+	start: string,
+	end: string,
+	stages: [string, string, string][] = []
+) => ({
+	...platform,
+	sleep: {
+		interval: { startTime: start, endTime: end },
+		stages: stages.map(([type, s, e]) => ({ type, startTime: s, endTime: e }))
+	}
+});
+const one = (points: unknown[]) => {
+	const s = parseSleepSessions({ dataPoints: points }, TZ);
+	assert.equal(s.length, 1, 'exactly one session per night');
+	return s[0];
+};
+
+// Fitbit only → Fitbit wins.
+assert.equal(one([night(FIT, '2026-06-22T03:00:00Z', '2026-06-22T11:00:00Z')]).source, 'fitbit');
+// Apple only (the forgot-to-swap night) → Apple is kept, not dropped.
+assert.equal(one([night(APPLE, '2026-06-22T03:00:00Z', '2026-06-22T11:00:00Z')]).source, 'apple');
+// Both worn, overlapping, Fitbit longer → Fitbit, exactly one row.
+assert.equal(
+	one([
+		night(FIT, '2026-06-22T03:00:00Z', '2026-06-22T11:00:00Z'),
+		night(APPLE, '2026-06-22T03:30:00Z', '2026-06-22T10:30:00Z')
+	]).source,
+	'fitbit'
+);
+// Exactly equal duration → tie goes to Fitbit (today's behaviour), either order.
+for (const order of [0, 1]) {
+	const pts = [
+		night(APPLE, '2026-06-22T03:00:00Z', '2026-06-22T11:00:00Z'),
+		night(FIT, '2026-06-22T03:00:00Z', '2026-06-22T11:00:00Z')
+	];
+	assert.equal(one(order ? pts.reverse() : pts).source, 'fitbit');
+}
+// Fitbit stub (band on the nightstand) vs a real Apple night → Apple wins.
+assert.equal(
+	one([
+		night(FIT, '2026-06-22T06:00:00Z', '2026-06-22T06:20:00Z'), // 20m of wear, 2am local
+		night(APPLE, '2026-06-22T03:00:00Z', '2026-06-22T11:00:00Z')
+	]).source,
+	'apple'
+);
+// Apple stage names: CORE ≙ light; IN_BED spans the whole night and must be
+// dropped (counting it would double the night).
+{
+	const appleStaged = night(APPLE, '2026-06-22T03:00:00Z', '2026-06-22T05:00:00Z', [
+		['IN_BED', '2026-06-22T03:00:00Z', '2026-06-22T05:00:00Z'],
+		['CORE', '2026-06-22T03:00:00Z', '2026-06-22T04:00:00Z'],
+		['DEEP', '2026-06-22T04:00:00Z', '2026-06-22T04:30:00Z'],
+		['AWAKE', '2026-06-22T04:30:00Z', '2026-06-22T05:00:00Z']
+	]);
+	const s = one([appleStaged]);
+	assert.deepEqual(
+		s.segments.map((x) => x.stage),
+		['LIGHT', 'DEEP', 'AWAKE']
+	);
+	const am = Object.fromEntries(
+		parseHealthData({ sleep: { dataPoints: [appleStaged] } }, TZ).map((r) => [r.metric, r.value])
+	);
+	assert.equal(am.time_in_bed_min, 120);
+	assert.equal(am.sleep_min, 90); // 60 light + 30 deep — IN_BED not counted twice
+	assert.equal(am.sleep_awake_min, 30);
+	assert.equal(am.sleep_light_min, 60);
+	assert.equal(am.sleep_deep_min, 30);
+	assert.equal(am.sleep_efficiency_pct, 75);
+	assert.equal(am.sleep_resting_hr, undefined); // Fitbit-only metrics stay absent
+}
+// Apple session with NO stage breakdown → one solid asleep block + sane minutes,
+// and no fabricated efficiency/awake split.
+{
+	const s = one([night(APPLE, '2026-06-22T03:00:00Z', '2026-06-22T11:00:00Z')]);
+	assert.deepEqual(s.segments, [{ stage: 'ASLEEP', startMin: 0, durationMin: 480 }]);
+	const am = Object.fromEntries(
+		parseHealthData(
+			{ sleep: { dataPoints: [night(APPLE, '2026-06-22T03:00:00Z', '2026-06-22T11:00:00Z')] } },
+			TZ
+		).map((r) => [r.metric, r.value])
+	);
+	assert.equal(am.sleep_min, 480);
+	assert.equal(am.time_in_bed_min, 480);
+	assert.equal(am.sleep_efficiency_pct, undefined);
+	assert.equal(am.sleep_awake_min, undefined);
+}
+// The winning session drives the aggregates too: an Apple night that beats a
+// Fitbit stub reports Apple's minutes, not the stub's, and never their sum.
+{
+	const rows2 = parseHealthData(
+		{
+			sleep: {
+				dataPoints: [
+					// 20-minute Fitbit stub, same wake date as the Apple night
+					sleepSession(
+						'2026-06-22T06:20:00Z',
+						'18',
+						'20',
+						'2',
+						[['LIGHT', '18']],
+						'2026-06-22T06:00:00Z'
+					),
+					night(APPLE, '2026-06-22T03:00:00Z', '2026-06-22T11:00:00Z')
+				]
+			}
+		},
+		TZ
+	);
+	const mixed = Object.fromEntries(rows2.map((r) => [r.metric, r.value]));
+	assert.equal(rows2.filter((r) => r.metric === 'sleep_min').length, 1, 'one sleep_min row');
+	assert.equal(mixed.sleep_min, 480); // Apple's night, not the stub and not their sum
+	assert.equal(mixed.sleep_light_min, undefined); // the stub's breakdown doesn't leak in
+}
 
 console.log('fitbitParse.selfcheck: OK');

@@ -8,6 +8,10 @@
 //   1. separate keys (sleep_* vs the unprefixed Apple keys), and
 //   2. fitPoints() drops every non-FITBIT dataPoint — Google's reconciled stream
 //      also serves the user's Apple Health (HEALTH_KIT) data, which we ignore.
+// SLEEP is the one exception to (2): the Apple Watch is the backup sleep tracker
+// for nights the Fitbit wasn't worn, so the sleep type allows HEALTH_KIT too and
+// keeps exactly ONE session per night — the longest, tie → Fitbit. A night never
+// draws from two devices, so nothing can be double-counted.
 // Field names below are confirmed against live responses (see the sync's
 // {"debug":true} mode). Sleep efficiency is computed (minutesAsleep /
 // minutesInSleepPeriod) — Fitbit's response carries no efficiency field. Stage
@@ -16,10 +20,13 @@
 
 export type MetricRow = { date: string; metric: string; value: number };
 
+export type SleepSource = 'fitbit' | 'apple';
+
 export type SleepSession = {
 	date: string; // local wake date
 	startAt: string; // ISO, sleep start
 	endAt: string; // ISO, wake
+	source: SleepSource; // which watch recorded this night
 	segments: { stage: string; startMin: number; durationMin: number }[];
 };
 
@@ -67,10 +74,10 @@ function localDate(instant: unknown, tz: string): string | null {
 // user's Apple Health (HEALTH_KIT) data on these data types; we drop it so Apple
 // stays exclusively on the unprefixed daytime keys (pulled via HealthKit) and
 // Fitbit owns only the sleep_* keys — that's the "Apple takes priority" rule.
-function fitPoints(j: unknown): unknown[] {
+function fitPoints(j: unknown, platforms: string[] = ['FITBIT']): unknown[] {
 	const dp = dig(j, 'dataPoints');
 	if (!Array.isArray(dp)) return [];
-	return dp.filter((p) => dig(p, 'dataSource', 'platform') === 'FITBIT');
+	return dp.filter((p) => platforms.includes(String(dig(p, 'dataSource', 'platform'))));
 }
 
 // Average a Sample-type's value field per local date (HRV/SpO2 may emit several
@@ -117,30 +124,59 @@ export function parseHealthData(
 		if (date && v !== null && Number.isFinite(v)) rows.push({ date, metric, value: v });
 	};
 
-	// Sleep (Session): one dataPoint per session. `summary` carries Fitbit's own
+	// Sleep (Session): one dataPoint per session, from EITHER watch. Only the
+	// WINNING session per night contributes, so daily_metrics and the hypnogram
+	// (sleep_stages) always describe the same night from the same device — and a
+	// night is never assembled from two devices. `summary` carries Fitbit's own
 	// minute totals (int64 → JSON strings); attribute to the wake date (interval end).
-	for (const dp of fitPoints(r.sleep)) {
-		const s = dig(dp, 'sleep');
-		const sum = dig(s, 'summary');
-		const date = localDate(dig(s, 'interval', 'endTime'), tz);
+	for (const c of winningSessions(r.sleep, tz)) {
+		const { date, segments } = c.session;
+		const sum = c.summary;
 		const asleep = num(dig(sum, 'minutesAsleep'));
-		const inBed = num(dig(sum, 'minutesInSleepPeriod'));
-		push(date, 'sleep_min', asleep);
-		push(date, 'time_in_bed_min', inBed);
-		push(date, 'sleep_awake_min', num(dig(sum, 'minutesAwake')));
-		if (asleep !== null && inBed && inBed > 0) {
-			push(date, 'sleep_efficiency_pct', (asleep / inBed) * 100);
-		}
-		const stages = dig(sum, 'stagesSummary');
-		if (Array.isArray(stages)) {
-			for (const st of stages) {
-				const t = String(dig(st, 'type') ?? '').toUpperCase();
-				const mins = num(dig(st, 'minutes'));
-				if (t.includes('DEEP')) push(date, 'sleep_deep_min', mins);
-				else if (t.includes('REM')) push(date, 'sleep_rem_min', mins);
-				else if (t.includes('LIGHT')) push(date, 'sleep_light_min', mins);
-				// AWAKE comes from summary.minutesAwake above; classic ASLEEP/RESTLESS
-				// have no deep/light/rem breakdown and only feed sleep_min.
+		if (asleep !== null) {
+			const inBed = num(dig(sum, 'minutesInSleepPeriod'));
+			push(date, 'sleep_min', asleep);
+			push(date, 'time_in_bed_min', inBed);
+			push(date, 'sleep_awake_min', num(dig(sum, 'minutesAwake')));
+			if (inBed && inBed > 0) push(date, 'sleep_efficiency_pct', (asleep / inBed) * 100);
+			const stages = dig(sum, 'stagesSummary');
+			if (Array.isArray(stages)) {
+				for (const st of stages) {
+					const t = String(dig(st, 'type') ?? '').toUpperCase();
+					const mins = num(dig(st, 'minutes'));
+					if (t.includes('DEEP')) push(date, 'sleep_deep_min', mins);
+					else if (t.includes('REM')) push(date, 'sleep_rem_min', mins);
+					else if (t.includes('LIGHT')) push(date, 'sleep_light_min', mins);
+					// AWAKE comes from summary.minutesAwake above; classic ASLEEP/RESTLESS
+					// have no deep/light/rem breakdown and only feed sleep_min.
+				}
+			}
+		} else {
+			// No minute summary (the Apple path): derive the totals from this
+			// session's own segments, so they can't disagree with the hypnogram and
+			// nothing is borrowed from the other device.
+			const mins = (stage: string) =>
+				segments.filter((s) => s.stage === stage).reduce((t, s) => t + s.durationMin, 0);
+			const inBed = c.lenMs / 60000;
+			const awake = mins('AWAKE');
+			const slept = c.staged
+				? segments.filter((s) => s.stage !== 'AWAKE').reduce((t, s) => t + s.durationMin, 0)
+				: inBed;
+			push(date, 'time_in_bed_min', inBed);
+			push(date, 'sleep_min', slept);
+			if (c.staged) {
+				// Only with a real stage breakdown — a stageless session has no awake
+				// data, and reporting 100% efficiency would be a fabrication.
+				push(date, 'sleep_awake_min', awake);
+				push(date, 'sleep_efficiency_pct', (slept / inBed) * 100);
+				for (const [stage, key] of [
+					['DEEP', 'sleep_deep_min'],
+					['REM', 'sleep_rem_min'],
+					['LIGHT', 'sleep_light_min']
+				] as const) {
+					const v = mins(stage);
+					if (v > 0) push(date, key, v);
+				}
 			}
 		}
 	}
@@ -182,49 +218,109 @@ export function parseHealthData(
 	return foldDaily(rows);
 }
 
-// Per-night stage timeline for the hypnogram: the main (longest) session per local
-// wake date, with each stage segment as a minute offset+duration from sleep start.
-export function parseSleepSessions(sleep: unknown, tz: string): SleepSession[] {
-	const byDate = new Map<string, SleepSession>();
-	for (const dp of fitPoints(sleep)) {
+// ── Session selection: one night, one device ───────────────────────────────
+type Candidate = {
+	session: SleepSession;
+	summary: unknown; // Fitbit's own minute totals, when the point carries them
+	lenMs: number;
+	staged: boolean; // had a real stage breakdown (vs a synthesised solid block)
+};
+
+// Fitbit emits DEEP/LIGHT/REM/AWAKE; Apple's CORE is the same thing as light.
+// null = drop the segment: Apple's IN_BED spans the whole night *around* the
+// stage segments, so counting it would double the night's minutes.
+function normStage(t: string): string | null {
+	const s = t.toUpperCase();
+	if (s.includes('BED')) return null;
+	if (s.includes('DEEP')) return 'DEEP';
+	if (s.includes('REM')) return 'REM';
+	if (s.includes('LIGHT') || s.includes('CORE')) return 'LIGHT';
+	if (s.includes('WAKE')) return 'AWAKE';
+	return 'ASLEEP'; // classic Fitbit logs / Apple's unspecified-asleep: no breakdown
+}
+
+function sleepCandidates(sleep: unknown, tz: string): Candidate[] {
+	const out: Candidate[] = [];
+	for (const dp of fitPoints(sleep, ['FITBIT', 'HEALTH_KIT'])) {
 		const s = dig(dp, 'sleep');
 		const start = dig(s, 'interval', 'startTime');
 		const end = dig(s, 'interval', 'endTime');
 		const date = localDate(end, tz);
-		const startMs = typeof start === 'string' ? Date.parse(start) : NaN;
-		const rawStages = dig(s, 'stages');
 		if (!date || typeof start !== 'string' || typeof end !== 'string') continue;
-		if (!Number.isFinite(startMs) || !Array.isArray(rawStages)) continue;
+		const startMs = Date.parse(start);
+		const endMs = Date.parse(end);
+		if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) continue;
 
 		const segments: SleepSession['segments'] = [];
-		for (const seg of rawStages) {
-			const st = dig(seg, 'startTime');
-			const en = dig(seg, 'endTime');
-			const stage = dig(seg, 'type');
-			const sMs = typeof st === 'string' ? Date.parse(st) : NaN;
-			const eMs = typeof en === 'string' ? Date.parse(en) : NaN;
-			if (typeof stage !== 'string' || !Number.isFinite(sMs) || !Number.isFinite(eMs) || eMs <= sMs)
-				continue;
-			segments.push({ stage, startMin: (sMs - startMs) / 60000, durationMin: (eMs - sMs) / 60000 });
+		const rawStages = dig(s, 'stages');
+		if (Array.isArray(rawStages)) {
+			for (const seg of rawStages) {
+				const st = dig(seg, 'startTime');
+				const en = dig(seg, 'endTime');
+				const stage = dig(seg, 'type');
+				const sMs = typeof st === 'string' ? Date.parse(st) : NaN;
+				const eMs = typeof en === 'string' ? Date.parse(en) : NaN;
+				const norm = typeof stage === 'string' ? normStage(stage) : null;
+				if (!norm || !Number.isFinite(sMs) || !Number.isFinite(eMs) || eMs <= sMs) continue;
+				segments.push({
+					stage: norm,
+					startMin: (sMs - startMs) / 60000,
+					durationMin: (eMs - sMs) / 60000
+				});
+			}
 		}
-		if (!segments.length) continue;
+		const staged = segments.length > 0;
+		// Apple often reports a session with no stage breakdown at all — render it as
+		// one solid asleep block rather than a blank hypnogram.
+		if (!staged) {
+			segments.push({ stage: 'ASLEEP', startMin: 0, durationMin: (endMs - startMs) / 60000 });
+		}
+		out.push({
+			session: {
+				date,
+				startAt: start,
+				endAt: end,
+				source: dig(dp, 'dataSource', 'platform') === 'FITBIT' ? 'fitbit' : 'apple',
+				segments
+			},
+			summary: dig(s, 'summary'),
+			lenMs: endMs - startMs,
+			staged
+		});
+	}
+	return out;
+}
 
-		// Keep the longest session for the date (the main sleep, not a nap).
-		const lenMs = Date.parse(end) - startMs;
-		const prev = byDate.get(date);
-		if (!prev || lenMs > Date.parse(prev.endAt) - Date.parse(prev.startAt)) {
-			byDate.set(date, { date, startAt: start, endAt: end, segments });
-		}
+// ONE session per local wake date: the longest, tie → Fitbit. Longest-wins rather
+// than "Fitbit, else Apple" because a Fitbit left on the nightstand still emits a
+// short stub session that must not beat a real 8-hour Apple night. The tie-break
+// keeps both-devices-worn nights on Fitbit, i.e. exactly today's behaviour.
+// ponytail: this is also the anti-double-count guarantee — by construction, not by
+// overlap arithmetic. It drops naps too (out of scope; see the ticket).
+function winningSessions(sleep: unknown, tz: string): Candidate[] {
+	const byDate = new Map<string, Candidate>();
+	for (const c of sleepCandidates(sleep, tz)) {
+		const prev = byDate.get(c.session.date);
+		const wins =
+			!prev ||
+			c.lenMs > prev.lenMs ||
+			(c.lenMs === prev.lenMs && c.session.source === 'fitbit' && prev.session.source !== 'fitbit');
+		if (wins) byDate.set(c.session.date, c);
 	}
 	return [...byDate.values()];
 }
 
-// A night can have several sleep sessions (main sleep + a nap), which yields
-// duplicate (date, metric) rows. Fold to ONE per (date, metric) so the
-// daily_metrics upsert never hits the same conflict target twice in one statement
-// (Postgres rejects that). Durations (`_min`) sum across sessions; everything else
-// (efficiency %, rates) averages. ponytail: efficiency is a simple mean of
-// sessions — fine for the rare main+nap case; time-weight it only if it matters.
+// Per-night stage timeline for the hypnogram: the winning session per local wake
+// date, with each stage segment as a minute offset+duration from sleep start.
+export function parseSleepSessions(sleep: unknown, tz: string): SleepSession[] {
+	return winningSessions(sleep, tz).map((c) => c.session);
+}
+
+// Guard against duplicate (date, metric) rows — the daily_metrics upsert cannot
+// hit the same conflict target twice in one statement (Postgres rejects that).
+// Sleep now contributes one session per date, but a repeated stagesSummary entry
+// or a future multi-point metric would still collide. Durations (`_min`) sum;
+// everything else (efficiency %, rates) averages.
 function foldDaily(rows: MetricRow[]): MetricRow[] {
 	const acc = new Map<string, { date: string; metric: string; sum: number; n: number }>();
 	for (const r of rows) {
