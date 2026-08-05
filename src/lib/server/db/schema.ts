@@ -325,10 +325,11 @@ export const dailyMetrics = pgTable(
 	(t) => [primaryKey({ columns: [t.date, t.metric] })]
 );
 
-// One row per night's sleep-stage timeline (Fitbit via Google Health), kept so the
-// /sleep hypnogram can draw the night. The aggregate minutes live in daily_metrics;
-// this is the per-segment detail. Keyed by local wake date; the main (longest)
-// session of the night wins. `segments` offsets are minutes from `startAt`.
+// One row per night's sleep-stage timeline (Fitbit or Apple Watch, both via
+// Google Health), kept so the /sleep hypnogram can draw the night. The aggregate
+// minutes live in daily_metrics; this is the per-segment detail. Keyed by local
+// wake date; the main (longest) session of the night wins, tie → Fitbit.
+// `segments` offsets are minutes from `startAt`.
 export const sleepStages = pgTable('sleep_stages', {
 	date: text('date').primaryKey(), // 'YYYY-MM-DD' in APP_TZ (wake date)
 	startAt: timestamp('start_at').notNull(),
@@ -336,6 +337,10 @@ export const sleepStages = pgTable('sleep_stages', {
 	segments: jsonb('segments')
 		.$type<{ stage: string; startMin: number; durationMin: number }[]>()
 		.notNull(),
+	// Which watch recorded this night: 'fitbit' | 'apple'. One night = one device
+	// (longest session wins, tie → Fitbit), so it's never a blend. Every existing
+	// row predates Apple sleep, which the default states correctly — no backfill.
+	source: text('source').notNull().default('fitbit'),
 	updatedAt: timestamp('updated_at').notNull().defaultNow()
 });
 

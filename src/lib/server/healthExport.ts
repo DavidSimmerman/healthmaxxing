@@ -53,6 +53,9 @@ async function sleepExport(from: string, to: string) {
 		date: s.date,
 		startAt: s.startAt.toISOString(),
 		endAt: s.endAt.toISOString(),
+		// Which watch recorded the night. 'apple' nights carry no resting HR / HRV /
+		// SpO2 / resp rate / skin temp — that's the device, not missing data.
+		source: s.source,
 		segments: s.segments
 	}));
 	return { nights, timeline };

@@ -660,9 +660,14 @@ const HEALTH_METRIC_CATALOG =
 	'SLEEP (Fitbit via Google Health API, nightly) — sleep_min, time_in_bed_min, sleep_deep_min, sleep_light_min, ' +
 	'sleep_rem_min, sleep_awake_min (min), sleep_efficiency_pct (%), sleep_resting_hr (bpm), ' +
 	'sleep_hrv_ms (ms), sleep_spo2_pct (%), sleep_resp_rate (breaths/min), ' +
-	'sleep_skin_temp_dev_c (°C vs the user’s baseline). These come from a Fitbit worn only at ' +
+	'sleep_skin_temp_dev_c (°C vs the user’s baseline). These come from the watch worn that ' +
 	'night and are deliberately separate from the Apple daytime metrics above — e.g. sleep_resting_hr ' +
-	'is overnight HR and does NOT replace hr_avg/resting_hr. ' +
+	'is overnight HR and does NOT replace hr_avg/resting_hr. Sleep is normally the Fitbit, but on ' +
+	'nights it wasn’t worn the Apple Watch session is used instead (one device per night, never ' +
+	'merged — export_data category "sleep" reports it as timeline[].source = "fitbit" | "apple"). ' +
+	'Apple-sourced nights have duration and stages but NO sleep_resting_hr / sleep_hrv_ms / ' +
+	'sleep_spo2_pct / sleep_resp_rate / sleep_skin_temp_dev_c — those are Fitbit-only, so their ' +
+	'absence is the device, not a bad night. ' +
 	'Metrics are absent on days/devices that recorded nothing — a missing key means no data, not zero.';
 
 const GET_HEALTH_METRICS_TOOL = {

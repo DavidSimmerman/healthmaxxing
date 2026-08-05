@@ -329,7 +329,8 @@ export async function syncHealth(
 					date: s.date,
 					startAt: new Date(s.startAt),
 					endAt: new Date(s.endAt),
-					segments: s.segments
+					segments: s.segments,
+					source: s.source
 				}))
 			)
 			.onConflictDoUpdate({
@@ -338,6 +339,8 @@ export async function syncHealth(
 					startAt: sql`excluded.start_at`,
 					endAt: sql`excluded.end_at`,
 					segments: sql`excluded.segments`,
+					// A re-sync can flip a night's source when the better session lands late.
+					source: sql`excluded.source`,
 					updatedAt: new Date()
 				}
 			});

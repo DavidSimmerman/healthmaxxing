@@ -1,0 +1,1 @@
+ALTER TABLE "sleep_stages" ADD COLUMN "source" text DEFAULT 'fitbit' NOT NULL;

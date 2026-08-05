@@ -27,6 +27,7 @@ export async function load() {
 		{
 			startAt: string;
 			endAt: string;
+			source: string;
 			segments: { stage: string; startMin: number; durationMin: number }[];
 		}
 	> = {};
@@ -34,6 +35,7 @@ export async function load() {
 		stagesByDate[s.date] = {
 			startAt: s.startAt.toISOString(),
 			endAt: s.endAt.toISOString(),
+			source: s.source, // 'fitbit' | 'apple' — which watch recorded the night
 			segments: s.segments
 		};
 	}
