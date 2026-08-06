@@ -48,8 +48,18 @@ const seg = (stage: string, startMin: number, durationMin: number) => ({
 	durationMin
 });
 
+// The seeded dates are recent, so they can land on REAL rows. Snapshot whatever
+// is there and put it back afterwards instead of deleting blindly.
+let savedStages: Record<string, unknown>[] = [];
+let savedMetrics: Record<string, unknown>[] = [];
+
 test.beforeAll(async () => {
 	await withDb(async (sql) => {
+		savedStages =
+			await sql`select * from sleep_stages where date in (${FITBIT_NIGHT}, ${APPLE_NIGHT})`;
+		savedMetrics = await sql`select * from daily_metrics
+			where date in (${FITBIT_NIGHT}, ${APPLE_NIGHT})
+			  and (metric like 'sleep\\_%' or metric = 'time_in_bed_min')`;
 		for (const [date, source, segments, metrics] of [
 			[
 				FITBIT_NIGHT,
@@ -76,7 +86,9 @@ test.afterAll(async () => {
 		await sql`delete from sleep_stages where date in (${FITBIT_NIGHT}, ${APPLE_NIGHT})`;
 		await sql`delete from daily_metrics
 			where date in (${FITBIT_NIGHT}, ${APPLE_NIGHT})
-			  and (metric like 'sleep%' or metric = 'time_in_bed_min')`;
+			  and (metric like 'sleep\\_%' or metric = 'time_in_bed_min')`;
+		for (const row of savedStages) await sql`insert into sleep_stages ${sql(row)}`;
+		for (const row of savedMetrics) await sql`insert into daily_metrics ${sql(row)}`;
 	});
 });
 

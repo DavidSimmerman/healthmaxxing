@@ -355,4 +355,115 @@ assert.equal(
 	assert.equal(mixed.sleep_light_min, undefined); // the stub's breakdown doesn't leak in
 }
 
+// On an Apple-won night the Fitbit-only vitals must NOT come along: the band was
+// on during the day, so Google still reports a daily resting HR / HRV for that
+// date. Cross-sourcing them onto an Apple night would be inventing a night.
+{
+	const day = { year: 2026, month: 6, day: 22 };
+	const vitals = {
+		restingHr: {
+			dataPoints: [{ ...FIT, dailyRestingHeartRate: { date: day, beatsPerMinute: '54' } }]
+		},
+		respRate: {
+			dataPoints: [{ ...FIT, dailyRespiratoryRate: { date: day, breathsPerMinute: 15.7 } }]
+		},
+		skinTemp: {
+			dataPoints: [
+				{
+					...FIT,
+					dailySleepTemperatureDerivations: {
+						date: day,
+						nightlyTemperatureCelsius: 36.1,
+						baselineTemperatureCelsius: 36.5
+					}
+				}
+			]
+		},
+		hrv: {
+			dataPoints: [
+				{
+					...FIT,
+					heartRateVariability: {
+						sampleTime: { physicalTime: '2026-06-22T05:00:00Z' },
+						rootMeanSquareOfSuccessiveDifferencesMilliseconds: 40
+					}
+				}
+			]
+		},
+		spo2: {
+			dataPoints: [
+				{
+					...FIT,
+					oxygenSaturation: { sampleTime: { physicalTime: '2026-06-22T05:00:00Z' }, percentage: 96 }
+				}
+			]
+		}
+	};
+	const appleNight = Object.fromEntries(
+		parseHealthData(
+			{
+				sleep: { dataPoints: [night(APPLE, '2026-06-22T03:00:00Z', '2026-06-22T11:00:00Z')] },
+				...vitals
+			},
+			TZ
+		).map((r) => [r.metric, r.value])
+	);
+	assert.equal(appleNight.sleep_min, 480);
+	for (const k of [
+		'sleep_resting_hr',
+		'sleep_resp_rate',
+		'sleep_skin_temp_dev_c',
+		'sleep_hrv_ms',
+		'sleep_spo2_pct'
+	]) {
+		assert.equal(appleNight[k], undefined, `${k} must be absent on an Apple night`);
+	}
+	// Same vitals on a Fitbit night still land (the suppression is per night).
+	const fitbitNight = Object.fromEntries(
+		parseHealthData(
+			{
+				sleep: { dataPoints: [sleepSession('2026-06-22T11:00:00Z', '414', '450', '36', [])] },
+				...vitals
+			},
+			TZ
+		).map((r) => [r.metric, r.value])
+	);
+	assert.equal(fitbitNight.sleep_resting_hr, 54);
+	assert.equal(fitbitNight.sleep_hrv_ms, 40);
+}
+
+// A session whose only stages are in-bed markers tracked time in bed, not sleep —
+// reporting it as a night's sleep would over-report it, so it's dropped entirely.
+{
+	const inBedOnly = [
+		night(APPLE, '2026-06-22T03:00:00Z', '2026-06-22T11:00:00Z', [
+			['IN_BED', '2026-06-22T03:00:00Z', '2026-06-22T11:00:00Z']
+		])
+	];
+	assert.deepEqual(parseSleepSessions({ dataPoints: inBedOnly }, TZ), []);
+	assert.deepEqual(parseHealthData({ sleep: { dataPoints: inBedOnly } }, TZ), []);
+}
+
+// One undifferentiated "asleep" stretch: minutes yes, awake/efficiency no.
+{
+	const asleepOnly = Object.fromEntries(
+		parseHealthData(
+			{
+				sleep: {
+					dataPoints: [
+						night(APPLE, '2026-06-22T03:00:00Z', '2026-06-22T11:00:00Z', [
+							['ASLEEP_UNSPECIFIED', '2026-06-22T03:30:00Z', '2026-06-22T10:30:00Z']
+						])
+					]
+				}
+			},
+			TZ
+		).map((r) => [r.metric, r.value])
+	);
+	assert.equal(asleepOnly.sleep_min, 420); // the 7h stretch, not the 8h in bed
+	assert.equal(asleepOnly.time_in_bed_min, 480);
+	assert.equal(asleepOnly.sleep_efficiency_pct, undefined);
+	assert.equal(asleepOnly.sleep_awake_min, undefined);
+}
+
 console.log('fitbitParse.selfcheck: OK');

@@ -1,6 +1,6 @@
 import { env } from '$env/dynamic/private';
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, like, or, sql } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { dailyMetrics, fitbitAuth, sleepStages } from '$lib/server/db/schema';
 import { isSealed, openSecret, sealSecret, secretBoxEnabled } from '$lib/server/secretBox';
@@ -308,6 +308,26 @@ export async function syncHealth(
 	const startDate = addDays(todayLabel(), -clampDays(days));
 	const raw = await fetchWindowRetrying(startDate);
 	const rows: MetricRow[] = parseHealthData(raw, APP_TZ);
+	// Per-night stage timeline (for the hypnogram). The sleep endpoint returns the
+	// recent ~25 sessions, so this also backfills history on the first sync.
+	const sessions = parseSleepSessions(raw.sleep, APP_TZ);
+
+	// Nights the Apple Watch won: an upsert alone would leave whatever the Fitbit
+	// wrote there before (stage minutes, resting HR, HRV …), so the night would be
+	// badged Apple while still showing Fitbit numbers. Clear the night first — the
+	// parse re-inserts exactly what the winning session supports, nothing more.
+	const appleNights = sessions.filter((s) => s.source === 'apple').map((s) => s.date);
+	if (appleNights.length) {
+		await db
+			.delete(dailyMetrics)
+			.where(
+				and(
+					inArray(dailyMetrics.date, appleNights),
+					or(like(dailyMetrics.metric, 'sleep_%'), eq(dailyMetrics.metric, 'time_in_bed_min'))
+				)
+			);
+	}
+
 	if (rows.length) {
 		await db
 			.insert(dailyMetrics)
@@ -317,10 +337,6 @@ export async function syncHealth(
 				set: { value: sql`excluded.value`, updatedAt: new Date() }
 			});
 	}
-
-	// Per-night stage timeline (for the hypnogram). The sleep endpoint returns the
-	// recent ~25 sessions, so this also backfills history on the first sync.
-	const sessions = parseSleepSessions(raw.sleep, APP_TZ);
 	if (sessions.length) {
 		await db
 			.insert(sleepStages)

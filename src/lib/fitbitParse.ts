@@ -129,7 +129,19 @@ export function parseHealthData(
 	// (sleep_stages) always describe the same night from the same device — and a
 	// night is never assembled from two devices. `summary` carries Fitbit's own
 	// minute totals (int64 → JSON strings); attribute to the wake date (interval end).
-	for (const c of winningSessions(r.sleep, tz)) {
+	const sessions = winningSessions(r.sleep, tz);
+	// Nights the Apple Watch won. The vitals below (resting HR, HRV, SpO2, resp
+	// rate, skin temp) are Fitbit-only and come from separate data types — on an
+	// Apple night the Fitbit's daytime wear would still emit them, which would
+	// silently cross-source the night. Absent is the honest answer.
+	const appleNights = new Set(
+		sessions.filter((c) => c.session.source === 'apple').map((c) => c.session.date)
+	);
+	const pushFitbitOnly = (date: string | null, metric: string, v: number | null) => {
+		if (date && !appleNights.has(date)) push(date, metric, v);
+	};
+
+	for (const c of sessions) {
 		const { date, segments } = c.session;
 		const sum = c.summary;
 		const asleep = num(dig(sum, 'minutesAsleep'));
@@ -158,16 +170,17 @@ export function parseHealthData(
 			const mins = (stage: string) =>
 				segments.filter((s) => s.stage === stage).reduce((t, s) => t + s.durationMin, 0);
 			const inBed = c.lenMs / 60000;
-			const awake = mins('AWAKE');
-			const slept = c.staged
-				? segments.filter((s) => s.stage !== 'AWAKE').reduce((t, s) => t + s.durationMin, 0)
-				: inBed;
+			const slept = c.synth
+				? inBed // no stage data at all: the whole session is the night
+				: segments.filter((s) => s.stage !== 'AWAKE').reduce((t, s) => t + s.durationMin, 0);
 			push(date, 'time_in_bed_min', inBed);
 			push(date, 'sleep_min', slept);
 			if (c.staged) {
-				// Only with a real stage breakdown — a stageless session has no awake
-				// data, and reporting 100% efficiency would be a fabrication.
-				push(date, 'sleep_awake_min', awake);
+				// Only with a real stage breakdown — an undifferentiated block has no
+				// awake data, and reporting 100% efficiency would be a fabrication.
+				// Awake = the rest of the night, so it can't contradict efficiency even
+				// when the device leaves gaps between segments.
+				push(date, 'sleep_awake_min', inBed - slept);
 				push(date, 'sleep_efficiency_pct', (slept / inBed) * 100);
 				for (const [stage, key] of [
 					['DEEP', 'sleep_deep_min'],
@@ -184,22 +197,23 @@ export function parseHealthData(
 	// Daily summaries (date is given directly — no timezone needed).
 	for (const dp of fitPoints(r.restingHr)) {
 		const d = dig(dp, 'dailyRestingHeartRate');
-		push(ymd(dig(d, 'date')), 'sleep_resting_hr', num(dig(d, 'beatsPerMinute')));
+		pushFitbitOnly(ymd(dig(d, 'date')), 'sleep_resting_hr', num(dig(d, 'beatsPerMinute')));
 	}
 	for (const dp of fitPoints(r.respRate)) {
 		const d = dig(dp, 'dailyRespiratoryRate');
-		push(ymd(dig(d, 'date')), 'sleep_resp_rate', num(dig(d, 'breathsPerMinute')));
+		pushFitbitOnly(ymd(dig(d, 'date')), 'sleep_resp_rate', num(dig(d, 'breathsPerMinute')));
 	}
 	for (const dp of fitPoints(r.skinTemp)) {
 		const d = dig(dp, 'dailySleepTemperatureDerivations');
 		const nightly = num(dig(d, 'nightlyTemperatureCelsius'));
 		const baseline = num(dig(d, 'baselineTemperatureCelsius'));
 		if (nightly !== null && baseline !== null) {
-			push(ymd(dig(d, 'date')), 'sleep_skin_temp_dev_c', nightly - baseline);
+			pushFitbitOnly(ymd(dig(d, 'date')), 'sleep_skin_temp_dev_c', nightly - baseline);
 		}
 	}
 
 	// Sample types → one averaged value per local night.
+	const notAppleNight = (m: MetricRow) => !appleNights.has(m.date);
 	rows.push(
 		...avgSamples(
 			fitPoints(r.hrv),
@@ -207,12 +221,19 @@ export function parseHealthData(
 			'rootMeanSquareOfSuccessiveDifferencesMilliseconds',
 			'sleep_hrv_ms',
 			tz
-		)
+		).filter(notAppleNight)
 	);
 	// floor 70%: a real sleeping SpO2 below 70 is non-physiological — those reads
 	// are sensor noise / non-wear (Fitbit emits ~50), and would bias the mean low.
 	rows.push(
-		...avgSamples(fitPoints(r.spo2), 'oxygenSaturation', 'percentage', 'sleep_spo2_pct', tz, 70)
+		...avgSamples(
+			fitPoints(r.spo2),
+			'oxygenSaturation',
+			'percentage',
+			'sleep_spo2_pct',
+			tz,
+			70
+		).filter(notAppleNight)
 	);
 
 	return foldDaily(rows);
@@ -223,7 +244,8 @@ type Candidate = {
 	session: SleepSession;
 	summary: unknown; // Fitbit's own minute totals, when the point carries them
 	lenMs: number;
-	staged: boolean; // had a real stage breakdown (vs a synthesised solid block)
+	staged: boolean; // a real breakdown → awake minutes / efficiency are knowable
+	synth: boolean; // no stage data at all → the block was synthesised from the interval
 };
 
 // Fitbit emits DEEP/LIGHT/REM/AWAKE; Apple's CORE is the same thing as light.
@@ -253,6 +275,7 @@ function sleepCandidates(sleep: unknown, tz: string): Candidate[] {
 
 		const segments: SleepSession['segments'] = [];
 		const rawStages = dig(s, 'stages');
+		let inBedOnly = Array.isArray(rawStages) && rawStages.length > 0;
 		if (Array.isArray(rawStages)) {
 			for (const seg of rawStages) {
 				const st = dig(seg, 'startTime');
@@ -262,6 +285,7 @@ function sleepCandidates(sleep: unknown, tz: string): Candidate[] {
 				const eMs = typeof en === 'string' ? Date.parse(en) : NaN;
 				const norm = typeof stage === 'string' ? normStage(stage) : null;
 				if (!norm || !Number.isFinite(sMs) || !Number.isFinite(eMs) || eMs <= sMs) continue;
+				inBedOnly = false;
 				segments.push({
 					stage: norm,
 					startMin: (sMs - startMs) / 60000,
@@ -269,10 +293,18 @@ function sleepCandidates(sleep: unknown, tz: string): Candidate[] {
 				});
 			}
 		}
-		const staged = segments.length > 0;
+		// Stages that were ALL in-bed markers: the device tracked time in bed but not
+		// sleep. Calling that a night's sleep would over-report it, so drop the
+		// session — no data beats invented data.
+		if (inBedOnly) continue;
+		// A real breakdown means we can talk about awake time and efficiency. A single
+		// undifferentiated "asleep" block can't — claiming 0 awake / 100% efficiency
+		// off it would be a fabrication.
+		const staged = segments.length > 1 || segments.some((x) => x.stage !== 'ASLEEP');
 		// Apple often reports a session with no stage breakdown at all — render it as
 		// one solid asleep block rather than a blank hypnogram.
-		if (!staged) {
+		const synth = segments.length === 0;
+		if (synth) {
 			segments.push({ stage: 'ASLEEP', startMin: 0, durationMin: (endMs - startMs) / 60000 });
 		}
 		out.push({
@@ -285,7 +317,8 @@ function sleepCandidates(sleep: unknown, tz: string): Candidate[] {
 			},
 			summary: dig(s, 'summary'),
 			lenMs: endMs - startMs,
-			staged
+			staged,
+			synth
 		});
 	}
 	return out;
