@@ -221,8 +221,12 @@ export function sleepTrends(nights: Night[], stagesByDate: StagesByDate, tz: str
 		.filter((s): s is NightStages => !!s);
 
 	// 1. Awakenings (fragmentation) — honest stand-in for Fitbit "restlessness".
-	if (nightsWithStages.length > 0) {
-		const per = nightsWithStages.map(awakeningsFor);
+	// Only nights with a real stage breakdown count: a night recorded as one solid
+	// ASLEEP block (Apple Watch without stage detail) has no awake data, and
+	// averaging its "0 awakenings" in would invent a perfect night.
+	const staged = nightsWithStages.filter((s) => s.segments.some((x) => x.stage !== 'ASLEEP'));
+	if (staged.length > 0) {
+		const per = staged.map(awakeningsFor);
 		const avgCount = per.reduce((s, p) => s + p.count, 0) / per.length;
 		const avgAwake = per.reduce((s, p) => s + p.awakeMin, 0) / per.length;
 		// Lower is better. ≤3/night is unremarkable for adults; >5 is fragmented.

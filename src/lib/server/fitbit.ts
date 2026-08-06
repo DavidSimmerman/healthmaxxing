@@ -1,6 +1,6 @@
 import { env } from '$env/dynamic/private';
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { and, eq, inArray, like, or, sql } from 'drizzle-orm';
+import { and, eq, gte, inArray, like, or, sql } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { dailyMetrics, fitbitAuth, sleepStages } from '$lib/server/db/schema';
 import { isSealed, openSecret, sealSecret, secretBoxEnabled } from '$lib/server/secretBox';
@@ -302,6 +302,16 @@ async function fetchWindowRetrying(startDate: string): Promise<RawWindow> {
 	}
 }
 
+// Only the Fitbit provides these (they come from separate Google data types, not
+// the sleep session), so they must never be attached to an Apple-sourced night.
+const FITBIT_ONLY_METRICS = new Set([
+	'sleep_resting_hr',
+	'sleep_resp_rate',
+	'sleep_hrv_ms',
+	'sleep_spo2_pct',
+	'sleep_skin_temp_dev_c'
+]);
+
 export async function syncHealth(
 	days = 3
 ): Promise<{ days: number; metrics: number; sleepCapped?: boolean }> {
@@ -328,10 +338,28 @@ export async function syncHealth(
 			);
 	}
 
-	if (rows.length) {
+	// The vitals endpoints cover the whole window, but sleep only returns the most
+	// recent SLEEP_PAGE_SIZE sessions — so an Apple night already on record can be
+	// outside this parse and would silently get Fitbit vitals re-attached. Suppress
+	// them for every known Apple night in the window, not just the ones parsed now.
+	// (Only the vitals: the stored night's own minutes stay put.)
+	const knownApple = new Set([
+		...appleNights,
+		...(
+			await db
+				.select({ date: sleepStages.date })
+				.from(sleepStages)
+				.where(and(eq(sleepStages.source, 'apple'), gte(sleepStages.date, startDate)))
+		).map((r) => r.date)
+	]);
+	const toWrite = rows.filter(
+		(r) => !(knownApple.has(r.date) && FITBIT_ONLY_METRICS.has(r.metric))
+	);
+
+	if (toWrite.length) {
 		await db
 			.insert(dailyMetrics)
-			.values(rows)
+			.values(toWrite)
 			.onConflictDoUpdate({
 				target: [dailyMetrics.date, dailyMetrics.metric],
 				set: { value: sql`excluded.value`, updatedAt: new Date() }
@@ -369,8 +397,8 @@ export async function syncHealth(
 	const sleepCapped = Array.isArray(sleepPoints) && sleepPoints.length >= SLEEP_PAGE_SIZE;
 
 	return {
-		days: new Set(rows.map((r) => r.date)).size,
-		metrics: rows.length,
+		days: new Set(toWrite.map((r) => r.date)).size,
+		metrics: toWrite.length,
 		...(sleepCapped ? { sleepCapped } : {})
 	};
 }
