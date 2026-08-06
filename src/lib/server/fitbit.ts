@@ -343,6 +343,9 @@ export async function syncHealth(
 	// outside this parse and would silently get Fitbit vitals re-attached. Suppress
 	// them for every known Apple night in the window, not just the ones parsed now.
 	// (Only the vitals: the stored night's own minutes stay put.)
+	// …minus any of those the CURRENT parse just flipped back to Fitbit (the stored
+	// row still says 'apple' — it's rewritten further down).
+	const nowFitbit = new Set(sessions.filter((s) => s.source === 'fitbit').map((s) => s.date));
 	const knownApple = new Set([
 		...appleNights,
 		...(
@@ -350,7 +353,9 @@ export async function syncHealth(
 				.select({ date: sleepStages.date })
 				.from(sleepStages)
 				.where(and(eq(sleepStages.source, 'apple'), gte(sleepStages.date, startDate)))
-		).map((r) => r.date)
+		)
+			.map((r) => r.date)
+			.filter((d) => !nowFitbit.has(d))
 	]);
 	const toWrite = rows.filter(
 		(r) => !(knownApple.has(r.date) && FITBIT_ONLY_METRICS.has(r.metric))
