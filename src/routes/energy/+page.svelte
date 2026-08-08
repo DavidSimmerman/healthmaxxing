@@ -149,9 +149,9 @@
 		</div>
 		<p class="mt-2 text-xs" style="color: var(--color-text-subtle);">
 			{#if b.avgTrustedKcal}Workout calories ({num(b.avgTrustedKcal)}/day avg) ride out of the
-				haircut — runs/walks are recomputed from distance & body weight (net cost of transport),
-				and the walking pad rides as-is. Only Apple's passive estimate is corrected.{:else}Only
-				Apple's passive active-energy estimate is corrected; workout tracking rides at full value.{/if}
+				haircut — runs/walks are recomputed from distance & body weight (net cost of transport), and
+				the walking pad rides as-is. Only Apple's passive estimate is corrected.{:else}Only Apple's
+				passive active-energy estimate is corrected; workout tracking rides at full value.{/if}
 		</p>
 	</section>
 
@@ -167,7 +167,8 @@
 			<div class="ledger-row"><span>Eaten</span><b>{num(today.intakeKcal)}</b></div>
 			<div class="ledger-row"><span>Resting (BMR)</span><b>{num(today.bmrKcal)}</b></div>
 			<div class="ledger-row">
-				<span>Active — Apple</span><b>{num(today.activeKcal)}</b>
+				<!-- "logged", not "Apple": hand-entered workouts Apple left out are added in here. -->
+				<span>Active — logged</span><b>{num(today.activeKcal)}</b>
 			</div>
 			{#each today.workouts as w (w.startedAt)}
 				<div class="ledger-row" style="padding-left: 12px; font-size: 12px;">
