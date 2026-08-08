@@ -279,6 +279,25 @@ export function isTrustedWorkoutSource(source: string | null): boolean {
 	return source == null || !source.toLowerCase().includes('apple');
 }
 
+// A MANUALLY entered workout (Fitness app → Add Workout, e.g. a custom water sport) stores its
+// energy only on the workout itself — it writes no activeEnergyBurned samples — so its kcal never
+// reaches the daily active total that correctActive() haircuts, and as an "apple" source it isn't
+// trusted either: the calories vanish from every total while still showing in the workout list.
+// Detect it from data we already have: energy that IS inside the daily sum can never exceed it, so
+// a workout claiming more kcal than the WHOLE day's active energy is provably uncounted. Then it
+// rides at face value (the user's own number, out of the haircut) instead of being dropped.
+// It REPLACES the day's active rather than adding to it (correctActive clamps the passive
+// remainder at 0) — deliberately conservative: the Watch still logs its own low estimate DURING the
+// workout window, so adding both would double-count that overlap. Erring low understates the
+// deficit; erring high would inflate the eat-to target, which is the costlier mistake on a cut.
+// ponytail: catches the gross case with zero new plumbing. Ceilings — a SMALL manual entry on a busy
+// day still hides, and passive burn OUTSIDE the workout window is forfeited. Upgrade path for both:
+// have the iOS sync post the activeEnergyBurned sample sum inside each workout's window (the trick
+// walkRunDistanceKm already uses); then trust kcal and haircut only (day − window) active.
+export function isUncountedWorkout(kcal: number | null, dayActiveKcal: number | null): boolean {
+	return (kcal ?? 0) > (dayActiveKcal ?? 0);
+}
+
 // ── Workout active energy (distance workouts: runs & walks) ───────────────────
 // Apple over-estimates PASSIVE active energy, so the daily total gets a weight-trend
 // haircut — but a GPS workout with a MEASURED distance is physically grounded and shouldn't

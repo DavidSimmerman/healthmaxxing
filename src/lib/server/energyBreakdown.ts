@@ -1,6 +1,6 @@
-import { sql, eq } from 'drizzle-orm';
+import { sql, eq, and, gte, lte } from 'drizzle-orm';
 import { db } from '$lib/server/db';
-import { workouts, settings } from '$lib/server/db/schema';
+import { workouts, settings, activityDays } from '$lib/server/db/schema';
 import { APP_TZ, todayLabel } from '$lib/server/day';
 import { deficitDays, type DayEnergy, type DayCorrection } from '$lib/server/deficit';
 import { fillBmrGaps, energyInsights, projAt } from '$lib/server/projections';
@@ -15,6 +15,7 @@ import {
 	MIN_EAT_TO_KCAL,
 	modeDeficit,
 	isTrustedWorkoutSource,
+	isUncountedWorkout,
 	workoutActiveKcal,
 	type GoalMode
 } from '$lib/energy';
@@ -36,10 +37,17 @@ type WorkoutRow = {
 // stand on (strength) or a non-transport type (cycling) stays on the existing path.
 // `weightKg` is the latest weigh-in (weight drifts <a few % over the window — under the
 // formula's own error, and calibration absorbs the residual).
-function trustWorkout(w: WorkoutRow, weightKg: number | null): { trusted: boolean; kcal: number } {
+// `dayActiveKcal` is that day's RAW Apple active total — a workout claiming more than the whole
+// day was never folded into it (manual entry), so it counts at face value (see isUncountedWorkout).
+function trustWorkout(
+	w: WorkoutRow,
+	weightKg: number | null,
+	dayActiveKcal: number | null
+): { trusted: boolean; kcal: number } {
 	if (isTrustedWorkoutSource(w.source)) return { trusted: true, kcal: w.kcal ?? 0 };
 	const own = workoutActiveKcal({ name: w.name, distanceKm: w.distanceKm, weightKg });
-	return own != null ? { trusted: true, kcal: own } : { trusted: false, kcal: w.kcal ?? 0 };
+	if (own != null) return { trusted: true, kcal: own };
+	return { trusted: isUncountedWorkout(w.kcal, dayActiveKcal), kcal: w.kcal ?? 0 };
 }
 
 export type WorkoutLite = {
@@ -127,8 +135,9 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 	// trackers (pad) still ride on their own kcal; everything else follows the source rule.
 	// Null kcal counts as 0 trusted.
 	const woByDate = new Map<string, { kcal: number; list: WorkoutLite[] }>();
+	const rawActiveByDate = new Map(windowLedger.map((d) => [d.date, d.activeKcal]));
 	for (const w of woRows) {
-		const { trusted, kcal } = trustWorkout(w, weightKg);
+		const { trusted, kcal } = trustWorkout(w, weightKg, rawActiveByDate.get(w.date) ?? null);
 		const e = woByDate.get(w.date) ?? { kcal: 0, list: [] };
 		e.kcal += trusted ? kcal : 0; // only trusted kcal count toward the carve-out
 		e.list.push({
@@ -288,19 +297,27 @@ async function trustedWorkoutsByDate(
 	weightKg: number | null
 ): Promise<Map<string, number>> {
 	const woDate = sql<string>`(${workouts.startedAt} at time zone 'UTC' at time zone ${APP_TZ})::date`;
-	const rows = await db
-		.select({
-			date: sql<string>`${woDate}::text`,
-			name: workouts.name,
-			kcal: workouts.kcal,
-			source: workouts.source,
-			distanceKm: workouts.distanceKm
-		})
-		.from(workouts)
-		.where(sql`${woDate} between ${from}::date and ${to}::date`);
+	const [rows, activity] = await Promise.all([
+		db
+			.select({
+				date: sql<string>`${woDate}::text`,
+				name: workouts.name,
+				kcal: workouts.kcal,
+				source: workouts.source,
+				distanceKm: workouts.distanceKm
+			})
+			.from(workouts)
+			.where(sql`${woDate} between ${from}::date and ${to}::date`),
+		// Raw daily active, for the uncounted-manual-workout check in trustWorkout.
+		db
+			.select({ date: activityDays.date, activeKcal: activityDays.activeKcal })
+			.from(activityDays)
+			.where(and(gte(activityDays.date, from), lte(activityDays.date, to)))
+	]);
+	const rawActiveByDate = new Map(activity.map((a) => [a.date, a.activeKcal]));
 	const m = new Map<string, number>();
 	for (const r of rows) {
-		const { trusted, kcal } = trustWorkout(r, weightKg);
+		const { trusted, kcal } = trustWorkout(r, weightKg, rawActiveByDate.get(r.date) ?? null);
 		if (trusted) m.set(r.date, (m.get(r.date) ?? 0) + kcal);
 	}
 	return m;

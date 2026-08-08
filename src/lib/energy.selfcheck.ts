@@ -18,6 +18,7 @@ import {
 	targetBaseline,
 	deficitBalance,
 	isTrustedWorkoutSource,
+	isUncountedWorkout,
 	workoutActiveKcal
 } from './energy.ts';
 
@@ -220,6 +221,22 @@ assert.equal(isTrustedWorkoutSource('com.apple.workout.build'), false);
 	);
 	// Non-transport activity where distance is a poor energy proxy → null (fall back).
 	assert.equal(workoutActiveKcal({ name: 'Cycling', distanceKm: 20, weightKg: 70 }), null);
+}
+
+// Uncounted (manually entered) workout: kcal that Apple's daily active total can't contain.
+{
+	// The real case: a 1,000 kcal hand-entered water sport on a day Apple only logged 546 active.
+	assert.equal(isUncountedWorkout(1000, 546), true);
+	// A Watch workout is a SUBSET of the day's active energy → never flagged.
+	assert.equal(isUncountedWorkout(836, 1275), false);
+	assert.equal(isUncountedWorkout(546, 546), false); // equal ⇒ could be inside it ⇒ no
+	// No daily active row at all (nothing synced) → nothing to be inside of.
+	assert.equal(isUncountedWorkout(300, null), true);
+	assert.equal(isUncountedWorkout(null, 500), false);
+	// End to end: an uncounted workout rides at face value, out of the haircut...
+	assert.equal(correctActive(546, 1000, 0.5), 1000);
+	// ...while a counted one only carves ITSELF out (836 + half of the remaining 439 passive).
+	assert.equal(correctActive(1275, 836, 0.5), 836 + 0.5 * 439);
 }
 
 console.log('energy.selfcheck: all assertions passed ✓');
