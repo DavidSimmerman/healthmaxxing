@@ -37,17 +37,18 @@ type WorkoutRow = {
 // stand on (strength) or a non-transport type (cycling) stays on the existing path.
 // `weightKg` is the latest weigh-in (weight drifts <a few % over the window — under the
 // formula's own error, and calibration absorbs the residual).
-// `dayActiveKcal` is that day's RAW Apple active total — a workout claiming more than the whole
-// day was never folded into it (manual entry), so it counts at face value (see isUncountedWorkout).
+// `appleActiveKcal` is that day's PRISTINE Apple active total (activity_days, NOT the ledger's
+// augmented one) — a workout claiming more than the whole day was never folded into it (manual
+// entry), so it counts at face value here and deficit.ts adds it to the day (isUncountedWorkout).
 function trustWorkout(
 	w: WorkoutRow,
 	weightKg: number | null,
-	dayActiveKcal: number | null
+	appleActiveKcal: number | null
 ): { trusted: boolean; kcal: number } {
 	if (isTrustedWorkoutSource(w.source)) return { trusted: true, kcal: w.kcal ?? 0 };
 	const own = workoutActiveKcal({ name: w.name, distanceKm: w.distanceKm, weightKg });
 	if (own != null) return { trusted: true, kcal: own };
-	return { trusted: isUncountedWorkout(w.kcal, dayActiveKcal), kcal: w.kcal ?? 0 };
+	return { trusted: isUncountedWorkout(w.kcal, appleActiveKcal), kcal: w.kcal ?? 0 };
 }
 
 export type WorkoutLite = {
@@ -98,7 +99,7 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 	const from = addDays(today, -WINDOW_DAYS);
 	const woDate = sql<string>`(${workouts.startedAt} at time zone 'UTC' at time zone ${APP_TZ})::date`;
 
-	const [s, insights, windowLedger, woRows] = await Promise.all([
+	const [s, insights, windowLedger, woRows, appleActiveRows] = await Promise.all([
 		settingsRow !== undefined
 			? Promise.resolve(settingsRow)
 			: db
@@ -119,7 +120,13 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 				startedAt: sql<string>`${workouts.startedAt}::text`
 			})
 			.from(workouts)
-			.where(sql`${woDate} between ${from}::date and ${today}::date`)
+			.where(sql`${woDate} between ${from}::date and ${today}::date`),
+		// Apple's PRISTINE daily active — the uncounted-workout test must not see the ledger's
+		// already-augmented total (deficit.ts adds uncounted kcal into it), or it flip-flops.
+		db
+			.select({ date: activityDays.date, activeKcal: activityDays.activeKcal })
+			.from(activityDays)
+			.where(and(gte(activityDays.date, from), lte(activityDays.date, today)))
 	]);
 
 	const mode = (MODES.includes(s?.goalMode as GoalMode) ? s!.goalMode : 'cut') as GoalMode;
@@ -135,9 +142,9 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 	// trackers (pad) still ride on their own kcal; everything else follows the source rule.
 	// Null kcal counts as 0 trusted.
 	const woByDate = new Map<string, { kcal: number; list: WorkoutLite[] }>();
-	const rawActiveByDate = new Map(windowLedger.map((d) => [d.date, d.activeKcal]));
+	const appleActiveByDate = new Map(appleActiveRows.map((a) => [a.date, a.activeKcal]));
 	for (const w of woRows) {
-		const { trusted, kcal } = trustWorkout(w, weightKg, rawActiveByDate.get(w.date) ?? null);
+		const { trusted, kcal } = trustWorkout(w, weightKg, appleActiveByDate.get(w.date) ?? null);
 		const e = woByDate.get(w.date) ?? { kcal: 0, list: [] };
 		e.kcal += trusted ? kcal : 0; // only trusted kcal count toward the carve-out
 		e.list.push({
@@ -308,16 +315,16 @@ async function trustedWorkoutsByDate(
 			})
 			.from(workouts)
 			.where(sql`${woDate} between ${from}::date and ${to}::date`),
-		// Raw daily active, for the uncounted-manual-workout check in trustWorkout.
+		// Apple's pristine daily active, for the uncounted-manual-workout check in trustWorkout.
 		db
 			.select({ date: activityDays.date, activeKcal: activityDays.activeKcal })
 			.from(activityDays)
 			.where(and(gte(activityDays.date, from), lte(activityDays.date, to)))
 	]);
-	const rawActiveByDate = new Map(activity.map((a) => [a.date, a.activeKcal]));
+	const appleActiveByDate = new Map(activity.map((a) => [a.date, a.activeKcal]));
 	const m = new Map<string, number>();
 	for (const r of rows) {
-		const { trusted, kcal } = trustWorkout(r, weightKg, rawActiveByDate.get(r.date) ?? null);
+		const { trusted, kcal } = trustWorkout(r, weightKg, appleActiveByDate.get(r.date) ?? null);
 		if (trusted) m.set(r.date, (m.get(r.date) ?? 0) + kcal);
 	}
 	return m;

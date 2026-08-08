@@ -233,9 +233,12 @@ assert.equal(isTrustedWorkoutSource('com.apple.workout.build'), false);
 	// No daily active row at all (nothing synced) → nothing to be inside of.
 	assert.equal(isUncountedWorkout(300, null), true);
 	assert.equal(isUncountedWorkout(null, 500), false);
-	// End to end: an uncounted workout rides at face value, out of the haircut...
-	assert.equal(correctActive(546, 1000, 0.5), 1000);
-	// ...while a counted one only carves ITSELF out (836 + half of the remaining 439 passive).
+	// End to end: deficit.ts ADDS uncounted kcal into the day's active (546 + 1000) and
+	// energyBreakdown marks the workout trusted, so it rides at face value AND Apple's own 546
+	// still gets the haircut on top — the calories add together, they don't replace each other.
+	assert.equal(correctActive(546 + 1000, 1000, 0.5), 1000 + 0.5 * 546);
+	// A counted (Watch) workout is already inside the day's total: it only carves ITSELF out of
+	// the haircut — 836 at face value + half of the remaining 439 passive. No addition.
 	assert.equal(correctActive(1275, 836, 0.5), 836 + 0.5 * 439);
 }
 

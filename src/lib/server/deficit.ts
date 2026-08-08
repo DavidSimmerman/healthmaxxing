@@ -1,8 +1,15 @@
 import { sql, and, gte, lte, asc, desc } from 'drizzle-orm';
 import { db } from '$lib/server/db';
-import { dailyLog, activityDays, bodyComp, settings } from '$lib/server/db/schema';
+import { dailyLog, activityDays, bodyComp, settings, workouts } from '$lib/server/db/schema';
 import { APP_TZ, todayLabel } from '$lib/server/day';
-import { katchMcArdleBmr, mifflinBmr, tefKcal, ageOn, correctActive } from '$lib/energy';
+import {
+	katchMcArdleBmr,
+	mifflinBmr,
+	tefKcal,
+	ageOn,
+	correctActive,
+	isUncountedWorkout
+} from '$lib/energy';
 
 // One day of the energy ledger. `burnedKcal`/`deficitKcal` are null when we
 // can't estimate expenditure (no body comp ever synced AND no Apple basal) —
@@ -38,56 +45,73 @@ export async function deficitDays(
 	opts?: { settingsRow?: typeof settings.$inferSelect | null; correction?: DayCorrection }
 ): Promise<DayEnergy[]> {
 	const logDate = sql<string>`(${dailyLog.loggedAt} at time zone 'UTC' at time zone ${APP_TZ})::date`;
+	const woDate = sql<string>`(${workouts.startedAt} at time zone 'UTC' at time zone ${APP_TZ})::date`;
 
-	const [intakeRows, activityRows, compInRange, compBefore, settingsRows] = await Promise.all([
-		db
-			.select({
-				date: sql<string>`${logDate}::text`,
-				calories: sql<number>`sum(${dailyLog.calories})::float`,
-				proteinG: sql<number>`sum(${dailyLog.proteinG})::float`,
-				carbsG: sql<number>`sum(${dailyLog.carbsG})::float`,
-				fatG: sql<number>`sum(${dailyLog.fatG})::float`
-			})
-			.from(dailyLog)
-			.where(sql`${logDate} between ${fromDate}::date and ${toDate}::date`)
-			// Group by ordinal: repeating the expression would re-bind APP_TZ as a
-			// new parameter, which Postgres then treats as a different expression.
-			.groupBy(sql`1`),
-		db
-			.select()
-			.from(activityDays)
-			.where(and(gte(activityDays.date, fromDate), lte(activityDays.date, toDate))),
-		// Weigh-ins inside the range…
-		db
-			.select()
-			.from(bodyComp)
-			.where(
-				sql`(${bodyComp.measuredAt} at time zone 'UTC' at time zone ${APP_TZ})::date between ${fromDate}::date and ${toDate}::date`
-			)
-			.orderBy(asc(bodyComp.measuredAt)),
-		// …plus the single latest one before it, so every day still carries the
-		// latest measurement on/before it forward — without loading the entire
-		// weigh-in history on every call like this used to.
-		db
-			.select()
-			.from(bodyComp)
-			.where(
-				sql`(${bodyComp.measuredAt} at time zone 'UTC' at time zone ${APP_TZ})::date < ${fromDate}::date`
-			)
-			.orderBy(desc(bodyComp.measuredAt))
-			.limit(1),
-		opts?.settingsRow !== undefined
-			? Promise.resolve(opts.settingsRow ? [opts.settingsRow] : [])
-			: db
-					.select()
-					.from(settings)
-					.where(sql`${settings.id} = 1`)
-	]);
+	const [intakeRows, activityRows, compInRange, compBefore, settingsRows, workoutRows] =
+		await Promise.all([
+			db
+				.select({
+					date: sql<string>`${logDate}::text`,
+					calories: sql<number>`sum(${dailyLog.calories})::float`,
+					proteinG: sql<number>`sum(${dailyLog.proteinG})::float`,
+					carbsG: sql<number>`sum(${dailyLog.carbsG})::float`,
+					fatG: sql<number>`sum(${dailyLog.fatG})::float`
+				})
+				.from(dailyLog)
+				.where(sql`${logDate} between ${fromDate}::date and ${toDate}::date`)
+				// Group by ordinal: repeating the expression would re-bind APP_TZ as a
+				// new parameter, which Postgres then treats as a different expression.
+				.groupBy(sql`1`),
+			db
+				.select()
+				.from(activityDays)
+				.where(and(gte(activityDays.date, fromDate), lte(activityDays.date, toDate))),
+			// Weigh-ins inside the range…
+			db
+				.select()
+				.from(bodyComp)
+				.where(
+					sql`(${bodyComp.measuredAt} at time zone 'UTC' at time zone ${APP_TZ})::date between ${fromDate}::date and ${toDate}::date`
+				)
+				.orderBy(asc(bodyComp.measuredAt)),
+			// …plus the single latest one before it, so every day still carries the
+			// latest measurement on/before it forward — without loading the entire
+			// weigh-in history on every call like this used to.
+			db
+				.select()
+				.from(bodyComp)
+				.where(
+					sql`(${bodyComp.measuredAt} at time zone 'UTC' at time zone ${APP_TZ})::date < ${fromDate}::date`
+				)
+				.orderBy(desc(bodyComp.measuredAt))
+				.limit(1),
+			opts?.settingsRow !== undefined
+				? Promise.resolve(opts.settingsRow ? [opts.settingsRow] : [])
+				: db
+						.select()
+						.from(settings)
+						.where(sql`${settings.id} = 1`),
+			// Workout kcal, to spot the ones Apple never folded into its daily active total.
+			db
+				.select({ date: sql<string>`${woDate}::text`, kcal: workouts.kcal })
+				.from(workouts)
+				.where(sql`${woDate} between ${fromDate}::date and ${toDate}::date`)
+		]);
 	const settingsRow = settingsRows[0];
 	const compRows = [...compBefore, ...compInRange];
 
 	const intakeByDate = new Map(intakeRows.map((r) => [r.date, r]));
 	const activityByDate = new Map(activityRows.map((r) => [r.date, r]));
+
+	// A manually entered workout writes no activeEnergyBurned samples, so its kcal is missing from
+	// Apple's daily total — provable when it claims more than the whole day (isUncountedWorkout).
+	// Add those in so the day's active reflects everything that was actually logged. Unconditional:
+	// the raw ledger, the corrected view, and the calibration that learns off them must agree.
+	const uncountedByDate = new Map<string, number>();
+	for (const w of workoutRows) {
+		if (!isUncountedWorkout(w.kcal, activityByDate.get(w.date)?.activeKcal ?? null)) continue;
+		uncountedByDate.set(w.date, (uncountedByDate.get(w.date) ?? 0) + (w.kcal ?? 0));
+	}
 
 	const compFmt = new Intl.DateTimeFormat('en-CA', { timeZone: APP_TZ });
 	const compByDate = compRows.map((c) => ({
@@ -145,7 +169,13 @@ export async function deficitDays(
 
 		// Corrected active when a correction is supplied: dedicated workout kcal ride
 		// at 1.0, only Apple's passive estimate gets the haircut. Raw path unchanged.
-		const rawActive = activity?.activeKcal ?? null;
+		// Apple's daily active + any workout kcal it never included (null activeKcal but a workout
+		// present still counts — the workout is real data even if the daily aggregate didn't sync).
+		const uncounted = uncountedByDate.get(date) ?? 0;
+		const rawActive =
+			activity?.activeKcal != null || uncounted > 0
+				? (activity?.activeKcal ?? 0) + uncounted
+				: null;
 		const active =
 			correction && rawActive != null
 				? correctActive(rawActive, correction.trustedByDate.get(date) ?? 0, correction.factor)

@@ -286,14 +286,15 @@ export function isTrustedWorkoutSource(source: string | null): boolean {
 // Detect it from data we already have: energy that IS inside the daily sum can never exceed it, so
 // a workout claiming more kcal than the WHOLE day's active energy is provably uncounted. Then it
 // rides at face value (the user's own number, out of the haircut) instead of being dropped.
-// It REPLACES the day's active rather than adding to it (correctActive clamps the passive
-// remainder at 0) — deliberately conservative: the Watch still logs its own low estimate DURING the
-// workout window, so adding both would double-count that overlap. Erring low understates the
-// deficit; erring high would inflate the eat-to target, which is the costlier mistake on a cut.
-// ponytail: catches the gross case with zero new plumbing. Ceilings — a SMALL manual entry on a busy
-// day still hides, and passive burn OUTSIDE the workout window is forfeited. Upgrade path for both:
-// have the iOS sync post the activeEnergyBurned sample sum inside each workout's window (the trick
-// walkRunDistanceKm already uses); then trust kcal and haircut only (day − window) active.
+// Uncounted kcal are ADDED to the day's active total (deficit.ts) as well as marked trusted
+// (energyBreakdown.ts), so the workout rides at face value AND Apple's own active still gets its
+// haircut on top: 1000 + 0.5 × 546, not max(1000, …). Detection must always run against Apple's
+// PRISTINE daily total, never the post-addition one, or it flip-flops.
+// ponytail: catches the gross case with zero new columns. Ceilings — a SMALL manual entry on a busy
+// day still hides, and the Watch's own (low) estimate for the workout WINDOW is inside Apple's daily
+// total, so that overlap is counted twice at haircut weight (~100 kcal on the motivating day).
+// Upgrade path for both: have the iOS sync post the activeEnergyBurned sample sum inside each
+// workout's window (the trick walkRunDistanceKm already uses), then add kcal − that sum: exact.
 export function isUncountedWorkout(kcal: number | null, dayActiveKcal: number | null): boolean {
 	return (kcal ?? 0) > (dayActiveKcal ?? 0);
 }
