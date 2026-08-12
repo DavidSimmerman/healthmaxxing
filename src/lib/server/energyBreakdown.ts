@@ -5,6 +5,7 @@ import { APP_TZ, todayLabel } from '$lib/server/day';
 import { deficitDays, type DayEnergy, type DayCorrection } from '$lib/server/deficit';
 import { fillBmrGaps, energyInsights, projAt } from '$lib/server/projections';
 import { loadIsVacation } from '$lib/server/vacations';
+import { loadIsBreakDay } from '$lib/server/breakDays';
 import {
 	addDays,
 	correctActive,
@@ -80,8 +81,10 @@ export type EnergyContext = {
 	estimatedTdee: number | null;
 	bodyFatPct: number | null;
 	weightKg: number | null;
-	modeDeltaKcal: number | null;
-	balanceKcal: number; // signed deficit balance folded into today's targets (+ recovery / − debt; 0 when none / non-cut)
+	modeDeltaKcal: number | null; // the MODE's signed delta — the ongoing goal, and what scoring keys off
+	breakDay: boolean; // today is a break day: eat at maintenance, no deficit asked
+	todayDeltaKcal: number | null; // modeDeltaKcal, or 0 on a break day — the delta TODAY's targets use
+	balanceKcal: number; // signed deficit balance folded into today's targets (+ recovery / − debt; 0 when none / non-cut / break day)
 	targetKcal: number | null; // RATCHET eat-to goal (display): rises with real burn, never drops
 	stableTargetKcal: number | null; // non-ratcheting assumed intake for deficit math (= correction.todayTargetKcal)
 	fixedCalorieTarget: number; // the user's configured settings.calorieTarget (fallback)
@@ -160,7 +163,7 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 
 	// Correction factor from COMPLETED, logged days (today's partial excluded).
 	// Vacation days don't train it — trip food is guesswork.
-	const isVac = await loadIsVacation();
+	const [isVac, isBreak] = await Promise.all([loadIsVacation(), loadIsBreakDay()]);
 	const completed = windowLedger.filter(
 		(d) => d.date < today && d.intakeKcal > 0 && d.burnedKcal != null && !isVac(d.date)
 	);
@@ -207,10 +210,17 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 				correctActive(todayEntry.activeKcal ?? 0, trustedByDate.get(today) ?? 0, factor) +
 				todayEntry.tefKcal
 			: null;
+	// A break day is a maintenance day: today's delta is 0, which flows through every
+	// target below exactly like recomp does — no deficit, and targetBaseline/ratchetTarget
+	// drop the cut cushion, so the goal IS maintenance rather than 90% of it. The MODE's
+	// delta is untouched: scoring's ongoing goal and the balance cap still key off it.
+	const breakDay = isBreak(today);
+	const todayDeltaKcal = breakDay ? 0 : modeDeltaKcal;
+
 	// Conservative-burn floor (fixed for the day). recomp/lean_bulk get no haircut (targetBaseline).
 	const baseKcal =
-		maintenanceKcal != null && modeDeltaKcal != null
-			? targetBaseline(maintenanceKcal, modeDeltaKcal)
+		maintenanceKcal != null && todayDeltaKcal != null
+			? targetBaseline(maintenanceKcal, todayDeltaKcal)
 			: null;
 
 	// Deficit balance: recovery (ease off) after big-deficit days, DEBT (trim down) after days
@@ -220,8 +230,16 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 	// debt at a doubled deficit, and the target's own MIN floor guards the low end). From
 	// COMPLETED, logged, non-vacation days (same set the calibration trusts); the 0.5/day decay
 	// makes days past ~10 ago negligible → no stored state needed.
+	// Skipped entirely on a break day (todayDelta 0): a break is a clean maintenance day,
+	// so yesterday's debt doesn't claw it back and it doesn't spend banked recovery.
 	let balanceKcal = 0;
-	if (baseKcal != null && maintenanceKcal != null && modeDeltaKcal != null && modeDeltaKcal < 0) {
+	if (
+		baseKcal != null &&
+		maintenanceKcal != null &&
+		modeDeltaKcal != null &&
+		todayDeltaKcal != null &&
+		todayDeltaKcal < 0
+	) {
 		// Each past day is judged against the baseline IT had, not today's — the goal drifts
 		// down as you lean out, so a flat baseline re-scores old days against a target they
 		// were never set. Weight/body-fat come off the fitted TREND lines, not that day's
@@ -230,6 +248,7 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 		// remove. Evaluated at `today` this reduces exactly to modeDeltaKcal (Trend.current
 		// IS the line at today), so the live goal and the ledger stay consistent.
 		const goalAt = (date: string): number => {
+			if (isBreak(date)) return 0; // a past break day was only ever asked to hit maintenance
 			const w = projAt(insights.body.weight, date);
 			const bf = projAt(insights.body.bodyFat, date);
 			return w != null && bf != null ? -modeDeficit(mode, bf, w) : -modeDeltaKcal;
@@ -259,7 +278,7 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 		targetKcal = Math.round(
 			ratchetTarget({
 				maintenanceKcal: maintenanceKcal!,
-				modeDeltaKcal: modeDeltaKcal!,
+				modeDeltaKcal: todayDeltaKcal!,
 				actualBurnKcal: correctedBurnToday,
 				balanceKcal
 			})
@@ -278,6 +297,8 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 		bodyFatPct,
 		weightKg,
 		modeDeltaKcal,
+		breakDay,
+		todayDeltaKcal,
 		balanceKcal,
 		targetKcal,
 		stableTargetKcal,

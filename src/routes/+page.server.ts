@@ -145,12 +145,18 @@ export async function load() {
 	// The deficit balance shifts today's target: recovery eases it UP (drop the goal so the
 	// ring doesn't push you to burn the credit back), debt trims it DOWN (raise the goal to
 	// catch up). Same signed shift keeps target and ring in step. Never below 0.
+	// todayDeltaKcal, not modeDeltaKcal: it's 0 on a break day, so the ring asks for no
+	// active calories — matching the eat-to target, which is plain maintenance that day.
 	const deficitGoal =
-		ctx.modeDeltaKcal != null
-			? Math.max(0, -ctx.modeDeltaKcal - ctx.balanceKcal)
+		ctx.todayDeltaKcal != null
+			? Math.max(0, -ctx.todayDeltaKcal - ctx.balanceKcal)
 			: (settingsRow?.deficitTargetKcal ?? 500);
-	const activeToGo =
-		todayEnergy?.deficitKcal != null
+	// A break day asks for nothing extra, so the ring is done at 0 — without this it
+	// would read "burn N more" while the day's projected deficit sits negative (intake
+	// is assumed up to maintenance, which today's partial burn hasn't reached yet).
+	const activeToGo = ctx.breakDay
+		? 0
+		: todayEnergy?.deficitKcal != null
 			? Math.max(0, Math.round(deficitGoal - todayEnergy.deficitKcal))
 			: null;
 

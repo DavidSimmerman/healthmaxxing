@@ -197,6 +197,13 @@
       "when": 1785973475264,
       "tag": "0027_apple_sleep_source",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1786489137253,
+      "tag": "0028_break_days",
+      "breakpoints": true
     }
   ]
 }

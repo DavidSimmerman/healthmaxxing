@@ -410,15 +410,18 @@ export type PeriodScore = {
 	streak: number; // consecutive perfect days ending at the last day
 };
 
-// Weekly target scaled to the period length (5/wk over 30 days ≈ 21.4).
-function proratedSpec(spec: GoalSpec, days: number): GoalSpec {
-	const k = days / 7;
+// A spec's target (and bonus stretch) scaled by k — prorating a weekly target to a
+// period length, or discounting a period's deficit target for granted break days.
+export function scaleSpec(spec: GoalSpec, k: number): GoalSpec {
 	return {
 		...spec,
 		target: spec.target * k,
 		bonusTo: spec.bonusTo == null ? undefined : spec.bonusTo * k
 	};
 }
+
+// Weekly target scaled to the period length (5/wk over 30 days ≈ 21.4).
+const proratedSpec = (spec: GoalSpec, days: number): GoalSpec => scaleSpec(spec, days / 7);
 
 export function scorePeriod(
 	days: DayMetrics[],

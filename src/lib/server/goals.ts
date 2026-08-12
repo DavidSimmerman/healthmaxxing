@@ -14,6 +14,7 @@ import { addDays } from '$lib/energy';
 import { weekToDate } from '$lib/period';
 import { glucoseStats } from '$lib/glucose';
 import { loadSpecsFor } from '$lib/server/vacations';
+import { loadIsBreakDay } from '$lib/server/breakDays';
 import {
 	scoreDay,
 	scorePeriod,
@@ -22,6 +23,7 @@ import {
 	weekBalances,
 	SPEC,
 	VACATION_SPECS,
+	scaleSpec,
 	type SpecMap,
 	type DayMetrics,
 	type GoalResult,
@@ -185,9 +187,11 @@ export type PeriodSummary = {
 // mode's leanness-scaled deficit, −modeDelta) instead of the old static 750, with the
 // bonus stretch kept at the same 2× ratio it had against that 750.
 // Pass `EnergyContext.modeDeltaKcal`; null (no body data yet) falls back to SPEC.
-export async function loadScoringSpecs(
-	modeDeltaKcal: number | null
-): Promise<{ specsFor: (date: string) => SpecMap; normalSpec: SpecMap }> {
+export async function loadScoringSpecs(modeDeltaKcal: number | null): Promise<{
+	specsFor: (date: string) => SpecMap;
+	normalSpec: SpecMap;
+	isBreakDay: (date: string) => boolean;
+}> {
 	// Only a CUT has a deficit to chase. Recomp (delta 0) and lean bulk (delta > 0)
 	// reuse the vacation deficit geometry — eating at maintenance is full marks, a
 	// surplus scores down — because the cut shape (target > 0, floor 0) collapses to
@@ -199,13 +203,19 @@ export async function loadScoringSpecs(
 				? { ...SPEC.deficit, target: -modeDeltaKcal, bonusTo: -modeDeltaKcal * 2 }
 				: VACATION_SPECS.deficit;
 	const normalSpec: SpecMap = { ...SPEC, deficit };
-	const base = await loadSpecsFor();
+	// A break day asks for maintenance, so it borrows the same deficit geometry recomp
+	// does (maintenance = full marks, a surplus scores down, a deficit still earns bonus).
+	// Every OTHER goal keeps its normal target — a break is about food, not the rest.
+	const breakSpec: SpecMap = { ...normalSpec, deficit: VACATION_SPECS.deficit };
+	const [base, isBreak] = await Promise.all([loadSpecsFor(), loadIsBreakDay()]);
 	return {
 		specsFor: (date: string) => {
 			const s = base(date);
-			return s === VACATION_SPECS ? s : normalSpec;
+			if (s === VACATION_SPECS) return s;
+			return isBreak(date) ? breakSpec : normalSpec;
 		},
-		normalSpec
+		normalSpec,
+		isBreakDay: isBreak
 	};
 }
 
@@ -243,7 +253,8 @@ async function periodSummary(
 	prefetched?: DayMetrics[] | Promise<DayMetrics[]>,
 	correction?: DayCorrection,
 	// The non-vacation rollup spec (deficit target overridden to the dynamic goal); SPEC default.
-	normalSpec: SpecMap = SPEC
+	normalSpec: SpecMap = SPEC,
+	isBreakDay: (date: string) => boolean = () => false
 ): Promise<PeriodSummary> {
 	const today = todayLabel();
 	const completed = (await (prefetched ?? dayMetricsForRange(from, to, correction))).filter(
@@ -272,7 +283,24 @@ async function periodSummary(
 	}
 	const rollupSpecs = vacDays * 2 > totalDays ? VACATION_SPECS : normalSpec;
 
-	const ps = scorePeriod(completed, { ...extras, days: elapsedDays }, specsFor, rollupSpecs);
+	// The rollup scores each daily goal on its period AVERAGE, and a break day
+	// contributes a 0 deficit by design — so without this a perfect week of six
+	// deficit days plus the granted break would still score the deficit row down.
+	// Prorate the target by the share of days actually asked for a deficit — measured
+	// over days with a LOGGED deficit, the exact set aggregateDailyGoals averages: an
+	// unlogged break day never enters that average, so discounting for it would make
+	// the period too generous. Vacation rollups already sit at target 0, nothing to scale.
+	const logged = completed.filter((d) => d.deficit != null && Number.isFinite(d.deficit));
+	const breaks = logged.filter(
+		(d) => isBreakDay(d.date) && specsFor(d.date) !== VACATION_SPECS
+	).length;
+	const share = breaks ? (logged.length - breaks) / logged.length : 1;
+	const specs =
+		share < 1 && rollupSpecs.deficit.target > 0
+			? { ...rollupSpecs, deficit: scaleSpec(rollupSpecs.deficit, share) }
+			: rollupSpecs;
+
+	const ps = scorePeriod(completed, { ...extras, days: elapsedDays }, specsFor, specs);
 	return {
 		from,
 		to,
@@ -294,7 +322,7 @@ export async function buildGoalsView(anchor: string): Promise<GoalsView> {
 	const correction = ctx.correction;
 	// Shared resolver: dynamic deficit target for normal days, relaxed targets inside a
 	// trip window. `normalSpec` also drives the week/month rollups below.
-	const { specsFor, normalSpec } = await loadScoringSpecs(ctx.modeDeltaKcal);
+	const { specsFor, normalSpec, isBreakDay } = await loadScoringSpecs(ctx.modeDeltaKcal);
 
 	// Bank/debt entering `anchor`: the running surplus/shortfall over this week's
 	// days BEFORE it. Sunday (week start) → no prior days → no carry-over.
@@ -333,7 +361,16 @@ export async function buildGoalsView(anchor: string): Promise<GoalsView> {
 	// the week rollup; they're also re-scored below for the /goals week strip.
 	const weekMetricsP = dayMetricsForRange(weekStart, weekEnd, correction);
 	const [week, month, weekDayMetrics] = await Promise.all([
-		periodSummary(weekStart, weekEnd, 7, specsFor, weekMetricsP, correction, normalSpec),
+		periodSummary(
+			weekStart,
+			weekEnd,
+			7,
+			specsFor,
+			weekMetricsP,
+			correction,
+			normalSpec,
+			isBreakDay
+		),
 		periodSummary(
 			`${ym}-01`,
 			`${ym}-${String(lastDom).padStart(2, '0')}`,
@@ -341,7 +378,8 @@ export async function buildGoalsView(anchor: string): Promise<GoalsView> {
 			specsFor,
 			undefined,
 			correction,
-			normalSpec
+			normalSpec,
+			isBreakDay
 		),
 		weekMetricsP
 	]);

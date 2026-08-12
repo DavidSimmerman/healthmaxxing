@@ -11,13 +11,15 @@
 	];
 
 	let deltaLabel = $derived(
-		b.mode === 'recomp'
-			? 'at maintenance'
-			: b.modeDeltaKcal == null
-				? ''
-				: b.modeDeltaKcal < 0
-					? `${Math.abs(b.modeDeltaKcal).toLocaleString()} deficit / day`
-					: `+${b.modeDeltaKcal.toLocaleString()} surplus / day`
+		b.breakDay
+			? 'break day · at maintenance'
+			: b.mode === 'recomp'
+				? 'at maintenance'
+				: b.modeDeltaKcal == null
+					? ''
+					: b.modeDeltaKcal < 0
+						? `${Math.abs(b.modeDeltaKcal).toLocaleString()} deficit / day`
+						: `+${b.modeDeltaKcal.toLocaleString()} surplus / day`
 	);
 
 	let daysDesc = $derived([...b.days].reverse());
@@ -104,10 +106,12 @@
 		</p>
 
 		<p class="mt-3 text-xs" style="color: var(--color-text-subtle);">
-			{#if b.modeDeltaKcal != null && b.modeDeltaKcal < 0}Starts at a conservative burn estimate
-				(90% of your maintenance) minus your deficit, then climbs toward (today's burn − deficit) as
-				you out-burn that estimate — so you eat back what you actually burn.{:else}Tracks today's
-				burn: eat back what you burn, adjusted for your goal.{/if} It never drops out from under you.
+			{#if b.breakDay}Break day: no deficit asked for. The target is your maintenance, and it still
+				climbs with anything extra you burn.{:else if b.todayDeltaKcal != null && b.todayDeltaKcal < 0}Starts
+				at a conservative burn estimate (90% of your maintenance) minus your deficit, then climbs
+				toward (today's burn − deficit) as you out-burn that estimate — so you eat back what you
+				actually burn.{:else}Tracks today's burn: eat back what you burn, adjusted for your goal.{/if}
+			It never drops out from under you.
 		</p>
 		{#if b.balanceKcal > 0}
 			<p class="mt-1 text-xs" style="color: var(--color-accent-from);">

@@ -11,6 +11,7 @@ import {
 	weekBalances,
 	SPEC,
 	VACATION_SPECS,
+	scaleSpec,
 	BONUS_CAP_DAY,
 	type DayMetrics
 } from './score.ts';
@@ -320,6 +321,20 @@ assert.equal(grade(null), '—');
 	const nBanked = scoreDay(perfectDay, { deficit: 500 }).goals.find((g) => g.key === 'deficit')!;
 	assert.equal(nBanked.target, 750);
 	approx(nBanked.balance!, 500);
+}
+
+// ── Break days (one maintenance day a week) ──────────────────────────────────
+{
+	// A break day scores its deficit like a vacation day: maintenance = full marks.
+	approx(attainment(VACATION_SPECS.deficit, 0)!, 1);
+
+	// Rollups average the raw deficit across completed days, so a break day's 0 would
+	// dock the week. periodSummary scales the ROLLUP target by the share of days that
+	// were asked for a deficit — 6 of 7 days at goal then averages back to full marks.
+	const weekly = scaleSpec(SPEC.deficit, 6 / 7); // 750 → ~643
+	approx(weekly.target, (750 * 6) / 7);
+	approx(attainment(weekly, (6 * 750 + 0) / 7)!, 1); // six perfect days + one break = 100%
+	approx(attainment(SPEC.deficit, (6 * 750 + 0) / 7)!, 6 / 7); // unscaled would dock it
 }
 
 console.log('score.check.ts OK');

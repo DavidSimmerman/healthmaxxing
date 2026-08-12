@@ -1,10 +1,11 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { enhance } from '$app/forms';
 	import { pullToRefresh } from '$lib/actions/pullToRefresh';
 	import { kgToLb } from '$lib/energy';
 	import InsulinGlucoseChart from '$lib/components/InsulinGlucoseChart.svelte';
 
-	let { data } = $props();
+	let { data, form } = $props();
 
 	const bmrSourceLabel: Record<string, string> = {
 		katch: 'Katch-McArdle',
@@ -216,6 +217,28 @@
 		{:else}
 			<p class="text-sm" style="color: var(--color-text-subtle);">No energy data for this day.</p>
 		{/if}
+
+		<!-- Break day: eat at maintenance, no deficit asked for. One per week. -->
+		<form method="POST" action="?/toggleBreak" class="mt-4" use:enhance>
+			<button
+				type="submit"
+				aria-pressed={data.breakDay}
+				class="w-full rounded-xl px-3 py-2 text-sm font-semibold transition hover:brightness-125"
+				style={data.breakDay
+					? 'background: color-mix(in srgb, var(--color-accent-from) 20%, transparent); color: var(--color-accent-from);'
+					: 'background: var(--color-bg-elevated); color: var(--color-text-subtle);'}
+			>
+				{data.breakDay ? 'Break day · eating at maintenance' : 'Make this a break day'}
+			</button>
+			<p class="mt-2 text-xs" style="color: var(--color-text-subtle);">
+				{data.breakDay
+					? 'No deficit asked for today — every other goal still counts. Tap to undo.'
+					: 'One a week: eat at maintenance, no deficit. Marking another day this week moves it.'}
+			</p>
+			{#if form?.breakError}
+				<p class="mt-2 text-xs text-red-400">{form.breakError}</p>
+			{/if}
+		</form>
 	</section>
 
 	<!-- Food log -->

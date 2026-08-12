@@ -1,4 +1,4 @@
-import { error } from '@sveltejs/kit';
+import { error, fail } from '@sveltejs/kit';
 import { sql, eq, asc, desc } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import {
@@ -17,18 +17,21 @@ import { APP_TZ, todayLabel } from '$lib/server/day';
 import { addDays } from '$lib/energy';
 import { bolusableForLoggedEntry } from '$lib/netCarbs';
 import { getFiberMode } from '$lib/server/prefs';
+import { loadIsBreakDay, toggleBreakDay } from '$lib/server/breakDays';
+
+// Well-formed AND real: '2026-02-31' is well-formed but rolls into March, and an
+// invalid Date would throw on toISOString — so check getTime() before round-tripping.
+const isDate = (d: unknown): d is string => {
+	if (typeof d !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return false;
+	const parsed = new Date(`${d}T00:00:00Z`);
+	return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === d;
+};
 
 export async function load({ params }) {
 	const { date } = params;
 	// Round-trip through Date so impossible-but-well-formed values (2026-02-31)
 	// 404 cleanly instead of blowing up in Postgres' ::date cast (same guard as /goals).
-	const parsed = new Date(`${date}T00:00:00Z`);
-	if (
-		!/^\d{4}-\d{2}-\d{2}$/.test(date) ||
-		Number.isNaN(parsed.getTime()) ||
-		parsed.toISOString().slice(0, 10) !== date
-	)
-		throw error(404, 'bad date');
+	if (!isDate(date)) throw error(404, 'bad date');
 	// No future days — deficitDays would synthesize a BMR-only "deficit" against
 	// zero intake, which is fake data, not a real day.
 	const today = todayLabel();
@@ -134,6 +137,7 @@ export async function load({ params }) {
 	const glucose = dexcomGlucose.length ? dexcomGlucose : pumpGlucoseRows;
 
 	const fiberMode = await getFiberMode();
+	const breakDay = (await loadIsBreakDay())(date);
 	const entriesWithBolusable = entries.map((e) => {
 		const b = bolusableForLoggedEntry(
 			e.carbsG,
@@ -159,6 +163,18 @@ export async function load({ params }) {
 		insulin,
 		prevDate: addDays(date, -1),
 		nextDate: addDays(date, 1),
-		today
+		today,
+		breakDay
 	};
 }
+
+export const actions = {
+	// Mark/unmark this day as the week's break day (eat at maintenance). The date comes
+	// from the URL, not the form, so it can't be pointed at some other day; still
+	// validated because params are user input.
+	toggleBreak: async ({ params }) => {
+		if (!isDate(params.date)) return fail(400, { breakError: 'Bad date.' });
+		if (params.date > todayLabel()) return fail(400, { breakError: 'That day is in the future.' });
+		return { breakDay: await toggleBreakDay(params.date) };
+	}
+};

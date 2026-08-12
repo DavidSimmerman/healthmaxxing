@@ -496,6 +496,15 @@ export const pumpGlucose = pgTable(
 	(t) => [index('pump_glucose_date_idx').on(t.date)]
 );
 
+// A "break day": one day a week you eat at MAINTENANCE instead of a deficit. That
+// day's eat-to target loses the mode deficit (target = maintenance, no cushion) and
+// its deficit goal scores like a vacation day's (eating at maintenance = full marks).
+// ONLY the deficit relaxes — protein, steps, sleep etc. still count. At most one per
+// calendar week (Sun–Sat): marking a second day MOVES it (see server/breakDays.ts).
+export const breakDays = pgTable('break_days', {
+	date: text('date').primaryKey() // local (APP_TZ) 'YYYY-MM-DD'
+});
+
 // A travel window where goal targets relax (see VACATION_SPECS in score.ts). Any
 // local (APP_TZ) day within [from, to] inclusive is scored against the easier
 // vacation targets. Ranges may overlap harmlessly — a day in ANY range is a
