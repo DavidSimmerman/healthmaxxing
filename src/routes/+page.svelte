@@ -118,22 +118,45 @@
 		localStorage.setItem(MODE_KEY, showRemaining ? 'remaining' : 'consumed');
 	}
 
-	const today = new Date();
-	const weekday = today.toLocaleDateString('en-US', { weekday: 'long' });
-	const monthDay = today.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
+	// The SERVER's day (APP_TZ), not the browser's: every number on this page is
+	// bucketed by that date, so the header must name the same day it links to.
+	const fmtToday = (opts: Intl.DateTimeFormatOptions) =>
+		new Date(`${data.today}T12:00:00Z`).toLocaleDateString('en-US', { ...opts, timeZone: 'UTC' });
+	const weekday = $derived(fmtToday({ weekday: 'long' }));
+	const monthDay = $derived(fmtToday({ month: 'long', day: 'numeric' }));
 </script>
 
 <main class="mx-auto max-w-md p-6" use:pullToRefresh>
 	<header class="mb-1 flex items-center justify-between">
-		<div>
+		<!-- The date opens today's day detail: full ledger, food log, break-day toggle. -->
+		<a
+			href="/day/{data.today}"
+			class="transition hover:brightness-125"
+			aria-label="Open today's detail"
+		>
 			<p
 				class="text-xs font-semibold tracking-widest uppercase"
 				style="color: var(--color-text-subtle);"
 			>
 				{weekday}
 			</p>
-			<h1 class="text-2xl font-bold text-white">{monthDay}</h1>
-		</div>
+			<h1 class="flex items-center gap-1 text-2xl font-bold text-white">
+				{monthDay}
+				<!-- Chevron so the date reads as tappable, not just a label. -->
+				<svg
+					width="16"
+					height="16"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="3"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					style="color: var(--color-text-subtle);"
+					aria-hidden="true"><path d="M9 18l6-6-6-6" /></svg
+				>
+			</h1>
+		</a>
 		<div class="flex items-center gap-2">
 			<a
 				href="/settings"

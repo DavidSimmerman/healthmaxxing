@@ -181,6 +181,9 @@ export async function load() {
 		deficitGoal,
 		activeToGo,
 		deficitTarget: settingsRow?.deficitTargetKcal ?? 500,
-		goalScore
+		goalScore,
+		// The APP_TZ date, so the header links to the day the SERVER calls today (the
+		// browser's own clock can be a zone off and open the wrong day detail).
+		today
 	};
 }
