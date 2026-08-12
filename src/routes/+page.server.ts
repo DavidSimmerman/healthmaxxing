@@ -151,12 +151,14 @@ export async function load() {
 		ctx.todayDeltaKcal != null
 			? Math.max(0, -ctx.todayDeltaKcal - ctx.balanceKcal)
 			: (settingsRow?.deficitTargetKcal ?? 500);
-	// A break day asks for nothing extra, so the ring is done at 0 — without this it
-	// would read "burn N more" while the day's projected deficit sits negative (intake
-	// is assumed up to maintenance, which today's partial burn hasn't reached yet).
-	const activeToGo = ctx.breakDay
-		? 0
-		: todayEnergy?.deficitKcal != null
+	// A break day needs NO special case here, and must not get one (I shipped
+	// `breakDay ? 0` once — it hid a real 200-kcal surplus behind "0 to go"). The goal
+	// is simply 0 deficit, so the same subtraction still answers the right question:
+	// in a surplus, that's how much to burn to climb back to maintenance; already at or
+	// past maintenance, the max() floors it at 0. Big early-morning numbers are the
+	// ring's normal behaviour on every day — it counts down as real burn accrues.
+	const activeToGo =
+		todayEnergy?.deficitKcal != null
 			? Math.max(0, Math.round(deficitGoal - todayEnergy.deficitKcal))
 			: null;
 
