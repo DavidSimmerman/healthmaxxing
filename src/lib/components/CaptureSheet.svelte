@@ -710,7 +710,7 @@
 			{/if}
 		{:else if mode === 'detail' && selected}
 			<div
-				class="flex flex-col p-5"
+				class="flex min-h-0 flex-col p-5"
 				style="padding-bottom: calc(1.25rem + env(safe-area-inset-bottom));"
 			>
 				<div class="mx-auto mb-4 h-1 w-12 shrink-0 rounded-full bg-white/20"></div>
@@ -727,7 +727,8 @@
 					<div class="w-12"></div>
 				</div>
 
-				<div class="card-sm mt-4 p-5">
+				<!-- min-h-0 + scroll: a long ingredient list must not push the log button off-screen -->
+				<div class="card-sm mt-4 min-h-0 overflow-y-auto p-5">
 					{#if editingName}
 						<input
 							bind:value={nameDraft}
@@ -927,7 +928,7 @@
 				</div>
 
 				<button
-					class="accent-gradient mt-4 w-full rounded-2xl py-4 font-bold text-white disabled:opacity-50"
+					class="accent-gradient mt-4 w-full shrink-0 rounded-2xl py-4 font-bold text-white disabled:opacity-50"
 					disabled={!(Number(amount) > 0)}
 					onclick={addToMeal}
 				>
@@ -936,7 +937,7 @@
 			</div>
 		{:else if mode === 'review'}
 			<div
-				class="flex flex-col p-5"
+				class="flex min-h-0 flex-col p-5"
 				style="padding-bottom: calc(1.25rem + env(safe-area-inset-bottom));"
 			>
 				<div class="mx-auto mb-4 h-1 w-12 shrink-0 rounded-full bg-white/20"></div>
@@ -969,8 +970,8 @@
 					</div>
 				</div>
 
-				<!-- Staged items, each with total + bolusable carbs -->
-				<div class="mt-4 flex flex-col gap-2">
+				<!-- Staged items, each with total + bolusable carbs (scrolls; log button stays put) -->
+				<div class="mt-4 flex min-h-0 flex-col gap-2 overflow-y-auto">
 					{#each meal as m, i (i)}
 						<div class="card-sm flex items-center justify-between gap-3 p-3">
 							<div class="min-w-0">
