@@ -526,6 +526,13 @@ final class HealthSync {
         }
     }
 
+    /// Re-send every workout on the next sync. Called after a Grant: workouts already sent
+    /// went out without whatever the user just approved (the v4 backfill runs on first
+    /// launch, i.e. BEFORE anyone can tap Grant), and the anchor would never revisit them.
+    func resendWorkouts() {
+        UserDefaults.standard.removeObject(forKey: "workoutAnchor")
+    }
+
     private func commitWorkoutAnchor() {
         guard let anchor = pendingWorkoutAnchor,
             let data = try? NSKeyedArchiver.archivedData(

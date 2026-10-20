@@ -37,6 +37,7 @@ struct ContentView: View {
                         Task {
                             try? await HealthSync.shared.requestAuthorization()
                             needsHealthAccess = await HealthSync.shared.needsAuthorization()
+                            HealthSync.shared.resendWorkouts()
                             runSync()
                         }
                     }

@@ -47,6 +47,7 @@ export async function load({ url }) {
 		goalWeightKg: s?.goalWeightKg ?? null,
 		goalBodyFatPct: s?.goalBodyFatPct ?? null
 	};
+	const trackingStart = s?.trackingStartDate ?? null;
 
 	// `insights` keeps the prior BodyInsights shape the page already renders.
 	return {
@@ -55,6 +56,7 @@ export async function load({ url }) {
 		goals,
 		glucose,
 		windowDays,
+		trackingStart,
 		target: targetDate ?? null,
 		whatIfDeficit: whatIfDeficitKcal ?? null
 	};

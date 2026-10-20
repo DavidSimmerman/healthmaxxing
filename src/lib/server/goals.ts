@@ -249,6 +249,8 @@ export type GoalsView = {
 		vacation: boolean; // this day falls inside a trip → relaxed targets applied
 		// this day was taken off entirely → not scored at all (score is null, not a zero)
 		mentalHealth: boolean;
+		// the fresh-start date when this day falls BEFORE it → not scored by design
+		beforeStart: string | null;
 	};
 	week: PeriodSummary;
 	month: PeriodSummary;
@@ -329,12 +331,16 @@ async function periodSummary(
 			: rollupSpecs;
 
 	const ps = scorePeriod(completed, { ...extras, days: elapsedDays }, specsFor, specs);
+	// No completed day to average → no score. Scoring the weekly workout targets alone
+	// drew a "0 F" for a week that simply hasn't had a day finish yet (every Sunday, and
+	// the whole stretch right after a fresh start).
+	const score = completed.length ? ps.score : null;
 	return {
 		from,
 		to,
 		completedDays: completed.length,
-		score: ps.score,
-		grade: grade(ps.score),
+		score,
+		grade: grade(score),
 		bonus: ps.bonus,
 		bonusParts: ps.bonusParts,
 		goals: ps.dailyGoals,
@@ -365,6 +371,7 @@ export async function buildGoalsView(anchor: string): Promise<GoalsView> {
 	// card, the MCP goal report) already handles it.
 	const anchorMetrics = (await dayMetricsForRange(anchor, anchor, correction))[0];
 	const mentalHealth = !anchorMetrics && (await loadIsMentalHealthDay())(anchor);
+	const trackingStart = await loadTrackingStart();
 	const day = anchorMetrics
 		? scoreDay(anchorMetrics, weekBalances(priorDays, specsFor), specsFor(anchor))
 		: { score: null, base: null, bonus: 0, bonusParts: [], goals: [] };
@@ -439,7 +446,8 @@ export async function buildGoalsView(anchor: string): Promise<GoalsView> {
 			goals: day.goals,
 			streak,
 			vacation: specsFor(anchor) === VACATION_SPECS,
-			mentalHealth
+			mentalHealth,
+			beforeStart: trackingStart != null && anchor < trackingStart ? trackingStart : null
 		},
 		week,
 		month,

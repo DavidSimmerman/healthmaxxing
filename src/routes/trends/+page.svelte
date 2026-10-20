@@ -298,6 +298,18 @@
 					>{insights.leanMass ? rateLb(insights.leanMass.ratePerWeek) : '—'}</b
 				>
 			</div>
+			{#if !insights.weight && data.trackingStart}
+				<!-- After a fresh start the trend only fits weigh-ins from that day on, so it's
+				     blank until there are two — say so rather than leaving bare dashes. -->
+				<p class="mt-3 text-xs" style="color: var(--color-text-subtle);">
+					Fresh start: trends use weigh-ins from {new Date(
+						`${data.trackingStart}T12:00:00Z`
+					).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })}
+					on and appear after your second one.{#if insights.latest}
+						{' '}Latest: {fmtLb(insights.latest.weightKg)} lb{#if insights.latest.bodyFatPct != null},
+							{fmt(insights.latest.bodyFatPct)}% body fat{/if}.{/if}
+				</p>
+			{/if}
 		</section>
 
 		<!-- Glucose control (GMI / TIR, older half vs newer half of the window) -->

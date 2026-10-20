@@ -168,7 +168,12 @@ export async function bodyInsights({
 	if (all.length) {
 		const cutoff = addDays(all[all.length - 1].date, -windowDays);
 		const windowed = all.filter((w) => w.date >= cutoff);
+		// Under 2 points the window can't draw a line. With no fresh start, widen to the
+		// whole history so a sparse logger still gets a trend. WITH one, the trend only
+		// fits post-start points anyway, so widening just buries the chart in years of
+		// old weigh-ins — show the nearest earlier reading instead, enough to see the jump.
 		if (windowed.length >= 2) series = windowed;
+		else if (start != null) series = all.slice(-2);
 	}
 
 	// The trend lines only fit weigh-ins from the fresh start on. A slope that spans the

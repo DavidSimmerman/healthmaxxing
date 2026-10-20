@@ -206,6 +206,18 @@
 					Mental health day — not scored, and out of your daily averages. Weekly workout targets
 					still run.
 				</p>
+			{:else if day.beforeStart}
+				<!-- A null score by design: the fresh start hasn't begun. "Connect your sources"
+				     here would send David hunting for a broken integration that isn't broken. -->
+				<span class="text-lg font-bold text-white">Fresh start</span>
+				<p class="mt-1 text-sm" style="color: var(--color-text-subtle);">
+					Scoring starts {new Date(`${day.beforeStart}T12:00:00Z`).toLocaleDateString('en-US', {
+						weekday: 'long',
+						month: 'short',
+						day: 'numeric',
+						timeZone: 'UTC'
+					})}. Days before it don't count toward goals or streaks.
+				</p>
 			{:else if day.score == null}
 				<p class="text-sm" style="color: var(--color-text-subtle);">
 					No data yet — connect your sources.
@@ -243,18 +255,20 @@
 		</div>
 	</section>
 
-	<!-- Daily goals -->
-	<section class="card mb-3 p-5">
-		<p
-			class="mb-3 text-[10px] font-semibold tracking-widest uppercase"
-			style="color: var(--color-accent-from);"
-		>
-			Daily goals
-		</p>
-		{#each day.goals as goal (goal.key)}
-			<GoalRow {goal} />
-		{/each}
-	</section>
+	<!-- Daily goals (none on an unscored day — no empty card) -->
+	{#if day.goals.length}
+		<section class="card mb-3 p-5">
+			<p
+				class="mb-3 text-[10px] font-semibold tracking-widest uppercase"
+				style="color: var(--color-accent-from);"
+			>
+				Daily goals
+			</p>
+			{#each day.goals as goal (goal.key)}
+				<GoalRow {goal} />
+			{/each}
+		</section>
+	{/if}
 
 	<!-- Week / month rollups, as tabs -->
 	<section class="card mb-3 p-5">
