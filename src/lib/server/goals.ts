@@ -15,6 +15,7 @@ import { weekToDate } from '$lib/period';
 import { glucoseStats } from '$lib/glucose';
 import { loadSpecsFor } from '$lib/server/vacations';
 import { loadIsBreakDay, loadIsMentalHealthDay } from '$lib/server/breakDays';
+import { loadTrackingStart, trackedFrom } from '$lib/server/prefs';
 import {
 	scoreDay,
 	scorePeriod,
@@ -127,10 +128,15 @@ export async function dayMetricsForRange(
 	// toward 100 for a day that was never attempted. Dropping it here — the one source every
 	// scoring surface reads — also keeps it out of the streak walk (a granted day doesn't
 	// break a streak), the week strip, and the bank/debt carry-over, with no per-site guards.
-	const isMentalHealth = await loadIsMentalHealthDay();
+	// Days before the fresh start drop out the same way: the slate is clean, so they can't
+	// drag an average, carry bank/debt in, or hold a streak open.
+	const [isMentalHealth, tracked] = await Promise.all([
+		loadIsMentalHealthDay(),
+		loadTrackingStart().then(trackedFrom)
+	]);
 	const out: DayMetrics[] = [];
 	for (let date = from; date <= to; date = addDays(date, 1)) {
-		if (isMentalHealth(date)) {
+		if (isMentalHealth(date) || !tracked(date)) {
 			if (date === to) break;
 			continue;
 		}
@@ -274,15 +280,24 @@ async function periodSummary(
 		(d) => d.date < today
 	);
 	const extraTo = to < today ? to : today;
+	// A period the fresh start cuts through counts its workouts — and prorates their
+	// targets — from the start, not from the calendar boundary.
+	const start = await loadTrackingStart();
+	const extraFrom = start != null && start > from ? start : from;
 	const extras =
-		extraTo >= from ? await periodExtras(from, extraTo) : { strengthCount: 0, runningMiles: 0 };
+		extraTo >= extraFrom
+			? await periodExtras(extraFrom, extraTo)
+			: { strengthCount: 0, runningMiles: 0 };
 	// Prorate the weekly strength/running targets to the days ELAPSED so far (not the
 	// full period), so mid-week the score reflects the pace you're on: 1 workout by
 	// Tuesday scores against ~2 expected by Tuesday, not 5 for the whole week. A
 	// finished period elapses fully → unchanged; a fully-future one keeps the full target.
 	const elapsedDays =
-		extraTo >= from
-			? Math.min(periodDays, Math.round((Date.parse(extraTo) - Date.parse(from)) / 86_400_000) + 1)
+		extraTo >= extraFrom
+			? Math.min(
+					periodDays,
+					Math.round((Date.parse(extraTo) - Date.parse(extraFrom)) / 86_400_000) + 1
+				)
 			: periodDays;
 	// Rollup regime is a property of the CALENDAR period, not of how much has elapsed:
 	// count vacation days across the whole [from, to] so an in-progress week/month
@@ -364,7 +379,8 @@ export async function buildGoalsView(anchor: string): Promise<GoalsView> {
 		);
 		const s = currentStreak(chunk);
 		streak += s;
-		if (s < chunk.length) break;
+		// An empty chunk is the fresh start (or no data at all) — nothing further back counts.
+		if (!chunk.length || s < chunk.length) break;
 		end = addDays(end, -60);
 	}
 

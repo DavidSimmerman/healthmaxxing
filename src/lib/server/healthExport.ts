@@ -120,6 +120,8 @@ export async function runExport(category: string, from: string, to: string): Pro
 		const bundle: Record<string, unknown> = Object.fromEntries(entries);
 		const [row] = await db.select().from(settings).where(eq(settings.id, 1));
 		bundle.notes = row?.notes ?? null;
+		bundle.trackingStartDate = row?.trackingStartDate ?? null; // food before this is unreliable
+		bundle.goalMode = row?.goalMode ?? null;
 		return bundle;
 	}
 	const fn = EXPORT_CATEGORIES[category];

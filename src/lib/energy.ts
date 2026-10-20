@@ -126,23 +126,43 @@ export function bodyFatPctFromLean(weightKg: number, leanMassKg: number): number
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
 
 // ── Dynamic deficit goal ─────────────────────────────────────────────────────
-export type GoalMode = 'cut' | 'recomp' | 'lean_bulk';
+export type GoalMode = 'cut' | 'aggressive_cut' | 'recomp' | 'lean_bulk';
+
+// Both cuts share every deficit-only behaviour (the Active ring, the deficit bank, the
+// leanness scaling) — they differ only in how fast they ask you to go.
+export const isCutMode = (mode: string): boolean => mode === 'cut' || mode === 'aggressive_cut';
 
 // Target rate of body-weight change per week as a % of bodyweight, scaled by how
 // lean you are: cut harder with fat to spare, ease as you approach single digits
 // to protect muscle. Signed — negative = losing. Anchored so ~18% bf → −0.66%/wk
 // (≈1 lb/wk), ramping to −1.0% at 25% and easing to a −0.3% floor by ~13%.
+//
+// Aggressive cut: same leanness slope, shifted up to −1.0%/wk at 18% bf, capped at
+// −1.25% and never below −0.5%. ~1%/wk is the top of the range the evidence still calls
+// muscle-sparing for trained people eating high protein (Helms 2014; Garthe 2011 saw
+// ~1.4%/wk cost lean mass that ~0.7%/wk didn't), so the cap stops short of where the
+// losses start. It still eases as you lean out — the fat-mass cap in modeDeficit bites too.
 export function targetRatePctPerWeek(mode: GoalMode, bodyFatPct: number): number {
 	if (mode === 'recomp') return 0;
 	if (mode === 'lean_bulk') return 0.25; // ponytail: flat gentle surplus; taper vs a bf ceiling only if it matters
+	if (mode === 'aggressive_cut') return -clamp(1.0 + (bodyFatPct - 18) * 0.07, 0.5, 1.25);
 	return -clamp(0.66 + (bodyFatPct - 18) * 0.07, 0.3, 1.0); // cut
 }
+
+// The most energy stored fat can supply per day before the body makes up the rest from
+// lean tissue: ~290 kJ ≈ 69 kcal per kg of fat mass (Alpert 2005). A deficit past it is
+// paid for in muscle, so no cut asks for more. Rarely binds on a normal cut; it's the
+// guard that keeps an aggressive cut honest as fat mass shrinks.
+export const MAX_DEFICIT_KCAL_PER_KG_FAT = 69;
 
 // Signed daily energy delta vs maintenance (kcal). Negative = deficit (eat less
 // than you burn), positive = surplus. target = maintenance + modeDeficit(...).
 export function modeDeficit(mode: GoalMode, bodyFatPct: number, weightKg: number): number {
 	const kgPerWeek = (targetRatePctPerWeek(mode, bodyFatPct) / 100) * weightKg;
-	return (kgPerWeek * KCAL_PER_KG) / 7;
+	const delta = (kgPerWeek * KCAL_PER_KG) / 7;
+	if (delta >= 0) return delta;
+	const fatKg = (weightKg * bodyFatPct) / 100;
+	return Math.max(delta, -fatKg * MAX_DEFICIT_KCAL_PER_KG_FAT);
 }
 
 // ── Active-energy correction ─────────────────────────────────────────────────

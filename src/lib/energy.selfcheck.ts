@@ -83,6 +83,18 @@ assert(modeDeficit('lean_bulk', 18, 69.3) > 0, 'lean bulk is a surplus');
 assert.equal(targetRatePctPerWeek('cut', 30), -1.0); // ramp hits the −1.0%/wk cap
 assert.equal(targetRatePctPerWeek('cut', 8), -0.3); // eased to the −0.3%/wk floor
 assert(targetRatePctPerWeek('cut', 20) < targetRatePctPerWeek('cut', 15)); // more bf ⇒ bigger (more negative) cut
+// Aggressive cut: −1.0%/wk at 18% bf, capped at −1.25%, floored at −0.5%; always harder than cut.
+assert.equal(targetRatePctPerWeek('aggressive_cut', 18), -1.0);
+assert.equal(targetRatePctPerWeek('aggressive_cut', 30), -1.25);
+assert.equal(targetRatePctPerWeek('aggressive_cut', 8), -0.5);
+assert(
+	modeDeficit('aggressive_cut', 17, 67) < modeDeficit('cut', 17, 67),
+	'aggressive asks for more'
+);
+// Fat-mass cap: 67kg @ 17% → ~11.4kg fat → ≤ ~786 kcal/day; the rate alone asks ~680 → unbound.
+assert(Math.abs(modeDeficit('aggressive_cut', 17, 67) - -682) < 15);
+// Very lean: 100kg @ 6% → 6kg fat → cap 414, below the 550 the −0.5%/wk floor alone would ask.
+assert.equal(Math.round(modeDeficit('aggressive_cut', 6, 100)), -414);
 
 // ── Active-energy correction ─────────────────────────────────────────────────
 // 400 trusted (pad) rides at 1.0; only the 600 passive gets ×0.7 → 400 + 420.

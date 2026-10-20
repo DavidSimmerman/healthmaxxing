@@ -154,9 +154,17 @@ export const settings = pgTable('settings', {
 	goalBodyFatPct: real('goal_body_fat_pct'), // 0–100
 
 	// Dynamic calorie goal: the daily target is calibrated maintenance ± a
-	// leanness-scaled delta instead of a fixed number. 'cut' = deficit, 'recomp' =
-	// hold at maintenance, 'lean_bulk' = small surplus.
-	goalMode: text('goal_mode').notNull().default('cut'), // 'cut' | 'recomp' | 'lean_bulk'
+	// leanness-scaled delta instead of a fixed number. 'cut' = deficit, 'aggressive_cut' =
+	// the fastest muscle-sparing deficit (see energy.ts), 'recomp' = hold at maintenance,
+	// 'lean_bulk' = small surplus.
+	goalMode: text('goal_mode').notNull().default('cut'), // 'cut' | 'aggressive_cut' | 'recomp' | 'lean_bulk'
+
+	// Fresh start: the first day the food log is trusted ('YYYY-MM-DD', APP_TZ). Everything
+	// that LEARNS from logged intake — TDEE calibration, the active-energy factor, the deficit
+	// bank, the weight trend it is paired with, goal scoring and streaks — ignores days before
+	// it. Burn data (BMR, Apple active) is still read from before it: it was never the
+	// inaccurate part, and the day-one target has nothing else to stand on. Null = no cutoff.
+	trackingStartDate: text('tracking_start_date'),
 
 	// Live-target activity override for a single day: 0–4 (Rest…Very active). Applies
 	// only when activityLevelDate === today; null / stale date = auto (your average).

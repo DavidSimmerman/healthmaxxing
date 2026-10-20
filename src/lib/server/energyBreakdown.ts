@@ -11,6 +11,7 @@ import {
 import { fillBmrGaps, energyInsights, projAt } from '$lib/server/projections';
 import { loadIsVacation } from '$lib/server/vacations';
 import { loadIsBreakDay, loadIsMentalHealthDay } from '$lib/server/breakDays';
+import { trackedFrom } from '$lib/server/prefs';
 import {
 	addDays,
 	correctActive,
@@ -35,7 +36,7 @@ const WORKOUT_MINUTES = sql<
 >`(extract(epoch from (${workouts.endedAt} - ${workouts.startedAt})) / 60)::double precision`;
 
 const WINDOW_DAYS = 30;
-const MODES: GoalMode[] = ['cut', 'recomp', 'lean_bulk'];
+const MODES: GoalMode[] = ['cut', 'aggressive_cut', 'recomp', 'lean_bulk'];
 
 type WorkoutRow = {
 	appleActiveKcal: number | null;
@@ -204,10 +205,13 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 	]);
 
 	const mode = (MODES.includes(s?.goalMode as GoalMode) ? s!.goalMode : 'cut') as GoalMode;
+	const tracked = trackedFrom(s?.trackingStartDate ?? null);
 
 	// Latest weigh-in (+ body-fat), reused for the workout formula and maintenance/mode.
-	// Weight drifts slowly, so one value across the window is plenty.
-	const latest = insights.body.series.at(-1);
+	// Weight drifts slowly, so one value across the window is plenty. `body.latest`, not the
+	// last fitted point: right after a fresh start there is no trend yet, and the newest
+	// reading is still the best weight we have.
+	const latest = insights.body.latest;
 	const bodyFatPct = insights.body.bodyFat?.current ?? latest?.bodyFatPct ?? null;
 	const weightKg = insights.body.weight?.current ?? latest?.weightKg ?? null;
 
@@ -242,6 +246,7 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 	// days: `!d.imputed` keeps a day whose intake WE invented out of the fit, and with it a
 	// tefKcal of 0 that would understate avgTef and inflate the implied real active burn.
 	// The deficit bank below reads the same set, so a granted day also can't create debt.
+	// Nor do days before the fresh start: that food log is the thing we stopped trusting.
 	const [isVac, isBreak, isMentalHealth] = await Promise.all([
 		loadIsVacation(),
 		loadIsBreakDay(),
@@ -249,7 +254,12 @@ export async function resolveCorrection(settingsRow?: SettingsRow | null): Promi
 	]);
 	const completed = windowLedger.filter(
 		(d) =>
-			d.date < today && d.intakeKcal > 0 && !d.imputed && d.burnedKcal != null && !isVac(d.date)
+			d.date < today &&
+			d.intakeKcal > 0 &&
+			!d.imputed &&
+			d.burnedKcal != null &&
+			!isVac(d.date) &&
+			tracked(d.date)
 	);
 	const avgBmr = mean(completed.map((d) => d.bmrKcal ?? 0));
 	const avgTef = mean(completed.map((d) => d.tefKcal));

@@ -445,6 +445,46 @@
 	</form>
 
 	<section class="card mt-6 p-5">
+		<h2 class="mb-1 text-sm font-semibold tracking-wide text-white uppercase">Fresh start</h2>
+		<p class="mb-4 text-xs" style="color: var(--color-text-subtle);">
+			Days before this date are ignored by everything that learns from your food log — maintenance
+			calibration, the weight trend, the deficit bank, goal scores and streaks. Your history stays
+			visible. Leave blank to use all of it.
+		</p>
+		<form
+			method="POST"
+			action="?/setTrackingStart"
+			class="flex flex-wrap items-end gap-3"
+			use:enhance={() =>
+				({ update }) =>
+					update({ reset: false })}
+		>
+			<label class="flex flex-col gap-1">
+				<span class="text-xs font-medium" style="color: var(--color-text-subtle);">Count from</span>
+				<input
+					type="date"
+					name="date"
+					value={data.trackingStartDate ?? ''}
+					class="rounded-lg border bg-transparent px-3 py-2 text-white outline-none focus:border-orange-400"
+					style="border-color: var(--color-border); color-scheme: dark;"
+				/>
+			</label>
+			<button
+				type="submit"
+				class="rounded-lg px-4 py-2 text-sm font-semibold text-black transition"
+				style="background: #fb923c;"
+			>
+				Save
+			</button>
+		</form>
+		{#if form?.trackingError}
+			<p class="mt-3 text-sm text-red-400">{form.trackingError}</p>
+		{:else if form?.trackingSaved}
+			<p class="mt-3 text-sm" style="color: var(--color-text-subtle);">Saved.</p>
+		{/if}
+	</section>
+
+	<section class="card mt-6 p-5">
 		<h2 class="mb-1 text-sm font-semibold tracking-wide text-white uppercase">Vacation mode</h2>
 		<p class="mb-4 text-xs" style="color: var(--color-text-subtle);">
 			Days inside a trip are scored against easier goals — blood sugar targets loosen upward

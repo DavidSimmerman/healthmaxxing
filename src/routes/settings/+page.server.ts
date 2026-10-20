@@ -57,6 +57,7 @@ export async function load() {
 			fiberMode: 'full' as const
 		},
 		vacations: await listVacations(),
+		trackingStartDate: settingsRow?.trackingStartDate ?? null,
 		quickAddItems,
 		authEnabled: authEnabled(),
 		dexcomConfigured: dexcomEnabled(),
@@ -86,6 +87,18 @@ const validDate = (s: string) => {
 };
 
 export const actions = {
+	// Fresh start: the first day the food log is trusted. Blank clears it (use all history).
+	setTrackingStart: async ({ request }) => {
+		const raw = String((await request.formData()).get('date') ?? '').trim();
+		if (raw && !validDate(raw)) return fail(400, { trackingError: 'Enter a valid date.' });
+		const trackingStartDate = raw || null;
+		await db
+			.insert(settings)
+			.values({ id: 1, trackingStartDate })
+			.onConflictDoUpdate({ target: settings.id, set: { trackingStartDate } });
+		return { trackingSaved: true };
+	},
+
 	// Add a trip window; days inside [from, to] score against the relaxed vacation goals.
 	addVacation: async ({ request }) => {
 		const form = await request.formData();

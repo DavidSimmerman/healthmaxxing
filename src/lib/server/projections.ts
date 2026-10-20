@@ -4,6 +4,7 @@ import { bodyComp, settings } from '$lib/server/db/schema';
 import { APP_TZ, todayLabel } from '$lib/server/day';
 import { deficitDays, MENTAL_HEALTH_SURPLUS_KCAL, type DayEnergy } from '$lib/server/deficit';
 import { loadIsVacation } from '$lib/server/vacations';
+import { loadTrackingStart, trackedFrom } from '$lib/server/prefs';
 import {
 	linearRegression,
 	interpolateGaps,
@@ -53,7 +54,8 @@ export type Projection = {
 
 export type BodyInsights = {
 	asOf: string;
-	series: WeighIn[]; // actual weigh-ins in the window (oldest → newest)
+	series: WeighIn[]; // actual weigh-ins in the window (oldest → newest) — for display
+	latest: WeighIn | null; // newest weigh-in, fresh start or not: today's best guess before a trend exists
 	weight: Trend | null;
 	bodyFat: Trend | null;
 	leanMass: Trend | null;
@@ -156,7 +158,8 @@ export async function bodyInsights({
 	const today = todayLabel();
 	// Vacation days are dropped from the learning inputs: trip weigh-ins are
 	// water-noisy and trip food is guesswork, so both skew the trend + calibration.
-	const isVac = await loadIsVacation();
+	const [isVac, start] = await Promise.all([loadIsVacation(), loadTrackingStart()]);
+	const tracked = trackedFrom(start);
 	const all = (await weighInsThrough(today)).filter((w) => !isVac(w.date));
 
 	// Window to the trailing `windowDays` of weigh-ins; if that leaves <2 points,
@@ -168,10 +171,15 @@ export async function bodyInsights({
 		if (windowed.length >= 2) series = windowed;
 	}
 
-	const anchor = series.length ? series[0].date : today;
-	const weight = trendFor(series, (w) => w.weightKg, anchor, today);
-	const bodyFat = trendFor(series, (w) => w.bodyFatPct, anchor, today);
-	const leanMass = trendFor(series, (w) => w.leanMassKg, anchor, today);
+	// The trend lines only fit weigh-ins from the fresh start on. A slope that spans the
+	// untracked stretch describes a period we have no trustworthy food for, and calibration
+	// pairs this slope with intake — the two must cover the same days. `series` keeps the
+	// older points so the chart still shows them.
+	const fit = series.filter((w) => tracked(w.date));
+	const anchor = fit.length ? fit[0].date : today;
+	const weight = trendFor(fit, (w) => w.weightKg, anchor, today);
+	const bodyFat = trendFor(fit, (w) => w.bodyFatPct, anchor, today);
+	const leanMass = trendFor(fit, (w) => w.leanMassKg, anchor, today);
 
 	// Deficit-implied weight rate over the same window: avg daily deficit ÷ 7700
 	// kcal/kg. Positive deficit ⇒ losing ⇒ negative weight change. Fetch one extra
@@ -182,7 +190,12 @@ export async function bodyInsights({
 	// Exclude today's deficit — you're not done eating, so it's an inflated
 	// partial. Today's weigh-in still counts (it's in `series` above).
 	const counted = ledger.filter(
-		(d) => d.deficitKcal != null && d.intakeKcal > 0 && d.date !== today && !isVac(d.date)
+		(d) =>
+			d.deficitKcal != null &&
+			d.intakeKcal > 0 &&
+			d.date !== today &&
+			!isVac(d.date) &&
+			tracked(d.date)
 	);
 	const deficitImplied = counted.length
 		? (() => {
@@ -219,6 +232,7 @@ export async function bodyInsights({
 	return {
 		asOf: today,
 		series,
+		latest: all.at(-1) ?? null,
 		weight,
 		bodyFat,
 		leanMass,
@@ -282,7 +296,8 @@ function round1(n: number | null): number | null {
 // model, Forbes p-ratio, ISSN/Helms protein.)
 const PROTEIN_ADEQUATE_G_PER_KG = 1.6; // g/kg floor that protects lean mass (optimal ~2.3 + lifting)
 const TDEE_DROP_PER_KG = 32; // kcal/day maintenance falls per kg lost — obligatory ~25 + adaptive ~7 (ε)
-const RHO_KCAL_PER_KG = 8700; // effective energy density of weight change in the forward model
+const RHO_KCAL_PER_KG = 8700;
+const FRESH_START_SETTLE_DAYS = 14; // days after a fresh start before calibrating off the scale // effective energy density of weight change in the forward model
 // NOTE: calibrating TDEE from observed loss uses the classic 7700 (KCAL_PER_KG);
 // the forward simulation uses ρ=8700 + ε decay, which converges to the same
 // equilibrium loss (deficit ÷ ε) Hall's model predicts.
@@ -484,8 +499,12 @@ export async function energyInsights({
 	// Drop today: its partial intake/deficit would skew intake, TDEE and pace.
 	// The weigh-in trend (body.series) keeps today's weigh-in.
 	const ledger = fillBmrGaps(await deficitDays(from, today)).filter((d) => d.date !== today);
-	const isVac = await loadIsVacation();
-	const logged = ledger.filter((d) => d.intakeKcal > 0 && !isVac(d.date));
+	const [isVac, start] = await Promise.all([loadIsVacation(), loadTrackingStart()]);
+	const tracked = trackedFrom(start);
+	// Intake before the fresh start is untrusted, so nothing that learns from food sees it.
+	// Burn (`withBurn`) is not food-derived and keeps the full window — after a fresh start
+	// it's the only maintenance estimate there is until calibration has enough days.
+	const logged = ledger.filter((d) => d.intakeKcal > 0 && !isVac(d.date) && tracked(d.date));
 	const withBurn = ledger.filter((d) => d.burnedKcal != null && !isVac(d.date));
 	const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
 
@@ -500,12 +519,20 @@ export async function energyInsights({
 	// Calibrated TDEE + the energy-based projections multiply avg intake across the
 	// whole window, so they're only trustworthy with enough logged-day coverage —
 	// otherwise one logged day would be treated as if it happened every day.
-	const spanDays = body.series.length ? daysBetween(body.series[0].date, today) + 1 : windowDays;
-	// Coverage denominator = LOGGABLE (non-vacation) days in the effective window, so a
-	// long trip can't fail the gate despite full logging on the days that count.
+	// The weight trend's anchor is its first FITTED weigh-in (fresh start honoured).
+	const spanDays = body.weight ? daysBetween(body.weight.anchorDate, today) + 1 : windowDays;
+	// Coverage denominator = LOGGABLE (non-vacation, tracked) days in the effective window, so
+	// a long trip can't fail the gate despite full logging on the days that count.
 	const effStart = addDays(today, -Math.min(windowDays, spanDays));
-	const effWindow = Math.max(1, ledger.filter((d) => d.date >= effStart && !isVac(d.date)).length);
-	const enoughIntake = logged.length >= 7 && logged.length / effWindow >= 0.5;
+	const effWindow = Math.max(
+		1,
+		ledger.filter((d) => d.date >= effStart && !isVac(d.date) && tracked(d.date)).length
+	);
+	// Fresh start: the first couple of weeks of a deficit shed glycogen + water fast, so the
+	// scale overstates fat loss and calibration would read maintenance too HIGH (and raise
+	// the target). Hold off until that's washed out; the formula estimate covers the gap.
+	const settled = start == null || daysBetween(start, today) >= FRESH_START_SETTLE_DAYS;
+	const enoughIntake = settled && logged.length >= 7 && logged.length / effWindow >= 0.5;
 
 	const startWeight = body.weight?.current ?? null; // trend value today (smoothed)
 	const startBf = body.bodyFat?.current ?? null;

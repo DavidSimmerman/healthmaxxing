@@ -15,6 +15,7 @@
 	}
 	import { entryDisplay } from '$lib/units';
 	import StatRing from '$lib/components/StatRing.svelte';
+	import { isCutMode } from '$lib/energy';
 	import EditEntrySheet from '$lib/components/EditEntrySheet.svelte';
 	import { pullToRefresh } from '$lib/actions/pullToRefresh';
 
@@ -241,7 +242,7 @@
 						Day off
 					</span>
 				</div>
-			{:else if data.mode === 'cut'}
+			{:else if isCutMode(data.mode)}
 				<StatRing
 					value={data.deficit}
 					target={data.deficitGoal}

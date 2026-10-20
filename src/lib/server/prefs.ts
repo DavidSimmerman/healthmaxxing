@@ -19,3 +19,20 @@ export async function getFiberMode(): Promise<FiberMode> {
 		.where(eq(settings.id, 1));
 	return fiberModeFrom(s);
 }
+
+// The fresh-start cutoff (settings.trackingStartDate): the first day whose food log the
+// learning math trusts. Null = no cutoff. See the column comment in db/schema.ts for
+// what does and doesn't honour it.
+export async function loadTrackingStart(): Promise<string | null> {
+	const [s] = await db
+		.select({ trackingStartDate: settings.trackingStartDate })
+		.from(settings)
+		.where(eq(settings.id, 1));
+	return s?.trackingStartDate ?? null;
+}
+
+// `date` is on/after the fresh start (always true with no cutoff).
+export const trackedFrom =
+	(start: string | null) =>
+	(date: string): boolean =>
+		start == null || date >= start;

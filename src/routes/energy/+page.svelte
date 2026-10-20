@@ -1,11 +1,13 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { isCutMode } from '$lib/energy';
 
 	let { data } = $props();
 	let b = $derived(data.breakdown);
 
 	const modes = [
 		{ key: 'cut', label: 'Cut' },
+		{ key: 'aggressive_cut', label: 'Aggressive' },
 		{ key: 'recomp', label: 'Recomp' },
 		{ key: 'lean_bulk', label: 'Lean bulk' }
 	];
@@ -84,7 +86,7 @@
 				<button
 					name="mode"
 					value={m.key}
-					class="flex-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition"
+					class="flex-1 rounded-lg px-1.5 py-1.5 text-xs font-semibold whitespace-nowrap transition"
 					class:accent-gradient={b.mode === m.key}
 					style={b.mode === m.key ? 'color: #000;' : 'color: var(--color-text-subtle);'}
 				>
@@ -102,8 +104,14 @@
 			{#if b.maintenanceSource === 'calibrated'}(calibrated to your weight trend){:else if b.maintenanceSource === 'estimated'}(formula
 				estimate — log more to calibrate){/if}
 			{#if deltaLabel}· <span style="color: var(--color-accent-from);">{deltaLabel}</span>{/if}
-			{#if b.bodyFatPct != null && b.mode === 'cut'}· scaled to {b.bodyFatPct.toFixed(1)}% body fat{/if}
+			{#if b.bodyFatPct != null && isCutMode(b.mode)}· scaled to {b.bodyFatPct.toFixed(1)}% body fat{/if}
 		</p>
+		{#if b.mode === 'aggressive_cut'}
+			<p class="mt-2 text-xs" style="color: var(--color-text-subtle);">
+				Aggressive: ~1% of bodyweight a week, easing as you lean out and never past what your fat
+				can supply. Keeping muscle is on you: hit protein every day and keep lifting.
+			</p>
+		{/if}
 
 		<p class="mt-3 text-xs" style="color: var(--color-text-subtle);">
 			{#if b.breakDay}Break day: no deficit asked for. The target is your maintenance, and it still
@@ -246,7 +254,7 @@
 	{/if}
 
 	<p class="mt-4 px-1 text-center text-xs" style="color: var(--color-text-subtle);">
-		Target = calibrated maintenance {b.mode === 'cut'
+		Target = calibrated maintenance {isCutMode(b.mode)
 			? '− a leanness-scaled deficit'
 			: b.mode === 'lean_bulk'
 				? '+ a small surplus'

@@ -4,7 +4,7 @@ import { settings } from '$lib/server/db/schema';
 import { energyBreakdown } from '$lib/server/energyBreakdown';
 import type { GoalMode } from '$lib/energy';
 
-const MODES: GoalMode[] = ['cut', 'recomp', 'lean_bulk'];
+const MODES: GoalMode[] = ['cut', 'aggressive_cut', 'recomp', 'lean_bulk'];
 
 export async function load() {
 	return { breakdown: await energyBreakdown() };

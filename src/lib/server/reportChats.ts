@@ -123,6 +123,23 @@ async function buildPrompt(kind: ReportKind, from: string, to: string, today: st
 				`considered):\n${trunc(notes, 2000)}`
 		);
 	}
+	// Fresh start: food logged before this date was knowingly inaccurate, and the app's own
+	// math already ignores it — the review has to as well, or it'll judge the new habit by
+	// the old log.
+	if (cfg?.trackingStartDate && cfg.trackingStartDate <= to) {
+		parts.push(
+			`Fresh start: the user restarted careful food logging on ${cfg.trackingStartDate}. Treat ` +
+				'food, calorie and deficit data before that date as unreliable — do not compare against ' +
+				'it or draw trends from it. Goal scores and streaks before it are blank by design.'
+		);
+	}
+	if (cfg?.goalMode === 'aggressive_cut') {
+		parts.push(
+			'The user is on an AGGRESSIVE cut (~1% bodyweight/week, for a weight-loss competition). ' +
+				'Watch for lean-mass loss in get_body_trends, protein shortfalls, and sleep/training ' +
+				'suffering — flag any of those plainly.'
+		);
+	}
 	const history = await priorContext(kind, today);
 	if (history) {
 		parts.push(
