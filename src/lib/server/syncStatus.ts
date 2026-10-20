@@ -1,7 +1,7 @@
 import { db } from '$lib/server/db';
 import { syncStatus } from '$lib/server/db/schema';
 
-export type SyncSource = 'fitbit' | 'dexcom' | 'tandem' | 'healthkit';
+export type SyncSource = 'fitbit' | 'dexcom' | 'tandem' | 'healthkit' | 'challenge';
 
 // Record the latest sync attempt per source (one upserted row each; the table is a
 // "last known status" board, not a history). NEVER throws — status writing must not

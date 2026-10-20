@@ -3,6 +3,8 @@ import { db } from '$lib/server/db';
 import { bodyComp, activityDays } from '$lib/server/db/schema';
 import { requireApiToken } from '$lib/server/auth';
 import { recordSync } from '$lib/server/syncStatus';
+import { pushChallengeWeighins } from '$lib/server/challenge';
+import { APP_TZ } from '$lib/server/day';
 import { sql } from 'drizzle-orm';
 
 // Ingest endpoint for the iOS wrapper app's HealthKit sync. Everything is an
@@ -140,5 +142,10 @@ export async function POST({ request }) {
 	}
 
 	await recordSync('healthkit', true, `${comp.length} weigh-ins · ${days.length} days`);
+	// New weigh-ins → the weight-loss challenge, if one is linked. Never throws.
+	if (comp.length) {
+		const local = new Intl.DateTimeFormat('en-CA', { timeZone: APP_TZ });
+		await pushChallengeWeighins(comp.map((c) => local.format(new Date(c.measuredAt))));
+	}
 	return json({ bodyComp: comp.length, days: days.length });
 }

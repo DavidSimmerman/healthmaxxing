@@ -484,6 +484,84 @@
 		{/if}
 	</section>
 
+	<!-- Compact sync health: dot = green (ok, <36h) / amber (ok, stale) / red (failed). -->
+	{#snippet syncHealth(source: string)}
+		{@const s = syncBySource.get(source)}
+		{#if s}
+			{@const ageH = (Date.now() - new Date(s.at).getTime()) / 3600000}
+			<p class="mt-1 flex items-center gap-1.5 text-xs" style="color: var(--color-text-subtle);">
+				<span
+					class="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
+					class:bg-emerald-400={s.ok && ageH < 36}
+					class:bg-amber-400={s.ok && ageH >= 36}
+					class:bg-rose-400={!s.ok}
+				></span>
+				Last sync {relTime(s.at)}{s.ok && s.detail ? ` · ${s.detail}` : ''}
+			</p>
+			{#if !s.ok && s.detail}
+				<p class="mt-0.5 truncate text-xs text-rose-400">{s.detail}</p>
+			{/if}
+		{/if}
+	{/snippet}
+
+	<section class="card mt-6 p-5">
+		<h2 class="mb-1 text-sm font-semibold tracking-wide text-white uppercase">
+			Weight-loss challenge
+		</h2>
+		<p class="mb-4 text-xs" style="color: var(--color-text-subtle);">
+			Sends your first weigh-in of each day to the challenge automatically. Only weigh-ins from the
+			day you link it are sent, so your old history can't change your starting weight.
+		</p>
+		{#if data.challengeSince}
+			<div class="flex items-center gap-3">
+				<p class="min-w-0 flex-1 text-sm text-white">Linked since {data.challengeSince}</p>
+				<form method="POST" action="?/setChallenge" use:enhance>
+					<input type="hidden" name="link" value="" />
+					<button
+						type="submit"
+						class="rounded-lg border px-3 py-1.5 text-xs font-medium text-white transition hover:bg-white/5"
+						style="border-color: var(--color-border);"
+					>
+						Unlink
+					</button>
+				</form>
+			</div>
+			{@render syncHealth('challenge')}
+		{:else}
+			<form
+				method="POST"
+				action="?/setChallenge"
+				class="flex flex-wrap items-end gap-3"
+				use:enhance
+			>
+				<label class="flex min-w-0 flex-1 flex-col gap-1">
+					<span class="text-xs font-medium" style="color: var(--color-text-subtle);"
+						>Your challenge link</span
+					>
+					<input
+						type="url"
+						name="link"
+						required
+						placeholder="https://…/c/…#t=…"
+						autocomplete="off"
+						class="rounded-lg border bg-transparent px-3 py-2 text-white outline-none focus:border-orange-400"
+						style="border-color: var(--color-border);"
+					/>
+				</label>
+				<button
+					type="submit"
+					class="rounded-lg px-4 py-2 text-sm font-semibold text-black transition"
+					style="background: #fb923c;"
+				>
+					Link
+				</button>
+			</form>
+		{/if}
+		{#if form?.challengeError}
+			<p class="mt-3 text-sm text-red-400">{form.challengeError}</p>
+		{/if}
+	</section>
+
 	<section class="card mt-6 p-5">
 		<h2 class="mb-1 text-sm font-semibold tracking-wide text-white uppercase">Vacation mode</h2>
 		<p class="mb-4 text-xs" style="color: var(--color-text-subtle);">
@@ -651,28 +729,6 @@
 		<section class="mt-6">
 			<h2 class="mb-3 text-sm font-semibold tracking-wide text-white uppercase">Integrations</h2>
 
-			<!-- Compact sync health: dot = green (ok, <36h) / amber (ok, stale) / red (failed). -->
-			{#snippet syncHealth(source: string)}
-				{@const s = syncBySource.get(source)}
-				{#if s}
-					{@const ageH = (Date.now() - new Date(s.at).getTime()) / 3600000}
-					<p
-						class="mt-1 flex items-center gap-1.5 text-xs"
-						style="color: var(--color-text-subtle);"
-					>
-						<span
-							class="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
-							class:bg-emerald-400={s.ok && ageH < 36}
-							class:bg-amber-400={s.ok && ageH >= 36}
-							class:bg-rose-400={!s.ok}
-						></span>
-						Last sync {relTime(s.at)}{s.ok && s.detail ? ` · ${s.detail}` : ''}
-					</p>
-					{#if !s.ok && s.detail}
-						<p class="mt-0.5 truncate text-xs text-rose-400">{s.detail}</p>
-					{/if}
-				{/if}
-			{/snippet}
 			{#if data.dexcomConfigured}
 				<article class="card-sm flex items-center gap-3 p-4">
 					<div class="min-w-0 flex-1">

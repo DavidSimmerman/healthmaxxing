@@ -166,6 +166,14 @@ export const settings = pgTable('settings', {
 	// inaccurate part, and the day-one target has nothing else to stand on. Null = no cutoff.
 	trackingStartDate: text('tracking_start_date'),
 
+	// Weight-loss challenge auto-upload (the friend's Dialed challenge site). The share link
+	// carries a bearer token in its #t= fragment, so it's sealed at rest (secretBox) like the
+	// other integration secrets. Null = off. `challengeSince` is the local date the link was
+	// saved: only weigh-ins from then on are sent, because the site takes your FIRST posted
+	// weigh-in as your starting weight — backfilling history would rewrite the baseline.
+	challengeLink: text('challenge_link'),
+	challengeSince: text('challenge_since'),
+
 	// Live-target activity override for a single day: 0–4 (Rest…Very active). Applies
 	// only when activityLevelDate === today; null / stale date = auto (your average).
 	activityLevel: integer('activity_level'),

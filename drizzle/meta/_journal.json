@@ -232,6 +232,13 @@
       "when": 1792472804749,
       "tag": "0032_raw_samples",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1792517507217,
+      "tag": "0033_challenge_link",
+      "breakpoints": true
     }
   ]
 }

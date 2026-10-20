@@ -16,6 +16,8 @@ import { dexcomEnabled } from '$lib/server/dexcom';
 import { googleHealthEnabled } from '$lib/server/fitbit';
 import { tandemEnabled, tandemConnected, connectAndVerify } from '$lib/server/tandem';
 import { DEFAULT_REPORT_PROMPTS } from '$lib/server/reportChats';
+import { parseChallengeLink, pushChallengeWeighins, sealLink } from '$lib/server/challenge';
+import { todayLabel } from '$lib/server/day';
 
 export async function load() {
 	const [settingsRow] = await db.select().from(settings).where(eq(settings.id, 1));
@@ -58,6 +60,8 @@ export async function load() {
 		},
 		vacations: await listVacations(),
 		trackingStartDate: settingsRow?.trackingStartDate ?? null,
+		// Never the link itself (it carries the token) — just whether one is set, and since when.
+		challengeSince: settingsRow?.challengeLink ? (settingsRow.challengeSince ?? null) : null,
 		quickAddItems,
 		authEnabled: authEnabled(),
 		dexcomConfigured: dexcomEnabled(),
@@ -87,6 +91,26 @@ const validDate = (s: string) => {
 };
 
 export const actions = {
+	// Link (or unlink) the weight-loss challenge. Saving sends today's weigh-in right away so
+	// the link is proven working while David is looking; later ones follow each Health sync.
+	setChallenge: async ({ request }) => {
+		const raw = String((await request.formData()).get('link') ?? '').trim();
+		if (raw && !parseChallengeLink(raw))
+			return fail(400, {
+				challengeError: 'Paste the full challenge link, including the #t=… part.'
+			});
+		const today = todayLabel();
+		const set = raw
+			? { challengeLink: sealLink(raw), challengeSince: today }
+			: { challengeLink: null, challengeSince: null };
+		await db
+			.insert(settings)
+			.values({ id: 1, ...set })
+			.onConflictDoUpdate({ target: settings.id, set });
+		if (raw) await pushChallengeWeighins([today]);
+		return { challengeSaved: !!raw, challengeCleared: !raw };
+	},
+
 	// Fresh start: the first day the food log is trusted. Blank clears it (use all history).
 	setTrackingStart: async ({ request }) => {
 		const raw = String((await request.formData()).get('date') ?? '').trim();
