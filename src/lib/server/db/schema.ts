@@ -319,9 +319,43 @@ export const workouts = pgTable(
 		// 0 is meaningful and distinct from null: the Watch was off, so Apple counted nothing.
 		appleActiveKcal: real('apple_active_kcal'),
 		source: text('source'), // HK source bundle id — dedicated trackers (walking pad) are trusted; Apple's own estimates get the haircut
+		// Per-workout detail averaged over THIS workout's window, so two runs on one day stay
+		// apart (the daily_metrics running_* keys blend them). Every field optional — a
+		// strength session has no stride. Null on rows synced before the app sent it.
+		detail: jsonb('detail').$type<WorkoutDetail>(),
 		createdAt: timestamp('created_at').notNull().defaultNow()
 	},
 	(t) => [index('workouts_started_at_idx').on(t.startedAt)]
+);
+
+export type WorkoutDetail = {
+	runningPowerW?: number;
+	runningSpeedMps?: number;
+	strideM?: number;
+	groundContactMs?: number;
+	verticalOscillationCm?: number;
+	cadenceSpm?: number; // steps per minute, from step count over the window
+	hrRecoveryBpm?: number; // Apple's 1-minute heart rate recovery recorded after the workout
+	effort?: number; // 1–10: the user's rating if given, else Apple's estimate
+	effortEstimated?: boolean;
+};
+
+// Raw minute-level readings the daily rollups would otherwise average away — Fitbit's
+// overnight HRV (RMSSD, plus SDNN and LF/HF power when present) and SpO2 for now.
+// One row per (metric, instant, source); re-syncs upsert. Kept so night metrics (HRV in
+// deep sleep, oxygen dips, the sleeping HR curve) can be computed from the real series.
+export const vitalSamples = pgTable(
+	'vital_samples',
+	{
+		metric: text('metric').notNull(), // e.g. 'hrv_rmssd_ms', 'spo2_pct'
+		at: timestamp('at').notNull(),
+		value: real('value').notNull(),
+		source: text('source').notNull() // 'fitbit' | 'apple'
+	},
+	(t) => [
+		primaryKey({ columns: [t.metric, t.source, t.at] }),
+		index('vital_samples_at_idx').on(t.at)
+	]
 );
 
 // Daily vitals from HealthKit — water, resting/avg/min/max HR, HRV, SpO2,

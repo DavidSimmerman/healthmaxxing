@@ -2,6 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { dailyMetrics } from '$lib/server/db/schema';
 import { requireApiToken } from '$lib/server/auth';
+import { recordSync } from '$lib/server/syncStatus';
 import { sql } from 'drizzle-orm';
 
 // Daily-vitals ingest from the iOS app: water, resting/min/avg/max heart rate,
@@ -47,7 +48,7 @@ export async function POST({ request }) {
 	} catch {
 		throw error(400, 'invalid JSON');
 	}
-	const { metrics: rawMetrics } = (body ?? {}) as Record<string, unknown>;
+	const { metrics: rawMetrics, issues } = (body ?? {}) as Record<string, unknown>;
 	if (!Array.isArray(rawMetrics)) throw error(400, 'metrics must be an array');
 
 	const parsed = rawMetrics.map(parseMetric);
@@ -67,6 +68,15 @@ export async function POST({ request }) {
 				target: [dailyMetrics.date, dailyMetrics.metric],
 				set: { value: sql`excluded.value`, updatedAt: new Date() }
 			});
+	}
+
+	// The app's own problems — Health permissions it still needs, metrics whose query
+	// failed. HealthKit returns NOTHING (not an error) for a type that was never granted,
+	// so without this a missing permission is indistinguishable from "no data" and goes
+	// unnoticed for months. Posted last in the app's sync, so it's what the Settings
+	// health line shows; with no issues the /api/healthkit success line stands.
+	if (typeof issues === 'string' && issues.trim()) {
+		await recordSync('healthkit', false, issues.trim());
 	}
 
 	return json({ metrics: parsed.length });

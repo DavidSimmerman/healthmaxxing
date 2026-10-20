@@ -20,6 +20,21 @@
 
 export type MetricRow = { date: string; metric: string; value: number };
 
+// One raw reading for vital_samples — the series the nightly averages are built from.
+export type VitalSample = { metric: string; at: string; value: number; source: 'fitbit' };
+
+// Every raw response the sync fetches. All optional: a 4xx/empty read arrives as null.
+export type RawHealth = {
+	sleep?: unknown;
+	restingHr?: unknown;
+	hrv?: unknown;
+	spo2?: unknown;
+	respRate?: unknown;
+	skinTemp?: unknown;
+	dailyHrv?: unknown;
+	respSummary?: unknown;
+};
+
 export type SleepSource = 'fitbit' | 'apple';
 
 export type SleepSession = {
@@ -87,13 +102,13 @@ function avgSamples(
 	key: string,
 	field: string,
 	metric: string,
-	tz: string,
+	nightOf: (instant: unknown) => string | null,
 	floor = -Infinity // drop sub-physiological noise (e.g. SpO2 non-wear reads ~50)
 ): MetricRow[] {
 	const acc = new Map<string, { sum: number; n: number }>();
 	for (const dp of pts) {
 		const o = dig(dp, key);
-		const date = localDate(dig(o, 'sampleTime', 'physicalTime'), tz);
+		const date = nightOf(dig(o, 'sampleTime', 'physicalTime'));
 		const v = num(dig(o, field));
 		if (date && v !== null && v >= floor) {
 			const a = acc.get(date) ?? { sum: 0, n: 0 };
@@ -108,17 +123,7 @@ function avgSamples(
 /** Map the six raw dataPoints responses for the window into metric rows. Every
  *  source is optional (a 4xx/empty response arrives as null) and contributes
  *  nothing rather than throwing. */
-export function parseHealthData(
-	r: {
-		sleep?: unknown;
-		restingHr?: unknown;
-		hrv?: unknown;
-		spo2?: unknown;
-		respRate?: unknown;
-		skinTemp?: unknown;
-	},
-	tz: string
-): MetricRow[] {
+export function parseHealthData(r: RawHealth, tz: string): MetricRow[] {
 	const rows: MetricRow[] = [];
 	const push = (date: string | null, metric: string, v: number | null) => {
 		if (date && v !== null && Number.isFinite(v)) rows.push({ date, metric, value: v });
@@ -140,10 +145,41 @@ export function parseHealthData(
 	const pushFitbitOnly = (date: string | null, metric: string, v: number | null) => {
 		if (date && !appleNights.has(date)) push(date, metric, v);
 	};
+	// The night a timestamped reading belongs to. Nights are keyed by WAKE date, so a
+	// reading inside a session (± 30 min) takes that session's date — a 11:40 PM HRV
+	// sample is part of tomorrow's night, not today's. Outside every session (a nap, a
+	// reading with no matching sleep) it falls back to its own calendar date.
+	const windows = sessions.map((c) => ({
+		date: c.session.date,
+		from: Date.parse(c.session.startAt) - 30 * 60_000,
+		to: Date.parse(c.session.endAt) + 30 * 60_000
+	}));
+	const nightOf = (instant: unknown): string | null => {
+		if (typeof instant !== 'string') return null;
+		const t = Date.parse(instant);
+		return windows.find((w) => t >= w.from && t <= w.to)?.date ?? localDate(instant, tz);
+	};
 
 	for (const c of sessions) {
 		const { date, segments } = c.session;
 		const sum = c.summary;
+		// Restlessness + onset, straight from the session. Fitbit-only fields: an Apple
+		// session has none, and inventing zeros would read as "a perfectly still night".
+		if (c.session.source === 'fitbit') {
+			push(date, 'sleep_onset_min', num(dig(sum, 'minutesToFallAsleep')));
+			const short = dig(c.raw, 'shortAwakenings');
+			if (Array.isArray(short)) push(date, 'sleep_short_awakenings', short.length);
+			const oob = dig(c.raw, 'outOfBedSegments');
+			if (Array.isArray(oob)) {
+				const mins = oob.reduce((t: number, seg) => {
+					const a = Date.parse(String(dig(seg, 'startTime')));
+					const b = Date.parse(String(dig(seg, 'endTime')));
+					return Number.isFinite(a) && Number.isFinite(b) && b > a ? t + (b - a) / 60000 : t;
+				}, 0);
+				push(date, 'sleep_out_of_bed_count', oob.length);
+				push(date, 'sleep_out_of_bed_min', mins);
+			}
+		}
 		const asleep = num(dig(sum, 'minutesAsleep'));
 		if (asleep !== null) {
 			const inBed = num(dig(sum, 'minutesInSleepPeriod'));
@@ -210,6 +246,46 @@ export function parseHealthData(
 		if (nightly !== null && baseline !== null) {
 			pushFitbitOnly(ymd(dig(d, 'date')), 'sleep_skin_temp_dev_c', nightly - baseline);
 		}
+		// How much the nightly reading normally wanders — a deviation means more against a
+		// tight 30-day spread than a loose one (z-scoring for the illness warning).
+		pushFitbitOnly(
+			ymd(dig(d, 'date')),
+			'sleep_skin_temp_sd30_c',
+			num(dig(d, 'relativeNightlyStddev30dCelsius'))
+		);
+	}
+	// Fitbit's own nightly HRV summary — computed from the full beat-to-beat signal, so it
+	// complements (not duplicates) our average of the 5-min samples. The deep-sleep RMSSD
+	// is the steadiest recovery number a wrist device gives.
+	for (const dp of fitPoints(r.dailyHrv)) {
+		const d = dig(dp, 'dailyHeartRateVariability');
+		const date = ymd(dig(d, 'date'));
+		pushFitbitOnly(
+			date,
+			'sleep_hrv_daily_ms',
+			num(dig(d, 'averageHeartRateVariabilityMilliseconds'))
+		);
+		pushFitbitOnly(
+			date,
+			'sleep_hrv_deep_ms',
+			num(dig(d, 'deepSleepRootMeanSquareOfSuccessiveDifferencesMilliseconds'))
+		);
+		pushFitbitOnly(date, 'sleep_nonrem_hr', num(dig(d, 'nonRemHeartRateBeatsPerMinute')));
+		pushFitbitOnly(date, 'sleep_hrv_entropy', num(dig(d, 'entropy')));
+	}
+	// Breathing rate per sleep stage. Deep-sleep breathing is the cleanest illness signal
+	// (no REM irregularity, no movement); a rise there shows up before you feel sick.
+	for (const dp of fitPoints(r.respSummary)) {
+		const d = dig(dp, 'respiratoryRateSleepSummary');
+		const date = nightOf(dig(d, 'sampleTime', 'physicalTime'));
+		for (const [field, metric] of [
+			['deepSleepStats', 'sleep_resp_deep'],
+			['lightSleepStats', 'sleep_resp_light'],
+			['remSleepStats', 'sleep_resp_rem'],
+			['fullSleepStats', 'sleep_resp_full']
+		] as const) {
+			pushFitbitOnly(date, metric, num(dig(d, field, 'breathsPerMinute')));
+		}
 	}
 
 	// Sample types → one averaged value per local night.
@@ -220,7 +296,7 @@ export function parseHealthData(
 			'heartRateVariability',
 			'rootMeanSquareOfSuccessiveDifferencesMilliseconds',
 			'sleep_hrv_ms',
-			tz
+			nightOf
 		).filter(notAppleNight)
 	);
 	// floor 70%: a real sleeping SpO2 below 70 is non-physiological — those reads
@@ -231,18 +307,46 @@ export function parseHealthData(
 			'oxygenSaturation',
 			'percentage',
 			'sleep_spo2_pct',
-			tz,
-			70
+			nightOf,
+			SPO2_FLOOR
 		).filter(notAppleNight)
 	);
 
 	return foldDaily(rows);
 }
 
+const SPO2_FLOOR = 70;
+
+/** The raw HRV + SpO2 readings, unaveraged, for vital_samples. Fitbit points only; the
+ *  same sub-physiological SpO2 floor as the nightly average. */
+export function parseVitalSamples(r: RawHealth): VitalSample[] {
+	const out: VitalSample[] = [];
+	const add = (metric: string, at: unknown, v: number | null) => {
+		if (typeof at === 'string' && !Number.isNaN(Date.parse(at)) && v !== null)
+			out.push({ metric, at, value: v, source: 'fitbit' });
+	};
+	for (const dp of fitPoints(r.hrv)) {
+		const o = dig(dp, 'heartRateVariability');
+		const at = dig(o, 'sampleTime', 'physicalTime');
+		add('hrv_rmssd_ms', at, num(dig(o, 'rootMeanSquareOfSuccessiveDifferencesMilliseconds')));
+		add('hrv_sdnn_ms', at, num(dig(o, 'standardDeviationMilliseconds')));
+		add('hrv_lf_power', at, num(dig(o, 'metadata', 'lowFrequencyPower')));
+		add('hrv_hf_power', at, num(dig(o, 'metadata', 'highFrequencyPower')));
+	}
+	for (const dp of fitPoints(r.spo2)) {
+		const o = dig(dp, 'oxygenSaturation');
+		const v = num(dig(o, 'percentage'));
+		add('spo2_pct', dig(o, 'sampleTime', 'physicalTime'), v !== null && v >= SPO2_FLOOR ? v : null);
+	}
+	// A repeated (metric, instant) would make the batched upsert reject itself.
+	return [...new Map(out.map((x) => [`${x.metric}|${x.at}`, x])).values()];
+}
+
 // ── Session selection: one night, one device ───────────────────────────────
 type Candidate = {
 	session: SleepSession;
 	summary: unknown; // Fitbit's own minute totals, when the point carries them
+	raw: unknown; // the whole session object (shortAwakenings, outOfBedSegments live here)
 	lenMs: number;
 	staged: boolean; // a real breakdown → awake minutes / efficiency are knowable
 	synth: boolean; // no stage data at all → the block was synthesised from the interval
@@ -316,6 +420,7 @@ function sleepCandidates(sleep: unknown, tz: string): Candidate[] {
 				segments
 			},
 			summary: dig(s, 'summary'),
+			raw: s,
 			lenMs: endMs - startMs,
 			staged,
 			synth

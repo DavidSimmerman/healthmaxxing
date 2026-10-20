@@ -4,7 +4,9 @@ struct ContentView: View {
     @State private var showSettings = !SyncConfig.isConfigured
     @State private var serverURL = SyncConfig.serverURL.absoluteString
     @State private var apiToken = SyncConfig.apiToken ?? ""
-    @State private var healthAuthorized = UserDefaults.standard.bool(forKey: "healthAuthorized")
+    // Asked fresh each time the sheet opens, not cached: a flag saved once in the past said
+    // "granted ✓" forever, even after the app started reading types nobody had approved.
+    @State private var needsHealthAccess = false
     @State private var syncing = false
 
     var body: some View {
@@ -31,13 +33,15 @@ struct ContentView: View {
                     SecureField("API token", text: $apiToken)
                 }
                 Section {
-                    Button(healthAuthorized ? "Health access granted ✓" : "Grant Health access") {
+                    Button(needsHealthAccess ? "Grant Health access" : "Health access granted ✓") {
                         Task {
                             try? await HealthSync.shared.requestAuthorization()
-                            healthAuthorized = true
-                            UserDefaults.standard.set(true, forKey: "healthAuthorized")
+                            needsHealthAccess = await HealthSync.shared.needsAuthorization()
+                            runSync()
                         }
                     }
+                    .tint(needsHealthAccess ? .orange : nil)
+                    .bold(needsHealthAccess)
                     Button(syncing ? "Syncing…" : "Sync now") { runSync() }
                         .disabled(syncing)
                     // Read straight from the store so a background / scene-activation
@@ -48,6 +52,7 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("Sync Settings")
+            .task { needsHealthAccess = await HealthSync.shared.needsAuthorization() }
             .toolbar {
                 Button("Done") {
                     SyncConfig.save(serverURL: serverURL, apiToken: apiToken)

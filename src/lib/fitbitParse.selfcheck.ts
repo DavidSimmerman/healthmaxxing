@@ -4,7 +4,7 @@
 // Shapes mirror real responses captured via the sync's {"debug":true} mode
 // (note: minute totals come as int64 → JSON STRINGS).
 import assert from 'node:assert/strict';
-import { parseHealthData, parseSleepSessions } from './fitbitParse.ts';
+import { parseHealthData, parseSleepSessions, parseVitalSamples } from './fitbitParse.ts';
 
 const TZ = 'America/New_York'; // EDT (-4) in June
 const FIT = { dataSource: { platform: 'FITBIT' } };
@@ -464,6 +464,166 @@ assert.equal(
 	assert.equal(asleepOnly.time_in_bed_min, 480);
 	assert.equal(asleepOnly.sleep_efficiency_pct, undefined);
 	assert.equal(asleepOnly.sleep_awake_min, undefined);
+}
+
+// ── Restlessness, onset, nightly HRV summary, per-stage breathing, raw samples ──────
+{
+	const night = {
+		...FIT,
+		sleep: {
+			// 11:00 PM → 7:00 AM EDT, wake date 2026-06-22.
+			interval: { startTime: '2026-06-22T03:00:00Z', endTime: '2026-06-22T11:00:00Z' },
+			summary: {
+				minutesInSleepPeriod: '480',
+				minutesAsleep: '440',
+				minutesAwake: '40',
+				minutesToFallAsleep: '12',
+				stagesSummary: [{ type: 'DEEP', minutes: '90' }]
+			},
+			shortAwakenings: [
+				{ startTime: '2026-06-22T05:00:00Z', endTime: '2026-06-22T05:01:00Z', type: 'AWAKE' },
+				{ startTime: '2026-06-22T07:00:00Z', endTime: '2026-06-22T07:02:00Z', type: 'AWAKE' },
+				{ startTime: '2026-06-22T08:30:00Z', endTime: '2026-06-22T08:31:00Z', type: 'AWAKE' }
+			],
+			outOfBedSegments: [{ startTime: '2026-06-22T06:00:00Z', endTime: '2026-06-22T06:04:00Z' }]
+		}
+	};
+	const raw = {
+		sleep: { dataPoints: [night] },
+		dailyHrv: {
+			dataPoints: [
+				{
+					...FIT,
+					dailyHeartRateVariability: {
+						date: { year: 2026, month: 6, day: 22 },
+						averageHeartRateVariabilityMilliseconds: 61.5,
+						deepSleepRootMeanSquareOfSuccessiveDifferencesMilliseconds: 72.1,
+						nonRemHeartRateBeatsPerMinute: '52', // int64 → string
+						entropy: 2.4
+					}
+				}
+			]
+		},
+		respSummary: {
+			dataPoints: [
+				{
+					...FIT,
+					respiratoryRateSleepSummary: {
+						// 11:30 PM EDT on the 21st — inside the night, so it's the 22nd's.
+						sampleTime: { physicalTime: '2026-06-22T03:30:00Z' },
+						deepSleepStats: { breathsPerMinute: 13.1 },
+						lightSleepStats: { breathsPerMinute: 14.2 },
+						remSleepStats: { breathsPerMinute: 15.0 },
+						fullSleepStats: { breathsPerMinute: 14.1 }
+					}
+				}
+			]
+		},
+		hrv: {
+			dataPoints: [
+				{
+					...FIT,
+					heartRateVariability: {
+						// 11:40 PM EDT on the 21st: belongs to the night that wakes on the 22nd.
+						sampleTime: { physicalTime: '2026-06-22T03:40:00Z' },
+						rootMeanSquareOfSuccessiveDifferencesMilliseconds: 50,
+						standardDeviationMilliseconds: 60,
+						metadata: { lowFrequencyPower: 900, highFrequencyPower: 400 }
+					}
+				},
+				{
+					...FIT,
+					heartRateVariability: {
+						sampleTime: { physicalTime: '2026-06-22T08:00:00Z' },
+						rootMeanSquareOfSuccessiveDifferencesMilliseconds: 70
+					}
+				}
+			]
+		},
+		spo2: {
+			dataPoints: [
+				{
+					...FIT,
+					oxygenSaturation: { sampleTime: { physicalTime: '2026-06-22T06:00:00Z' }, percentage: 96 }
+				},
+				{
+					...FIT,
+					oxygenSaturation: { sampleTime: { physicalTime: '2026-06-22T06:01:00Z' }, percentage: 50 }
+				}, // non-wear
+				{
+					...APPLE,
+					oxygenSaturation: { sampleTime: { physicalTime: '2026-06-22T06:02:00Z' }, percentage: 99 }
+				}
+			]
+		},
+		skinTemp: {
+			dataPoints: [
+				{
+					...FIT,
+					dailySleepTemperatureDerivations: {
+						date: { year: 2026, month: 6, day: 22 },
+						nightlyTemperatureCelsius: 34.2,
+						baselineTemperatureCelsius: 34.0,
+						relativeNightlyStddev30dCelsius: 0.15
+					}
+				}
+			]
+		}
+	};
+	const m = new Map(
+		parseHealthData(raw, TZ)
+			.filter((r) => r.date === '2026-06-22')
+			.map((r) => [r.metric, r.value])
+	);
+	assert.equal(m.get('sleep_onset_min'), 12);
+	assert.equal(m.get('sleep_short_awakenings'), 3);
+	assert.equal(m.get('sleep_out_of_bed_count'), 1);
+	assert.equal(m.get('sleep_out_of_bed_min'), 4);
+	assert.equal(m.get('sleep_hrv_daily_ms'), 61.5);
+	assert.equal(m.get('sleep_hrv_deep_ms'), 72.1);
+	assert.equal(m.get('sleep_nonrem_hr'), 52);
+	assert.equal(m.get('sleep_hrv_entropy'), 2.4);
+	assert.equal(m.get('sleep_resp_deep'), 13.1);
+	assert.equal(m.get('sleep_resp_full'), 14.1);
+	assert.equal(m.get('sleep_skin_temp_sd30_c'), 0.15);
+	// Both HRV samples (incl. the one before midnight) average into the 22nd's night.
+	assert.equal(m.get('sleep_hrv_ms'), 60);
+	assert.equal(m.get('sleep_spo2_pct'), 96);
+
+	// Raw series: 4 HRV fields off the first sample, RMSSD only off the second, one SpO2
+	// (non-wear floored out, Apple dropped).
+	const samples = parseVitalSamples(raw);
+	const count = (metric: string) => samples.filter((x) => x.metric === metric).length;
+	assert.equal(count('hrv_rmssd_ms'), 2);
+	assert.equal(count('hrv_sdnn_ms'), 1);
+	assert.equal(count('hrv_lf_power'), 1);
+	assert.equal(count('hrv_hf_power'), 1);
+	assert.deepEqual(
+		samples.filter((x) => x.metric === 'spo2_pct').map((x) => x.value),
+		[96]
+	);
+
+	// An Apple-won night gets NONE of the Fitbit-only extras (no invented zeros either).
+	const appleNight = {
+		...APPLE,
+		sleep: {
+			interval: { startTime: '2026-06-22T02:00:00Z', endTime: '2026-06-22T11:30:00Z' }, // longer → wins
+			stages: [{ startTime: '2026-06-22T02:00:00Z', endTime: '2026-06-22T11:30:00Z', type: 'CORE' }]
+		}
+	};
+	const a = new Set(
+		parseHealthData({ ...raw, sleep: { dataPoints: [night, appleNight] } }, TZ)
+			.filter((r) => r.date === '2026-06-22')
+			.map((r) => r.metric)
+	);
+	for (const k of [
+		'sleep_onset_min',
+		'sleep_short_awakenings',
+		'sleep_hrv_deep_ms',
+		'sleep_resp_deep',
+		'sleep_hrv_ms'
+	])
+		assert(!a.has(k), `${k} must not attach to an Apple night`);
 }
 
 console.log('fitbitParse.selfcheck: OK');

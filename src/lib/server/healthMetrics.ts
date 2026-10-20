@@ -1,6 +1,6 @@
 import { sql, and, gte, lte, asc } from 'drizzle-orm';
 import { db } from '$lib/server/db';
-import { dailyMetrics, activityDays, workouts } from '$lib/server/db/schema';
+import { dailyMetrics, activityDays, workouts, type WorkoutDetail } from '$lib/server/db/schema';
 import { APP_TZ } from '$lib/server/day';
 
 // Read side of the HealthKit sync: pivot the free-form daily_metrics EAV rows
@@ -23,6 +23,8 @@ export type DayReview = {
 		kcal: number | null;
 		avgHr: number | null;
 		maxHr: number | null;
+		distanceKm?: number;
+		detail?: WorkoutDetail; // per-workout running form / cadence / recovery / effort
 	}[];
 };
 
@@ -48,7 +50,9 @@ export async function healthReview(from: string, to: string): Promise<DayReview[
 				end: workouts.endedAt,
 				kcal: workouts.kcal,
 				avgHr: workouts.avgHr,
-				maxHr: workouts.maxHr
+				maxHr: workouts.maxHr,
+				distanceKm: workouts.distanceKm,
+				detail: workouts.detail
 			})
 			.from(workouts)
 			.where(sql`${woDate} between ${from} and ${to}`)
@@ -88,7 +92,9 @@ export async function healthReview(from: string, to: string): Promise<DayReview[
 			end: w.end ? w.end.toISOString() : null,
 			kcal: w.kcal,
 			avgHr: w.avgHr,
-			maxHr: w.maxHr
+			maxHr: w.maxHr,
+			...(w.distanceKm != null ? { distanceKm: w.distanceKm } : {}),
+			...(w.detail ? { detail: w.detail } : {})
 		});
 	}
 

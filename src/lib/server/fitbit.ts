@@ -2,11 +2,17 @@ import { env } from '$env/dynamic/private';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { and, eq, gte, inArray, like, or, sql } from 'drizzle-orm';
 import { db } from '$lib/server/db';
-import { dailyMetrics, fitbitAuth, sleepStages } from '$lib/server/db/schema';
+import { dailyMetrics, fitbitAuth, sleepStages, vitalSamples } from '$lib/server/db/schema';
 import { isSealed, openSecret, sealSecret, secretBoxEnabled } from '$lib/server/secretBox';
 import { APP_TZ, todayLabel } from '$lib/server/day';
 import { addDays } from '$lib/energy';
-import { parseHealthData, parseSleepSessions, type MetricRow } from '$lib/fitbitParse';
+import {
+	parseHealthData,
+	parseSleepSessions,
+	parseVitalSamples,
+	type MetricRow,
+	type RawHealth
+} from '$lib/fitbitParse';
 
 // Fitbit (worn at night) → dashboard, via Google's Health API. The legacy Fitbit
 // Web API was retired Sept 2026; Google OAuth 2.0 + https://health.googleapis.com
@@ -202,15 +208,23 @@ function pointsUrl(type: string, filter: string, pageSize: number): string {
 	return `${API}/users/me/dataTypes/${type}/dataPoints?pageSize=${pageSize}${f}`;
 }
 
-// The reads for the window. `daily-*` and the sample types filter by date/time
-// (confirmed working). Sleep has no usable date-member filter, so we fetch the
-// most recent sessions (pageSize max 25 for sleep) unfiltered and let the
-// idempotent upsert sort out the dates — 25 sessions covers the usual few-day
-// window, not necessarily a long backfill (see SLEEP_PAGE_SIZE).
-function windowUrls(startDate: string): { key: keyof RawWindow; url: string }[] {
+// Sample types return one point per reading (SpO2 ≈ 480 a night), so a multi-night window
+// overflows any single page — these are always read to the last page.
+const SAMPLE_PAGE_SIZE = 10_000;
+const MAX_PAGES = 20; // backstop against a token loop, far above any real window
+
+// Sleep filtered by wake time (the documented `sleep.interval.end_time`), paged — so a
+// 30-day backfill gets every night, not just the newest 25. If that filter is ever
+// rejected we fall back to the old unfiltered newest-25 read (see fetchWindow).
+const sleepFilterUrl = (startDate: string) =>
+	pointsUrl('sleep', `sleep.interval.end_time >= "${startDate}T00:00:00Z"`, SLEEP_PAGE_SIZE);
+const sleepUnfilteredUrl = () => pointsUrl('sleep', '', SLEEP_PAGE_SIZE);
+
+// The reads for the window. `daily-*` filter by date, the sample types by physical time.
+function windowUrls(startDate: string): { key: keyof RawHealth; url: string }[] {
 	const startIso = `${startDate}T00:00:00Z`;
 	return [
-		{ key: 'sleep', url: pointsUrl('sleep', '', SLEEP_PAGE_SIZE) },
+		{ key: 'sleep', url: sleepFilterUrl(startDate) },
 		{
 			key: 'restingHr',
 			url: pointsUrl(
@@ -224,7 +238,7 @@ function windowUrls(startDate: string): { key: keyof RawWindow; url: string }[] 
 			url: pointsUrl(
 				'heart-rate-variability',
 				`heart_rate_variability.sample_time.physical_time >= "${startIso}"`,
-				1440
+				SAMPLE_PAGE_SIZE
 			)
 		},
 		{
@@ -232,7 +246,7 @@ function windowUrls(startDate: string): { key: keyof RawWindow; url: string }[] 
 			url: pointsUrl(
 				'oxygen-saturation',
 				`oxygen_saturation.sample_time.physical_time >= "${startIso}"`,
-				1440
+				SAMPLE_PAGE_SIZE
 			)
 		},
 		{
@@ -246,25 +260,30 @@ function windowUrls(startDate: string): { key: keyof RawWindow; url: string }[] 
 				`daily_sleep_temperature_derivations.date >= "${startDate}"`,
 				100
 			)
+		},
+		{
+			key: 'dailyHrv',
+			url: pointsUrl(
+				'daily-heart-rate-variability',
+				`daily_heart_rate_variability.date >= "${startDate}"`,
+				100
+			)
+		},
+		{
+			key: 'respSummary',
+			url: pointsUrl(
+				'respiratory-rate-sleep-summary',
+				`respiratory_rate_sleep_summary.sample_time.physical_time >= "${startIso}"`,
+				100
+			)
 		}
 	];
 }
 
-type RawWindow = {
-	sleep?: unknown;
-	restingHr?: unknown;
-	hrv?: unknown;
-	spo2?: unknown;
-	respRate?: unknown;
-	skinTemp?: unknown;
-};
-
 // Auth/quota/server trouble (401/403/429/5xx) THROWS — a dead connection must
 // fail the sync loudly, not report {days:0} "success" forever. Only the other
 // 4xx (bad scope / unsupported type on this account) → null, so one such source
-// can't sink the whole sync. (Pagination not implemented — a few nights fit one
-// page; if a window ever exceeds pageSize the older points are dropped, which
-// the next sync refills.)
+// can't sink the whole sync.
 async function getJson(url: string, token: string): Promise<unknown> {
 	const res = await fetch(url, {
 		headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
@@ -282,13 +301,40 @@ async function getJson(url: string, token: string): Promise<unknown> {
 	return res.json().catch(() => null);
 }
 
+// Every page of a read, merged into one { dataPoints } body. Null when the FIRST page is
+// (a 4xx), so callers keep "source unavailable" distinct from "no points".
+async function getAllPages(url: string, token: string): Promise<unknown> {
+	const first = await getJson(url, token);
+	if (first == null) return null;
+	const points = [...((first as { dataPoints?: unknown[] }).dataPoints ?? [])];
+	let next = (first as { nextPageToken?: string }).nextPageToken;
+	for (let i = 1; next && i < MAX_PAGES; i++) {
+		const page = (await getJson(`${url}&pageToken=${enc(next)}`, token)) as {
+			dataPoints?: unknown[];
+			nextPageToken?: string;
+		} | null;
+		if (!page) break;
+		points.push(...(page.dataPoints ?? []));
+		next = page.nextPageToken;
+	}
+	return { dataPoints: points };
+}
+
 async function fetchWindow(token: string, startDate: string): Promise<RawWindow> {
 	const reads = windowUrls(startDate);
-	const results = await Promise.all(reads.map((r) => getJson(r.url, token)));
+	const results = await Promise.all(reads.map((r) => getAllPages(r.url, token)));
 	const out: RawWindow = {};
 	reads.forEach((r, i) => (out[r.key] = results[i]));
+	// The sleep end_time filter is documented but new to us; if Google rejects it, don't
+	// lose sleep — fall back to the unfiltered newest-25 read that has always worked.
+	if (out.sleep == null) {
+		out.sleep = await getJson(sleepUnfilteredUrl(), token);
+		out.sleepUnfiltered = true;
+	}
 	return out;
 }
+
+type RawWindow = RawHealth & { sleepUnfiltered?: boolean };
 
 // One 401 retry: the cached access token can expire/be revoked out-of-band —
 // drop the cache, refresh once, try once more.
@@ -309,12 +355,21 @@ const FITBIT_ONLY_METRICS = new Set([
 	'sleep_resp_rate',
 	'sleep_hrv_ms',
 	'sleep_spo2_pct',
-	'sleep_skin_temp_dev_c'
+	'sleep_skin_temp_dev_c',
+	'sleep_skin_temp_sd30_c',
+	'sleep_hrv_daily_ms',
+	'sleep_hrv_deep_ms',
+	'sleep_nonrem_hr',
+	'sleep_hrv_entropy',
+	'sleep_resp_deep',
+	'sleep_resp_light',
+	'sleep_resp_rem',
+	'sleep_resp_full'
 ]);
 
 export async function syncHealth(
 	days = 3
-): Promise<{ days: number; metrics: number; sleepCapped?: boolean }> {
+): Promise<{ days: number; metrics: number; samples: number; sleepCapped?: boolean }> {
 	const startDate = addDays(todayLabel(), -clampDays(days));
 	const raw = await fetchWindowRetrying(startDate);
 	const rows: MetricRow[] = parseHealthData(raw, APP_TZ);
@@ -370,6 +425,19 @@ export async function syncHealth(
 				set: { value: sql`excluded.value`, updatedAt: new Date() }
 			});
 	}
+	// Raw HRV + SpO2 readings, unaveraged. Idempotent upsert, chunked under the bind-param
+	// ceiling (4 params a row).
+	const samples = parseVitalSamples(raw);
+	for (let i = 0; i < samples.length; i += 2000) {
+		await db
+			.insert(vitalSamples)
+			.values(samples.slice(i, i + 2000).map((x) => ({ ...x, at: new Date(x.at) })))
+			.onConflictDoUpdate({
+				target: [vitalSamples.metric, vitalSamples.source, vitalSamples.at],
+				set: { value: sql`excluded.value` }
+			});
+	}
+
 	if (sessions.length) {
 		await db
 			.insert(sleepStages)
@@ -395,15 +463,16 @@ export async function syncHealth(
 			});
 	}
 
-	// Sleep is fetched as "most recent SLEEP_PAGE_SIZE sessions" (no date filter,
-	// no pagination) — a full page means older nights in the window may be
-	// missing, so say so instead of letting a 30-day backfill look complete.
+	// Only the unfiltered fallback is capped (newest 25, one page) — a full page there means
+	// older nights in the window may be missing, so say so instead of looking complete.
 	const sleepPoints = (raw.sleep as { dataPoints?: unknown[] } | null | undefined)?.dataPoints;
-	const sleepCapped = Array.isArray(sleepPoints) && sleepPoints.length >= SLEEP_PAGE_SIZE;
+	const sleepCapped =
+		!!raw.sleepUnfiltered && Array.isArray(sleepPoints) && sleepPoints.length >= SLEEP_PAGE_SIZE;
 
 	return {
 		days: new Set(toWrite.map((r) => r.date)).size,
 		metrics: toWrite.length,
+		samples: samples.length,
 		...(sleepCapped ? { sleepCapped } : {})
 	};
 }

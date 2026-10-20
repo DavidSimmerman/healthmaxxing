@@ -660,14 +660,24 @@ const HEALTH_METRIC_CATALOG =
 	'SLEEP (Fitbit via Google Health API, nightly) — sleep_min, time_in_bed_min, sleep_deep_min, sleep_light_min, ' +
 	'sleep_rem_min, sleep_awake_min (min), sleep_efficiency_pct (%), sleep_resting_hr (bpm), ' +
 	'sleep_hrv_ms (ms), sleep_spo2_pct (%), sleep_resp_rate (breaths/min), ' +
-	'sleep_skin_temp_dev_c (°C vs the user’s baseline). These come from the watch worn that ' +
+	'sleep_skin_temp_dev_c (°C vs the user’s baseline), sleep_skin_temp_sd30_c (°C, how much that ' +
+	'reading normally varies over 30 days), sleep_onset_min (minutes to fall asleep), ' +
+	'sleep_short_awakenings (count of brief wake-ups — the restlessness signal), sleep_out_of_bed_count / ' +
+	'sleep_out_of_bed_min, sleep_hrv_daily_ms (Fitbit’s own nightly HRV), sleep_hrv_deep_ms (RMSSD in ' +
+	'deep sleep — the steadiest recovery number), sleep_nonrem_hr (bpm), sleep_hrv_entropy, ' +
+	'sleep_resp_deep / sleep_resp_light / sleep_resp_rem / sleep_resp_full (breaths/min by stage; deep is ' +
+	'the cleanest illness signal). These come from the watch worn that ' +
 	'night and are deliberately separate from the Apple daytime metrics above — e.g. sleep_resting_hr ' +
 	'is overnight HR and does NOT replace hr_avg/resting_hr. Sleep is normally the Fitbit, but on ' +
 	'nights it wasn’t worn the Apple Watch session is used instead (one device per night, never ' +
 	'merged — export_data category "sleep" reports it as timeline[].source = "fitbit" | "apple"). ' +
-	'Apple-sourced nights have duration and stages but NO sleep_resting_hr / sleep_hrv_ms / ' +
-	'sleep_spo2_pct / sleep_resp_rate / sleep_skin_temp_dev_c — those are Fitbit-only, so their ' +
+	'Apple-sourced nights have duration and stages but NO sleep_resting_hr / sleep_hrv_* / ' +
+	'sleep_spo2_pct / sleep_resp_* / sleep_skin_temp_* / onset / awakenings — those are Fitbit-only, so their ' +
 	'absence is the device, not a bad night. ' +
+	'Each workout may carry `detail` (averaged over THAT workout, so two runs a day stay apart): ' +
+	'runningPowerW, runningSpeedMps, strideM, groundContactMs, verticalOscillationCm, cadenceSpm ' +
+	'(steps/min), hrRecoveryBpm (1-min heart rate recovery after it), effort (1–10; effortEstimated = ' +
+	'Apple’s estimate rather than the user’s rating). ' +
 	'Metrics are absent on days/devices that recorded nothing — a missing key means no data, not zero.';
 
 const GET_HEALTH_METRICS_TOOL = {

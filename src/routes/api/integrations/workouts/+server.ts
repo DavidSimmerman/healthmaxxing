@@ -1,6 +1,6 @@
 import { json, error } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
-import { workouts } from '$lib/server/db/schema';
+import { workouts, type WorkoutDetail } from '$lib/server/db/schema';
 import { requireApiToken } from '$lib/server/auth';
 import { sql } from 'drizzle-orm';
 
@@ -19,7 +19,35 @@ type WorkoutIn = {
 	distanceKm?: number | null;
 	appleActiveKcal?: number | null; // Apple's activeEnergyBurned summed over the workout window
 	source?: string | null; // HK source bundle id (Apple Watch vs dedicated tracker)
+	detail?: WorkoutDetail | null;
 };
+
+// Per-workout detail (running form, cadence, heart rate recovery, effort). Bounds are
+// generous physiological sanity limits, not targets; anything outside them is dropped
+// rather than failing the whole batch — one odd sensor reading shouldn't lose a workout.
+const DETAIL_BOUNDS: Record<Exclude<keyof WorkoutDetail, 'effortEstimated'>, [number, number]> = {
+	runningPowerW: [0, 2000],
+	runningSpeedMps: [0, 15],
+	strideM: [0, 4],
+	groundContactMs: [0, 1000],
+	verticalOscillationCm: [0, 40],
+	cadenceSpm: [0, 300],
+	hrRecoveryBpm: [0, 150],
+	effort: [0, 10]
+};
+
+function parseDetail(v: unknown): WorkoutDetail | null {
+	if (typeof v !== 'object' || v === null) return null;
+	const r = v as Record<string, unknown>;
+	const out: WorkoutDetail = {};
+	for (const [k, [lo, hi]] of Object.entries(DETAIL_BOUNDS)) {
+		const x = r[k];
+		if (typeof x === 'number' && Number.isFinite(x) && x >= lo && x <= hi)
+			out[k as keyof typeof DETAIL_BOUNDS] = x;
+	}
+	if (out.effort != null && r.effortEstimated === true) out.effortEstimated = true;
+	return Object.keys(out).length ? out : null;
+}
 
 // Mirrors the chunk helper in src/lib/server/tandem.ts.
 function* chunk<T>(arr: T[], size: number): Generator<T[]> {
@@ -57,7 +85,8 @@ function parseWorkout(raw: unknown): WorkoutIn {
 		maxHr: num(r.maxHr, 20, 260, 'maxHr'),
 		distanceKm: num(r.distanceKm, 0, 1000, 'distanceKm'),
 		appleActiveKcal: num(r.appleActiveKcal, 0, 20_000, 'appleActiveKcal'),
-		source: typeof r.source === 'string' ? r.source : null
+		source: typeof r.source === 'string' ? r.source : null,
+		detail: parseDetail(r.detail)
 	};
 }
 
@@ -98,7 +127,8 @@ export async function POST({ request }) {
 					maxHr: w.maxHr,
 					distanceKm: w.distanceKm,
 					appleActiveKcal: w.appleActiveKcal,
-					source: w.source
+					source: w.source,
+					detail: w.detail ?? null
 				}
 			])
 		).values()
@@ -124,7 +154,10 @@ export async function POST({ request }) {
 					// one-shot v3 backfill would never restore it. COALESCE still accepts a real
 					// 0 ("Watch was off"), since 0 is not NULL.
 					appleActiveKcal: sql`coalesce(excluded.apple_active_kcal, ${workouts.appleActiveKcal})`,
-					source: sql`excluded.source`
+					source: sql`excluded.source`,
+					// Same keep-on-omit rule as the window sum: an older app build resending a
+					// workout without detail mustn't wipe what a newer one already sent.
+					detail: sql`coalesce(excluded.detail, ${workouts.detail})`
 				}
 			});
 	}

@@ -55,7 +55,23 @@ final class HealthSync {
         // there's one source of truth for "what we collect".
         for s in quantitySpecs() { types.insert(s.type) }
         for s in categorySpecs() { types.insert(s.type) }
+        for t in workoutDetailTypes { types.insert(t) }
         return types
+    }
+
+    /// Per-workout detail types (see workoutDetail). Running form + cadence + recovery are
+    /// iOS 17; the effort scores need iOS 18.
+    private var workoutDetailTypes: [HKObjectType] {
+        var t: [HKObjectType] = [
+            HKQuantityType(.runningPower), HKQuantityType(.runningSpeed),
+            HKQuantityType(.runningStrideLength), HKQuantityType(.runningGroundContactTime),
+            HKQuantityType(.runningVerticalOscillation), HKQuantityType(.heartRateRecoveryOneMinute),
+            steps,
+        ]
+        if #available(iOS 18.0, *) {
+            t += [HKQuantityType(.workoutEffortScore), HKQuantityType(.estimatedWorkoutEffortScore)]
+        }
+        return t
     }
 
     /// How many trailing days of activity to (re)push each sync. Generous so a
@@ -73,6 +89,17 @@ final class HealthSync {
         guard HKHealthStore.isHealthDataAvailable() else { return }
         try await store.requestAuthorization(toShare: [], read: readTypes)
         startObservers()
+    }
+
+    /// True when some type we read has never been put to the user — i.e. the app grew new
+    /// types since the last Grant. Read-only: asks HealthKit, presents nothing, so it's safe
+    /// anywhere (unlike the request itself — see the NOTE below). HealthKit hides read
+    /// DENIALS by design, so this can only catch never-asked, which is the case that bit:
+    /// the running types shipped in June and silently returned nothing until re-granted.
+    func needsAuthorization() async -> Bool {
+        guard HKHealthStore.isHealthDataAvailable() else { return false }
+        let status = try? await store.statusForAuthorizationRequest(toShare: [], read: readTypes)
+        return status == .shouldRequest
     }
 
     // NOTE: nothing requests authorization automatically any more — only the settings
@@ -134,9 +161,21 @@ final class HealthSync {
                 commitWorkoutAnchor()
             }
 
+            failedMetrics = []
             let metrics = try await collectMetrics()
-            if !metrics.isEmpty {
-                try await post(path: "/api/integrations/metrics", body: ["metrics": metrics])
+            // Problems the server should show on its Settings page: a missing permission
+            // reads as "no data", so it has to be said out loud somewhere David looks.
+            var issues: [String] = []
+            if await needsAuthorization() {
+                issues.append("New Health permissions waiting — long-press the app, tap Grant")
+            }
+            if !failedMetrics.isEmpty {
+                issues.append("\(failedMetrics.count) metrics failed: \(failedMetrics.sorted().joined(separator: ", "))")
+            }
+            if !metrics.isEmpty || !issues.isEmpty {
+                var body: [String: Any] = ["metrics": metrics]
+                if !issues.isEmpty { body["issues"] = issues.joined(separator: " · ") }
+                try await post(path: "/api/integrations/metrics", body: body)
             }
 
             // A sync usually means new active-energy burn, which moves the
@@ -149,6 +188,7 @@ final class HealthSync {
             lastSyncDescription =
                 "Last sync \(f.string(from: Date())) — \(days.count) days, \(comp.count) weigh-ins, "
                 + "\(workouts.count) workouts, \(metrics.count) metrics"
+                + (issues.isEmpty ? "" : "\n⚠️ " + issues.joined(separator: "\n⚠️ "))
         } catch {
             lastSyncDescription = "Sync failed: \(error.localizedDescription)"
         }
@@ -333,9 +373,11 @@ final class HealthSync {
         // workouts had already synced. Clearing the anchor once re-POSTs every workout WITH
         // the new field (the server upsert is idempotent, so re-sending is harmless).
         // Versioned flag → runs once per field added.
-        if !UserDefaults.standard.bool(forKey: "workoutDistanceBackfilled_v3") {
+        // v4: per-workout detail (running form, cadence, recovery, effort).
+        if !UserDefaults.standard.bool(forKey: "workoutDetailBackfilled_v4") {
             UserDefaults.standard.removeObject(forKey: "workoutAnchor")
             UserDefaults.standard.set(true, forKey: "workoutDistanceBackfilled_v3")
+            UserDefaults.standard.set(true, forKey: "workoutDetailBackfilled_v4")
         }
         let anchor: HKQueryAnchor? = UserDefaults.standard.data(forKey: "workoutAnchor")
             .flatMap {
@@ -399,9 +441,89 @@ final class HealthSync {
                     entry["maxHr"] = max.doubleValue(for: bpm)
                 }
             }
+            let detail = await workoutDetail(workout)
+            if !detail.isEmpty { entry["detail"] = detail }
             entries.append(entry)
         }
         return entries
+    }
+
+    /// Running form, cadence, heart rate recovery and effort for ONE workout, averaged over
+    /// its own window — the daily running_* metrics blend every run of the day together.
+    /// Best-effort per field: a strength session simply has no stride, and a type the user
+    /// hasn't granted returns nothing (HealthKit hides denials), so nothing here throws.
+    private func workoutDetail(_ w: HKWorkout) async -> [String: Any] {
+        var d: [String: Any] = [:]
+        let (start, end) = (w.startDate, w.endDate)
+        let mps = HKUnit.meter().unitDivided(by: .second())
+        let fields: [(HKQuantityTypeIdentifier, HKUnit, String)] = [
+            (.runningPower, .watt(), "runningPowerW"),
+            (.runningSpeed, mps, "runningSpeedMps"),
+            (.runningStrideLength, .meter(), "strideM"),
+            (.runningGroundContactTime, .secondUnit(with: .milli), "groundContactMs"),
+            (.runningVerticalOscillation, .meterUnit(with: .centi), "verticalOscillationCm"),
+        ]
+        for (id, unit, key) in fields {
+            if let v = await windowStat(HKQuantityType(id), unit: unit, .discreteAverage, from: start, to: end) {
+                d[key] = v
+            }
+        }
+        // Cadence = steps ÷ minutes. Only meaningful for runs/walks, where it's the number
+        // coaches actually use; a lifting session's "cadence" would just be noise.
+        let onFoot: [HKWorkoutActivityType] = [.running, .walking, .hiking]
+        if onFoot.contains(w.workoutActivityType),
+            let n = await windowStat(steps, unit: .count(), .cumulativeSum, from: start, to: end),
+            w.duration > 60
+        {
+            d["cadenceSpm"] = n / (w.duration / 60)
+        }
+        // Apple records 1-minute HR recovery a little AFTER the workout ends.
+        if let hrr = await firstSample(
+            HKQuantityType(.heartRateRecoveryOneMinute), from: end.addingTimeInterval(-60),
+            to: end.addingTimeInterval(15 * 60))
+        {
+            d["hrRecoveryBpm"] = hrr.quantity.doubleValue(for: bpm)
+        }
+        if #available(iOS 18.0, *) {
+            // The user's own rating beats Apple's estimate when both exist.
+            if let s = await firstSample(HKQuantityType(.workoutEffortScore), from: start, to: end) {
+                d["effort"] = s.quantity.doubleValue(for: .appleEffortScore())
+            } else if let s = await firstSample(
+                HKQuantityType(.estimatedWorkoutEffortScore), from: start, to: end)
+            {
+                d["effort"] = s.quantity.doubleValue(for: .appleEffortScore())
+                d["effortEstimated"] = true
+            }
+        }
+        return d
+    }
+
+    private func windowStat(
+        _ type: HKQuantityType, unit: HKUnit, _ option: HKStatisticsOptions, from start: Date, to end: Date
+    ) async -> Double? {
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end)
+        return await withCheckedContinuation { cont in
+            let query = HKStatisticsQuery(
+                quantityType: type, quantitySamplePredicate: predicate, options: option
+            ) { _, stats, _ in
+                let q = option == .cumulativeSum ? stats?.sumQuantity() : stats?.averageQuantity()
+                cont.resume(returning: q?.doubleValue(for: unit))
+            }
+            store.execute(query)
+        }
+    }
+
+    private func firstSample(_ type: HKQuantityType, from start: Date, to end: Date) async -> HKQuantitySample? {
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end)
+        return await withCheckedContinuation { cont in
+            let query = HKSampleQuery(
+                sampleType: type, predicate: predicate, limit: 1,
+                sortDescriptors: [NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)]
+            ) { _, samples, _ in
+                cont.resume(returning: samples?.first as? HKQuantitySample)
+            }
+            store.execute(query)
+        }
     }
 
     private func commitWorkoutAnchor() {
@@ -555,6 +677,9 @@ final class HealthSync {
 
     // MARK: - Extended daily metrics (bulk)
 
+    /// Metric names whose query threw this sync — reported instead of silently skipped.
+    private var failedMetrics: [String] = []
+
     private enum Agg { case sum, avg, max }
     private struct QSpec {
         let type: HKQuantityType
@@ -667,7 +792,8 @@ final class HealthSync {
             } catch {
                 // Isolate per metric: a type whose aggregation style rejects this
                 // option (e.g. audio exposure) or any single-query error must not
-                // sink the whole sync. Skip it; the rest still upload.
+                // sink the whole sync. Skip it, but say so — the rest still upload.
+                failedMetrics.append(spec.name)
                 continue
             }
         }
@@ -698,8 +824,8 @@ final class HealthSync {
             CSpec(type: HKCategoryType(.handwashingEvent), name: "handwashing_events", agg: .count),
             CSpec(type: HKCategoryType(.toothbrushingEvent), name: "toothbrushing_events", agg: .count),
         ]
-        // No sleep_apnea_events: there's no such HKCategoryTypeIdentifier (the iOS 18
-        // apnea signal is a quantity/notification), and sleep comes from Google Health.
+        // No sleep_apnea_events: iOS 18 does have HKCategoryTypeIdentifier.sleepApneaEvent,
+        // but it needs the Watch on overnight — and nights are the Fitbit's job.
         return specs
     }
 
@@ -714,7 +840,8 @@ final class HealthSync {
             do {
                 samples = try await categorySamples(spec.type, from: start, to: end)
             } catch {
-                continue // isolate per metric — one failed query must not sink the sync
+                failedMetrics.append(spec.name) // isolate per metric, but report it
+                continue
             }
             var byDay: [String: Double] = [:]
             for s in samples {
