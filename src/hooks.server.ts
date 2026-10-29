@@ -45,6 +45,7 @@ function isPublicPath(pathname: string): boolean {
 		pathname === '/register' ||
 		pathname === '/mcp' ||
 		pathname === '/api/health' ||
+		pathname === '/api/integrations/strength-feed' || // own bearer, checked in the route
 		pathname.startsWith('/.well-known/')
 	);
 }
